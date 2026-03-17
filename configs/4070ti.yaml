@@ -1,0 +1,37 @@
+# Config for NVIDIA 4070 Ti (12GB VRAM)
+# 4-bit quantization + gradient accumulation to fit in limited memory
+
+model_id: "Qwen/Qwen2.5-VL-3B-Instruct"
+
+# LoRA
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+lora_target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+
+# Quantization
+quantize: true
+quant_bits: 4
+quant_type: "nf4"
+double_quant: true
+
+# Training
+dtype: "bfloat16"
+learning_rate: 2e-4
+batch_size: 1
+grad_accum_steps: 8       # effective batch = 8
+num_epochs: 1
+max_length: 512
+num_workers: 0
+save_every: 500
+
+# Image resolution (pixels = N * 28 * 28)
+min_pixels: 200704        # 256 * 28 * 28
+max_pixels: 401408        # 512 * 28 * 28
