@@ -1,22 +1,18 @@
-"""QLoRA fine-tuning of Qwen2.5-VL-3B on DriveLM data.
+"""LoRA fine-tuning of Qwen2.5-VL on DriveLM data.
 
-Qwen2.5-VL: standard ViT encoder + dense Transformer decoder.
-Architecture is well-supported by quantization/TRT-LLM/vLLM toolchains.
+All hyperparameters are loaded from a YAML config file.
+See configs/gh200.yaml and configs/4070ti.yaml for examples.
 
 Usage:
-  # Quick test with mini dataset:
-  python train_lora.py --mini
-
-  # Full training:
-  python train_lora.py
-
-  # With wandb:
-  python train_lora.py --mini --wandb
+  python train_lora.py --config configs/gh200.yaml --mini
+  python train_lora.py --config configs/4070ti.yaml
+  python train_lora.py --config configs/gh200.yaml --wandb
 """
 import argparse
 import json
 import os
 import time
+import yaml
 import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import (
@@ -27,23 +23,15 @@ from transformers import (
 )
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from PIL import Image
+from tqdm import tqdm
 
-# ============ Config ============
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(_BASE_DIR, "data_processed")
-OUTPUT_DIR = os.path.join(_BASE_DIR, "checkpoints_qwen25")
-MODEL_ID = "Qwen/Qwen2.5-VL-3B-Instruct"
 
-LORA_R = 16
-LORA_ALPHA = 32
-LORA_DROPOUT = 0.05
-LEARNING_RATE = 2e-4
-BATCH_SIZE = 1  # 4070 Ti 12GB, use gradient accumulation instead
-GRAD_ACCUM_STEPS = 8  # effective batch size = 8
-NUM_EPOCHS = 1
-MAX_LENGTH = 512  # DriveLM answers are short, no need for 1024
-LOG_EVERY = 10
-SAVE_EVERY = 500
+
+def load_config(config_path):
+    with open(config_path, "r") as f:
+        cfg = yaml.safe_load(f)
+    return cfg
 
 
 class DriveLMDataset(Dataset):
@@ -88,7 +76,7 @@ class DriveLMDataset(Dataset):
             else:
                 clean_messages.append(msg)
 
-        # Apply chat template (Qwen2.5-VL has no thinking mode)
+        # Apply chat template
         text = self.processor.apply_chat_template(
             clean_messages, tokenize=False, add_generation_prompt=False
         )
@@ -184,52 +172,84 @@ def collate_fn(batch):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, required=True, help="Path to YAML config file")
     parser.add_argument("--mini", action="store_true", help="Use mini dataset for testing")
-    parser.add_argument("--epochs", type=int, default=NUM_EPOCHS)
-    parser.add_argument("--lr", type=float, default=LEARNING_RATE)
+    parser.add_argument("--epochs", type=int, default=None, help="Override num_epochs from config")
+    parser.add_argument("--lr", type=float, default=None, help="Override learning_rate from config")
+    parser.add_argument("--bs", type=int, default=None, help="Override batch_size from config")
     parser.add_argument("--wandb", action="store_true", help="Enable wandb logging")
     args = parser.parse_args()
 
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    # ============ Load config ============
+    cfg = load_config(args.config)
+    print(f"Config: {args.config}")
+
+    model_id = cfg["model_id"]
+    lora_r = cfg["lora_r"]
+    lora_alpha = cfg["lora_alpha"]
+    lora_dropout = cfg["lora_dropout"]
+    lora_targets = cfg["lora_target_modules"]
+    quantize = cfg.get("quantize", False)
+    dtype_str = cfg.get("dtype", "bfloat16")
+    compute_dtype = getattr(torch, dtype_str)
+    lr = args.lr if args.lr is not None else float(cfg["learning_rate"])
+    batch_size = args.bs if args.bs is not None else cfg["batch_size"]
+    grad_accum = cfg.get("grad_accum_steps", 1)
+    num_epochs = args.epochs if args.epochs is not None else cfg["num_epochs"]
+    max_length = cfg.get("max_length", 512)
+    num_workers = cfg.get("num_workers", 0)
+    save_every = cfg.get("save_every", 500)
+    min_pixels = cfg.get("min_pixels", 256 * 28 * 28)
+    max_pixels = cfg.get("max_pixels", 512 * 28 * 28)
+
+    data_dir = os.path.join(_BASE_DIR, "data_processed")
+    output_dir = os.path.join(_BASE_DIR, "checkpoints_qwen25")
+    os.makedirs(output_dir, exist_ok=True)
+
+    eff_bs = batch_size * grad_accum
+    print(f"Model: {model_id} | dtype: {dtype_str} | quantize: {quantize}")
+    print(f"LoRA: r={lora_r} alpha={lora_alpha} dropout={lora_dropout}")
+    print(f"BS={batch_size} x accum={grad_accum} = eff_bs={eff_bs} | LR={lr} | max_len={max_length}")
+    print(f"Image pixels: {min_pixels} ~ {max_pixels} | workers={num_workers}")
 
     # ============ Model setup ============
-    print(f"Loading {MODEL_ID} with 4-bit quantization...")
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_use_double_quant=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
-    )
+    load_kwargs = {"device_map": "auto"}
 
-    model = AutoModelForImageTextToText.from_pretrained(
-        MODEL_ID,
-        quantization_config=bnb_config,
-        device_map="auto",
-    )
-    processor = AutoProcessor.from_pretrained(MODEL_ID)
-    # Limit image resolution to save memory
+    if quantize:
+        print(f"Loading with {cfg.get('quant_bits', 4)}-bit quantization...")
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=(cfg.get("quant_bits", 4) == 4),
+            load_in_8bit=(cfg.get("quant_bits", 4) == 8),
+            bnb_4bit_use_double_quant=cfg.get("double_quant", True),
+            bnb_4bit_quant_type=cfg.get("quant_type", "nf4"),
+            bnb_4bit_compute_dtype=compute_dtype,
+        )
+        load_kwargs["quantization_config"] = bnb_config
+    else:
+        print(f"Loading in {dtype_str} (no quantization)...")
+        load_kwargs["torch_dtype"] = compute_dtype
+
+    model = AutoModelForImageTextToText.from_pretrained(model_id, **load_kwargs)
+    processor = AutoProcessor.from_pretrained(model_id)
+
     if hasattr(processor, "image_processor") and processor.image_processor is not None:
-        processor.image_processor.min_pixels = 256 * 28 * 28  # ~200k pixels
-        processor.image_processor.max_pixels = 512 * 28 * 28  # ~400k pixels
+        processor.image_processor.min_pixels = min_pixels
+        processor.image_processor.max_pixels = max_pixels
 
-    # Prepare model for k-bit training
-    model = prepare_model_for_kbit_training(model)
+    # Prepare for training
+    if quantize:
+        model = prepare_model_for_kbit_training(model)
+    else:
+        model.enable_input_require_grads()
 
-    # LoRA config — Qwen2.5-VL uses standard dense Transformer:
-    #   attention: q_proj, k_proj, v_proj, o_proj
-    #   MLP: gate_proj, up_proj, down_proj
     lora_config = LoraConfig(
-        r=LORA_R,
-        lora_alpha=LORA_ALPHA,
-        target_modules=[
-            "q_proj", "k_proj", "v_proj", "o_proj",
-            "gate_proj", "up_proj", "down_proj",
-        ],
-        lora_dropout=LORA_DROPOUT,
+        r=lora_r,
+        lora_alpha=lora_alpha,
+        target_modules=lora_targets,
+        lora_dropout=lora_dropout,
         bias="none",
         task_type="CAUSAL_LM",
     )
-
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
 
@@ -237,27 +257,26 @@ def main():
     print(f"GPU memory after model load: {gpu_mem:.2f} GB")
 
     # ============ Data setup ============
-    train_file = os.path.join(DATA_DIR, "train_mini.json" if args.mini else "train.json")
+    train_file = os.path.join(data_dir, "train_mini.json" if args.mini else "train.json")
     print(f"Loading dataset: {train_file}")
 
-    train_dataset = DriveLMDataset(train_file, processor, max_length=MAX_LENGTH)
+    train_dataset = DriveLMDataset(train_file, processor, max_length=max_length)
     train_loader = DataLoader(
         train_dataset,
-        batch_size=BATCH_SIZE,
+        batch_size=batch_size,
         shuffle=True,
-        num_workers=0,  # Windows compatibility
+        num_workers=num_workers,
         collate_fn=collate_fn,
         pin_memory=True,
     )
 
+    num_batches = len(train_loader)
+    total_steps = num_batches * num_epochs // grad_accum
     print(f"Training samples: {len(train_dataset)}")
-    print(f"Effective batch size: {BATCH_SIZE * GRAD_ACCUM_STEPS}")
-    print(f"Steps per epoch: {len(train_loader)}")
-    total_steps = len(train_loader) * args.epochs // GRAD_ACCUM_STEPS
-    print(f"Total optimization steps: {total_steps}")
+    print(f"Steps per epoch: {num_batches} | Total opt steps: {total_steps}")
 
     # ============ Optimizer ============
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
     scheduler = get_cosine_schedule_with_warmup(
         optimizer,
         num_warmup_steps=min(100, total_steps // 10),
@@ -268,30 +287,35 @@ def main():
     if args.wandb:
         import wandb
         wandb.init(project="drivelm-qwen25vl", config={
-            "model": MODEL_ID, "lora_r": LORA_R, "lr": args.lr,
-            "batch_size": BATCH_SIZE * GRAD_ACCUM_STEPS,
-            "mini": args.mini,
+            **cfg, "mini": args.mini, "lr": lr, "batch_size": batch_size,
         })
 
     # ============ Training loop ============
-    print("\n=== Starting training ===")
-    num_batches = len(train_loader)
-    print(f"  Batches per epoch: {num_batches} | Grad accum: {GRAD_ACCUM_STEPS} | Opt steps: {total_steps}\n")
+    print(f"\n{'='*60}")
+    print(f"  Starting training | {num_epochs} epoch(s) | {total_steps} opt steps")
+    print(f"{'='*60}\n")
     model.train()
     global_step = 0
     accum_loss = 0.0
 
-    for epoch in range(args.epochs):
-        epoch_start = time.time()
+    for epoch in range(num_epochs):
         epoch_loss_sum = 0.0
         epoch_loss_count = 0
 
-        for step, batch in enumerate(train_loader):
+        pbar = tqdm(
+            enumerate(train_loader),
+            total=num_batches,
+            desc=f"Epoch {epoch+1}/{num_epochs}",
+            bar_format="{l_bar}{bar:30}{r_bar}",
+            dynamic_ncols=True,
+        )
+
+        for step, batch in pbar:
             batch = {k: v.to(model.device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
 
             try:
                 outputs = model(**batch)
-                loss = outputs.loss / GRAD_ACCUM_STEPS
+                loss = outputs.loss / grad_accum
                 loss.backward()
                 batch_loss = outputs.loss.item()
                 accum_loss += loss.item()
@@ -300,30 +324,23 @@ def main():
             except RuntimeError as e:
                 if "out of memory" in str(e):
                     torch.cuda.empty_cache()
-                    print(f"\n  [OOM] batch {step+1}/{num_batches}, skipping")
+                    tqdm.write(f"[OOM] batch {step+1}/{num_batches}, skipping")
                     optimizer.zero_grad()
                     accum_loss = 0.0
                     continue
                 raise
 
-            # Progress bar: every batch
+            # Update tqdm postfix every batch
+            avg_loss = epoch_loss_sum / epoch_loss_count
             gpu_mem = torch.cuda.memory_allocated() / 1024**3
-            pct = (step + 1) / num_batches * 100
-            bar_len = 30
-            filled = int(bar_len * (step + 1) // num_batches)
-            bar = "=" * filled + ">" + "." * (bar_len - filled - 1)
-            elapsed = time.time() - epoch_start
-            eta = elapsed / (step + 1) * (num_batches - step - 1)
-            print(
-                f"\r  Epoch {epoch+1}/{args.epochs} [{bar}] "
-                f"{step+1}/{num_batches} ({pct:4.1f}%) | "
-                f"batch_loss: {batch_loss:.4f} | "
-                f"GPU: {gpu_mem:.1f}GB | "
-                f"ETA: {int(eta//60)}m{int(eta%60):02d}s",
-                end="", flush=True,
+            cur_lr = scheduler.get_last_lr()[0] if global_step > 0 else lr
+            pbar.set_postfix_str(
+                f"batch_loss={batch_loss:.4f} | avg_loss={avg_loss:.4f} | "
+                f"lr={cur_lr:.2e} | opt_step={global_step}/{total_steps} | "
+                f"GPU={gpu_mem:.1f}GB"
             )
 
-            if (step + 1) % GRAD_ACCUM_STEPS == 0:
+            if (step + 1) % grad_accum == 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
                 scheduler.step()
@@ -332,30 +349,29 @@ def main():
 
                 if args.wandb:
                     import wandb
-                    lr = scheduler.get_last_lr()[0]
+                    cur_lr = scheduler.get_last_lr()[0]
                     wandb.log({
                         "loss": accum_loss, "batch_loss": batch_loss,
-                        "lr": lr, "gpu_mem": gpu_mem,
+                        "avg_loss": avg_loss, "lr": cur_lr, "gpu_mem": gpu_mem,
                     }, step=global_step)
                 accum_loss = 0.0
 
-                if global_step % SAVE_EVERY == 0:
-                    save_path = os.path.join(OUTPUT_DIR, f"checkpoint-{global_step}")
+                if global_step % save_every == 0:
+                    save_path = os.path.join(output_dir, f"checkpoint-{global_step}")
                     model.save_pretrained(save_path)
-                    print(f"\n  [SAVE] checkpoint-{global_step}")
+                    tqdm.write(f"  [SAVE] checkpoint-{global_step}")
 
-        # Epoch summary
-        epoch_elapsed = time.time() - epoch_start
+        pbar.close()
         avg_loss = epoch_loss_sum / max(epoch_loss_count, 1)
-        lr = scheduler.get_last_lr()[0]
+        cur_lr = scheduler.get_last_lr()[0]
         print(
             f"\n  Epoch {epoch+1} done | "
-            f"avg_loss: {avg_loss:.4f} | LR: {lr:.2e} | "
-            f"time: {int(epoch_elapsed//60)}m{int(epoch_elapsed%60):02d}s\n"
+            f"avg_loss={avg_loss:.4f} | LR={cur_lr:.2e} | "
+            f"opt_steps={global_step}/{total_steps}\n"
         )
 
     # ============ Save final model ============
-    final_path = os.path.join(OUTPUT_DIR, "final")
+    final_path = os.path.join(output_dir, "final")
     model.save_pretrained(final_path)
     processor.save_pretrained(final_path)
     print(f"\nTraining complete! Final model saved to {final_path}")
