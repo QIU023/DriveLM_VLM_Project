@@ -4,59 +4,82 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-VLM fine-tuning project for autonomous driving using QLoRA on DriveLM (nuScenes-based QA dataset). Supports two model architectures: Qwen2.5-VL-3B-Instruct and Qwen3.5-4B.
+Efficient VLM 项目——专注小模型 + 快速微调 + 知识蒸馏/持续学习，不做通用多模态预训练。以自动驾驶（DriveLM）为切入点，同时覆盖多模态推荐和视频理解场景。
 
-## Running Scripts
+用户背景：有 Pattern Recognition 2023 发表的持续学习论文（feature-level + logit-level KD），熟悉知识蒸馏。
 
-All scripts are standalone Python files executed directly:
+## Environment
 
-```bash
-# Data pipeline
-python scripts/download_drivelm_data.py      # Fetch DriveLM QA JSON + images from HuggingFace
-python scripts/download_images.py            # Download nuScenes subset images only
-python scripts/inspect_data.py               # Explore DriveLM JSON structure
-python scripts/convert_data.py               # Convert DriveLM → Qwen conversation format
+- **GPU**: NVIDIA GH200 480GB (96GB HBM3 GPU memory)
+- **Arch**: aarch64
+- **Conda env**: `qwen25vl` (Python 3.10, torch 2.10.0+cu128, transformers 5.3.0, peft 0.18.1)
+- **Activate**: `export PATH="/home/ubuntu/miniconda3/bin:$PATH" && conda activate qwen25vl`
+- **HuggingFace**: logged in (gated repo access for OpenDriveLab/DriveLM)
+- **Git remote**: `git@github.com:QIU023/DriveLM_VLM_Project.git` (SSH, user: QIU023)
 
-# Model download
-python scripts/download_model.py             # Download Qwen models from HuggingFace Hub
+## Directory Structure
 
-# Training
-python scripts/train_lora.py --mini          # Quick test run (500 samples)
-python scripts/train_lora.py                 # Full training (Qwen2.5-VL-3B)
-python scripts/train_lora_qwen35.py          # Full training (Qwen3.5-4B)
-
-# Inference / evaluation
-python scripts/test_inference.py             # Verify inference pipeline works
-python scripts/demo_inference.py --n 10      # Evaluate 10 diverse samples with LoRA
-python scripts/demo_inference.py --no-lora   # Compare base model (no adapter)
-python scripts/demo_inference_qwen35.py      # Evaluate Qwen3.5-4B variant
+```
+DriveLM/
+├── configs/
+│   ├── gh200.yaml              # GH200 config: bf16, bs=8, no quant
+│   └── 4070ti.yaml             # 4070 Ti config: 4-bit quant, bs=1, grad_accum=8
+├── scripts/
+│   ├── train_lora.py           # Main training script, reads --config YAML
+│   ├── demo_inference.py       # Eval script, supports --config + --lora
+│   ├── convert_data.py         # DriveLM → Qwen conversation format
+│   ├── train_lora_qwen35.py    # Qwen3.5-4B variant (not yet updated to YAML)
+│   └── ...
+├── data/
+│   ├── QA_dataset_nus/v1_1_train_nus.json   # 696 scenes, 377k QA pairs
+│   └── nuscenes/samples/                     # 24,432 images, 6 cameras
+├── data_processed/
+│   ├── train.json              # 359,057 samples (95%)
+│   ├── val.json                # 18,898 samples (5%)
+│   └── train_mini.json         # 500 samples for quick test
+├── checkpoints_qwen25/         # LoRA checkpoints (saved every 500 steps)
+├── logs/                       # Training logs
+└── docs/
+    └── exploration_directions.md  # 10 exploration directions with priorities
 ```
 
-No build system, linter, or test framework is configured. No requirements.txt exists — dependencies are implicit (torch, transformers, peft, bitsandbytes, pillow, huggingface_hub, wandb optional).
+## Running Commands
 
-## Architecture
+```bash
+# Training (YAML-based config, all hyperparams in config file)
+python scripts/train_lora.py --config configs/gh200.yaml --mini      # quick test
+python scripts/train_lora.py --config configs/gh200.yaml             # full training
+python scripts/train_lora.py --config configs/gh200.yaml --bs 4      # override batch size
 
-**Pipeline stages:** Data download → Data conversion → Model download → QLoRA fine-tuning → Inference/evaluation
+# Background training with logs
+nohup python -u scripts/train_lora.py --config configs/gh200.yaml 2>&1 | tee logs/train_full.log &
 
-**Data flow:**
-- Raw DriveLM QA JSON (HuggingFace) → `convert_data.py` → `data_processed/{train,val,train_mini}.json` in Qwen conversation format
-- Each sample: system prompt (category context) + user message (image + question) + assistant response (ground truth)
-- Categories: perception, prediction, planning, behavior
-- Split: 95% train / 5% val; train_mini.json has 500 samples for quick iteration
+# Inference (also YAML-based, supports --lora for any checkpoint)
+python scripts/demo_inference.py --config configs/gh200.yaml                              # final LoRA
+python scripts/demo_inference.py --config configs/gh200.yaml --lora checkpoints_qwen25/checkpoint-500
+python scripts/demo_inference.py --config configs/gh200.yaml --no-lora                    # base model
 
-**Training approach:**
-- 4-bit NF4 quantization with double quantization (bitsandbytes)
-- LoRA (r=16, alpha=32) targeting attention + MLP projections
-- Gradient accumulation (8 steps) for effective batch size of 8 on constrained GPU memory
-- Custom `DriveLMDataset` class handles image loading, tokenization, and label masking (masks everything before assistant turn)
+# Data pipeline
+python scripts/convert_data.py       # regenerate data_processed/ from raw DriveLM data
+```
 
-**Key difference between model variants:**
-- Qwen2.5-VL-3B-Instruct: separate ViT encoder + Transformer decoder, max_length=512
-- Qwen3.5-4B: natively multimodal (integrated vision encoder, Gated DeltaNet), max_length=1024
+## Architecture Notes
 
-## Important Notes
+- Training script reads ALL hyperparams from YAML config (no hardcoded values)
+- CLI args `--bs`, `--lr`, `--epochs` can override config values
+- Model loading: `quantize: true` → BitsAndBytes 4-bit; `quantize: false` → bf16 full precision
+- On GH200: bf16 is faster than quantized (dequant overhead > memory savings)
+- Checkpoints save LoRA adapter only (~50MB each), not full model
+- tqdm progress bar shows: batch_loss, avg_loss, lr, opt_step, GPU memory
 
-- All scripts use relative paths resolved from `__file__` — portable across environments
-- Image resolution is capped (256×28×28 to 512×28×28 pixels) to fit in GPU memory
-- Checkpoints save to `checkpoints_qwen25/` or `checkpoints/` depending on variant
-- Evaluation uses exact-match accuracy (case-insensitive) with per-category breakdown
+## Key Design Decisions
+
+- All scripts use `os.path.dirname(os.path.dirname(os.path.abspath(__file__)))` for portable paths
+- DriveLM v1.1 (not v1.0) — the HF repo only has v1.1
+- Only CAM_FRONT images used for single-image fine-tuning (6-cam multi-view is a future direction)
+- Image resolution capped to control GPU memory; configured via min_pixels/max_pixels in YAML
+
+## Project Roadmap
+
+See `docs/exploration_directions.md` for full 10-direction plan. Core execution path:
+1. DriveLM LoRA (current) → 2. VLM Continual Learning (PR paper continuation) → 3. Token Compression → 4. Knowledge Distillation → 5. Serving/Deployment

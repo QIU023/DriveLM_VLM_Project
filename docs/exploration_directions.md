@@ -145,6 +145,44 @@
 
 **求职话术**："我用 vLLM 部署了 Qwen2.5-VL，实现了 LoRA adapter 热切换来服务自动驾驶、推荐、视频理解三个场景。单 base model + 3 个 LoRA 的方案比部署 3 个独立模型节省 70% 显存，throughput 相比 HF inference 提升 5 倍。"
 
+### 方向 10：VLM 持续学习 — 多域顺序适配与抗遗忘（与 PR 论文直接衔接）
+
+**动机**：你在 Pattern Recognition 2023 发表了 feature-level + logit-level KD 用于持续学习的工作。这个方向将你的论文方法论直接迁移到 VLM，形成"从 CNN 到 VLM"的研究延续性。持续学习在 VLM 时代不但没有失去价值，反而因为跨模态对齐漂移（cross-modal alignment drift）这一 VLM 特有的遗忘模式而更加重要。
+
+**核心问题**：同一个 VLM 顺序适配多个域（驾驶→推荐→视频），LoRA 微调会遗忘前面的域。
+
+**具体做法**：
+
+**阶段 A — 复现遗忘现象**：
+- 在 Qwen2.5-VL-3B 上顺序训练 3 个 LoRA：DriveLM（驾驶）→ 电商图文匹配（推荐）→ 视频 QA
+- 量化遗忘：每训完一个域，回测所有已学域的精度
+- 分析 VLM 特有的遗忘模式：不仅是任务精度下降，还有零样本能力退化和跨模态对齐漂移
+
+**阶段 B — 应用你的 KD 防遗忘方法**：
+- Feature-level KD：在 projector 和 LLM 中间层对齐新旧模型的特征分布
+- Logit-level KD：在输出层蒸馏旧任务的 logit 分布
+- 新增：Cross-modal geometry preservation——保持视觉-语言嵌入空间的几何结构，防止对齐漂移
+- 对比 baseline：naive sequential LoRA / EWC / experience replay / 你的 KD 方法
+
+**阶段 C — 和前沿方法对比**：
+- Select and Distill（NVIDIA, ECCV 2024）：双 teacher 选择性蒸馏
+- MoE-Adapters4CL（CVPR 2024）：MoE adapter + KD
+- CoDyRA（2025）：动态 rank-selective LoRA
+- LoRA-Loop（2025）：合成数据 replay + LoRA
+
+**工作量**：5-7 天（阶段 A 2天 + 阶段 B 2-3天 + 阶段 C 2天）
+
+**关键参考文献**：
+- Select and Distill, NVIDIA, ECCV 2024 — 双 teacher KD 防遗忘
+- MoE-Adapters4CL, CVPR 2024 — MoE + KD 持续学习
+- CoDyRA, 2025 — 动态 rank LoRA 持续学习
+- Cross-modal Geometry Distillation, 2025 — VLM 特有的对齐保持
+- Continual Learning for VLMs: A Survey, ACM CSUR 2025
+
+**求职话术**："我之前在 PR 上发表了 feature+logit 双层蒸馏的持续学习方法。在 VLM 项目中，我把同样的方法论迁移到了多域顺序适配场景——先在驾驶域微调，再在推荐域微调。我发现 VLM 有一个特有的遗忘模式：跨模态对齐漂移，即微调后视觉和语言的嵌入空间几何结构被破坏。我在原有的 feature+logit KD 基础上增加了 cross-modal geometry preservation，在三域顺序适配中，旧域精度保持率从 naive LoRA 的 X% 提升到 Y%。"
+
+**为什么是 P0 级别**：这是你唯一有发表论文直接支撑的方向，面试时可以说"我把自己发表的方法迁移到了新场景"，比从零开始的方向说服力强得多。
+
 ---
 
 ## 优先级与时间规划
@@ -154,6 +192,7 @@
 | **P0** | 1. DriveLM LoRA | 基座，跑通全流程 | ✅ 已在做 | 自动驾驶 |
 | **P0** | 2. Token 压缩 | Efficient 核心亮点 | 3-4 天 | 全场景通用 |
 | **P0** | 4. 知识蒸馏 | Efficient 第二支柱 | 4-5 天 | 全场景通用 |
+| **P0** | **10. VLM 持续学习** | **论文直接衔接，最强说服力** | **5-7 天** | **全场景通用** |
 | **P1** | 3. 跨模态 Adapter | 展示架构理解深度 | 3-4 天 | 全场景通用 |
 | **P1** | 7. 视频理解 | Token 压缩最佳验证场 | 3-5 天 | 视频理解 |
 | **P1** | 5. PEFT 方法对比 | 微调方法论深度 | 2-3 天 | 全场景通用 |
@@ -165,19 +204,21 @@
 
 ## 推荐执行路线
 
-### 核心主线（必做，2-3 周）
+### 核心主线（必做，3-4 周）
 
 ```
-方向 1（DriveLM LoRA）    ← 已完成/进行中
+方向 1（DriveLM LoRA）       ← 已完成/进行中
        ↓
-方向 2（Token 压缩）      ← 核心创新点
+方向 10（VLM 持续学习）      ← 论文直接衔接，最强说服力
        ↓
-方向 4（知识蒸馏）         ← 第二个创新点
+方向 2（Token 压缩）         ← 核心创新点
        ↓
-方向 9（推理加速部署）     ← 工程闭环
+方向 4（知识蒸馏）           ← 第二个创新点，和方向 10 共享 KD 技术栈
+       ↓
+方向 9（推理加速部署）       ← 工程闭环
 ```
 
-这条线走完，你有一个完整的故事：**微调 → 压缩 → 蒸馏 → 部署**，覆盖了 Efficient VLM 的全栈。
+这条线走完，你有一个完整的故事：**微调 → 持续学习（论文延续）→ 压缩 → 蒸馏 → 部署**，既有学术深度又有工程闭环。
 
 ### 深度支线（选做，展示理解深度）
 
@@ -194,13 +235,17 @@
 方向 8（Grounded VLM）     ← 最小改动获得坐标输出能力
 ```
 
+注意：方向 10 的阶段 A 需要多域数据，可以和方向 6（推荐）、方向 7（视频）的数据准备同步进行。
+
 ---
 
 ## 面试叙事框架
 
 > "我的研究方向是 **Efficient VLM**——如何让视觉语言模型在保持能力的同时变得更小、更快、更容易部署。
 >
-> 我从自动驾驶场景切入（方向 1），在 DriveLM 数据集上微调 Qwen2.5-VL-3B，建立了 baseline。然后从两个维度做效率优化：**token 压缩**（方向 2）减少视觉 token 数量降低计算开销，**知识蒸馏**（方向 4）把大模型能力迁移到小模型。
+> 我之前在 Pattern Recognition 上发表了 feature+logit 双层蒸馏的持续学习方法。在 VLM 项目中，我先从自动驾驶场景切入（方向 1），在 DriveLM 上微调 Qwen2.5-VL-3B 建立 baseline。然后我把论文的持续学习方法迁移到 VLM（方向 10），发现 VLM 有特有的遗忘模式——跨模态对齐漂移，并提出了 cross-modal geometry preservation 来解决。
+>
+> 在效率优化上，我从两个维度切入：**token 压缩**（方向 2）减少视觉 token 数量降低计算开销，**知识蒸馏**（方向 4）把大模型能力迁移到小模型。
 >
 > 为了验证这些方法的通用性，我把同一套技术栈迁移到了电商推荐的图文匹配（方向 6）和视频理解（方向 7），证明 efficient VLM 的方法论是跨场景的。
 >
