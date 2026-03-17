@@ -1,19 +1,21 @@
-"""Demo inference: run LoRA-finetuned Qwen2.5-VL-3B on 10 DriveLM val samples.
+"""Demo inference: run LoRA-finetuned Qwen2.5-VL-3B on DriveLM val samples.
 
-Loads the base model + LoRA adapter, runs inference on 10 diverse samples
+Loads the base model + LoRA adapter, runs inference on diverse samples
 (across perception/prediction/planning/behavior categories), and prints
 model output vs ground truth side-by-side.
 
 Usage:
-  python demo_inference.py                  # default: 10 samples
-  python demo_inference.py --n 20           # more samples
-  python demo_inference.py --no-lora        # base model only (compare)
+  python demo_inference.py --config configs/gh200.yaml                         # final checkpoint
+  python demo_inference.py --config configs/gh200.yaml --lora checkpoints_qwen25/checkpoint-500
+  python demo_inference.py --config configs/gh200.yaml --n 20                  # more samples
+  python demo_inference.py --config configs/gh200.yaml --no-lora               # base model only
 """
 import argparse
 import json
 import os
 import random
 import time
+import yaml
 import torch
 from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig
 from peft import PeftModel
@@ -21,8 +23,6 @@ from PIL import Image
 
 # ============ Config ============
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL_ID = "Qwen/Qwen2.5-VL-3B-Instruct"
-LORA_PATH = os.path.join(BASE_DIR, "checkpoints_qwen25", "final")
 VAL_FILE = os.path.join(BASE_DIR, "data_processed", "val.json")
 
 
@@ -85,31 +85,54 @@ def build_messages(question, system_prompt):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, required=True, help="Path to YAML config file")
+    parser.add_argument("--lora", type=str, default=None,
+                        help="Path to LoRA checkpoint (default: checkpoints_qwen25/final)")
     parser.add_argument("--n", type=int, default=10, help="Number of samples")
     parser.add_argument("--no-lora", action="store_true", help="Base model only")
     parser.add_argument("--max-tokens", type=int, default=512)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
+    # ============ Load config ============
+    with open(args.config, "r") as f:
+        cfg = yaml.safe_load(f)
+
+    model_id = cfg["model_id"]
+    quantize = cfg.get("quantize", False)
+    dtype_str = cfg.get("dtype", "bfloat16")
+    compute_dtype = getattr(torch, dtype_str)
+    min_pixels = cfg.get("min_pixels", 256 * 28 * 28)
+    max_pixels = cfg.get("max_pixels", 512 * 28 * 28)
+
+    lora_path = args.lora if args.lora else os.path.join(BASE_DIR, "checkpoints_qwen25", "final")
+
     # ============ Load model ============
-    print(f"Loading {MODEL_ID}...")
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
-    )
-    model = AutoModelForImageTextToText.from_pretrained(
-        MODEL_ID,
-        quantization_config=bnb_config,
-        device_map="auto",
-    )
-    processor = AutoProcessor.from_pretrained(MODEL_ID)
+    print(f"Loading {model_id} | quantize={quantize} | dtype={dtype_str}")
+    load_kwargs = {"device_map": "auto"}
+    if quantize:
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=(cfg.get("quant_bits", 4) == 4),
+            load_in_8bit=(cfg.get("quant_bits", 4) == 8),
+            bnb_4bit_use_double_quant=cfg.get("double_quant", True),
+            bnb_4bit_quant_type=cfg.get("quant_type", "nf4"),
+            bnb_4bit_compute_dtype=compute_dtype,
+        )
+        load_kwargs["quantization_config"] = bnb_config
+    else:
+        load_kwargs["torch_dtype"] = compute_dtype
+
+    model = AutoModelForImageTextToText.from_pretrained(model_id, **load_kwargs)
+    processor = AutoProcessor.from_pretrained(model_id)
+    if hasattr(processor, "image_processor") and processor.image_processor is not None:
+        processor.image_processor.min_pixels = min_pixels
+        processor.image_processor.max_pixels = max_pixels
 
     if not args.no_lora:
-        print(f"Loading LoRA adapter from {LORA_PATH}...")
-        model = PeftModel.from_pretrained(model, LORA_PATH)
+        print(f"Loading LoRA adapter from {lora_path}...")
+        model = PeftModel.from_pretrained(model, lora_path)
         model.eval()
-        tag = "LoRA"
+        tag = f"LoRA ({os.path.basename(lora_path)})"
     else:
         model.eval()
         tag = "Base"
