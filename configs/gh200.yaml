@@ -21,14 +21,14 @@ quantize: false
 
 # Training
 dtype: "bfloat16"
-learning_rate: 2e-4
-batch_size: 8
-grad_accum_steps: 1
-num_epochs: 1
-max_length: 512
+learning_rate: 1e-4
+batch_size: 4
+grad_accum_steps: 2       # effective batch = 12
+num_epochs: 3
+max_length: 2048
 num_workers: 4
 save_every: 500
 
 # Image resolution (pixels = N * 28 * 28)
 min_pixels: 200704        # 256 * 28 * 28
-max_pixels: 401408        # 512 * 28 * 28
+max_pixels: 802816        # 1024 * 28 * 28
