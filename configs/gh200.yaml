@@ -27,8 +27,8 @@ grad_accum_steps: 2       # effective batch = 12
 num_epochs: 3
 max_length: 2048
 num_workers: 4
-save_every: 500
+save_every: 1000
 
 # Image resolution (pixels = N * 28 * 28)
 min_pixels: 200704        # 256 * 28 * 28
-max_pixels: 802816        # 1024 * 28 * 28
+max_pixels: 401408        # 512 * 28 * 28
