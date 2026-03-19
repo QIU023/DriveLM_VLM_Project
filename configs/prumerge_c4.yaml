@@ -1,0 +1,9 @@
+# PruMerge 4x: attention-guided prune + merge (LLaVA-PruMerge)
+# Run on GH200: python scripts/train_lora.py @configs/prumerge_c4.yaml
+experiment: prumerge_c4
+compress_method: prumerge
+compress_ratio: 4
+epochs: 3
+lr: 2e-4
+val_every: 200
+val_batches: 50

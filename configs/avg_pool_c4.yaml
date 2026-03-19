@@ -1,0 +1,9 @@
+# Avg Pool 4x: 2x2 spatial average pooling, ~75% token reduction
+# Run on GH200: python scripts/train_lora.py @configs/avg_pool_c4.yaml
+experiment: avg_pool_c4
+compress_method: avg_pool
+compress_ratio: 4
+epochs: 3
+lr: 2e-4
+val_every: 200
+val_batches: 50
