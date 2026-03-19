@@ -64,11 +64,10 @@ def main():
     # Step 1: Load base model on CPU
     print("[1/5] Loading base model on CPU...")
     t0 = time.time()
-    base_model = AutoModelForCausalLM.from_pretrained(
+    base_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         base_model_name,
         torch_dtype=target_dtype,
         device_map="cpu",
-        trust_remote_code=True,
     )
     print(f"  Done in {time.time() - t0:.1f}s")
 
