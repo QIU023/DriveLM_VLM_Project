@@ -1,16 +1,18 @@
 """LoRA fine-tuning of Qwen2.5-VL on DriveLM data.
 
 All hyperparameters are loaded from a YAML config file.
-See configs/gh200.yaml and configs/4070ti.yaml for examples.
+Supports visual token compression experiments via compress_method / compress_ratio.
 
 Usage:
   python train_lora.py --config configs/gh200.yaml --mini
-  python train_lora.py --config configs/4070ti.yaml
-  python train_lora.py --config configs/gh200.yaml --wandb
+  python train_lora.py --config configs/baseline.yaml
+  python train_lora.py --config configs/avg_pool_c4.yaml
+  python train_lora.py --config configs/gh200.yaml --bs 4 --epochs 1
 """
 import argparse
 import json
 import os
+import sys
 import time
 import yaml
 import torch
@@ -26,11 +28,20 @@ from PIL import Image
 from tqdm import tqdm
 
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 def load_config(config_path):
+    """Load YAML config with optional base_config inheritance."""
     with open(config_path, "r") as f:
         cfg = yaml.safe_load(f)
+    if "base_config" in cfg:
+        base_path = cfg.pop("base_config")
+        if not os.path.isabs(base_path):
+            base_path = os.path.join(os.path.dirname(config_path), base_path)
+        base_cfg = load_config(base_path)
+        base_cfg.update(cfg)
+        cfg = base_cfg
     return cfg
 
 
@@ -170,6 +181,139 @@ def collate_fn(batch):
     return result
 
 
+# --------------- Visual token compression ---------------
+
+def get_base_model(model):
+    """Unwrap PEFT to get the original Qwen2.5-VL model."""
+    if hasattr(model, "base_model") and hasattr(model.base_model, "model"):
+        return model.base_model.model
+    return model
+
+
+def forward_with_compression(model, batch, compress_method, compress_ratio, image_token_id):
+    """Forward pass with optional visual token compression.
+
+    For compress_method == "none", falls through to the normal model forward.
+    Otherwise:
+      1. Run vision encoder on the base model
+      2. Compress visual tokens
+      3. Adjust input_ids (remove excess image placeholders)
+      4. Build inputs_embeds with compressed visual tokens
+      5. Forward through LoRA-wrapped LLM with proper 3D RoPE positions
+    """
+    if compress_method == "none" or "pixel_values" not in batch:
+        return model(**batch)
+
+    from visual_compress import compress_visual_tokens
+
+    base = get_base_model(model)
+    device = batch["input_ids"].device
+
+    # 1. Vision encoder
+    vis_dtype = next(base.visual.parameters()).dtype
+    image_embeds = base.visual(batch["pixel_values"].to(vis_dtype), grid_thw=batch["image_grid_thw"])
+
+    # 2. Compress
+    grid_thw = batch["image_grid_thw"]
+    compressed, new_grid_thw = compress_visual_tokens(image_embeds, grid_thw, compress_method, compress_ratio)
+
+    # per-image token counts
+    orig_counts = (grid_thw[:, 0] * grid_thw[:, 1] * grid_thw[:, 2]).tolist()
+    new_counts = (new_grid_thw[:, 0] * new_grid_thw[:, 1] * new_grid_thw[:, 2]).tolist()
+
+    input_ids = batch["input_ids"]
+    attn_mask = batch["attention_mask"]
+    labels = batch["labels"]
+    B = input_ids.shape[0]
+
+    # 3. Remove excess image-placeholder tokens from each sample
+    new_ids_list, new_mask_list, new_lab_list = [], [], []
+    img_idx = 0  # pointer into the per-image counts
+
+    for b in range(B):
+        ids = input_ids[b]
+        msk = attn_mask[b]
+        lab = labels[b]
+
+        img_pos = (ids == image_token_id).nonzero(as_tuple=True)[0]
+        n_img = len(img_pos)
+
+        if n_img == 0:
+            new_ids_list.append(ids)
+            new_mask_list.append(msk)
+            new_lab_list.append(lab)
+            continue
+
+        n_keep = int(new_counts[img_idx])
+        img_idx += 1
+        n_remove = n_img - n_keep
+
+        if n_remove <= 0:
+            new_ids_list.append(ids)
+            new_mask_list.append(msk)
+            new_lab_list.append(lab)
+            continue
+
+        # remove from the END of the image-placeholder block
+        remove_pos = img_pos[n_keep:]
+        keep = torch.ones(len(ids), dtype=torch.bool, device=device)
+        keep[remove_pos] = False
+        new_ids_list.append(ids[keep])
+        new_mask_list.append(msk[keep])
+        new_lab_list.append(lab[keep])
+
+    # 4. Pad to max length
+    max_len = max(t.shape[0] for t in new_ids_list)
+    for i in range(B):
+        pad = max_len - new_ids_list[i].shape[0]
+        if pad > 0:
+            new_ids_list[i] = torch.cat([new_ids_list[i], torch.zeros(pad, dtype=new_ids_list[i].dtype, device=device)])
+            new_mask_list[i] = torch.cat([new_mask_list[i], torch.zeros(pad, dtype=new_mask_list[i].dtype, device=device)])
+            new_lab_list[i] = torch.cat([new_lab_list[i], torch.full((pad,), -100, dtype=new_lab_list[i].dtype, device=device)])
+
+    new_input_ids = torch.stack(new_ids_list)
+    new_attn_mask = torch.stack(new_mask_list)
+    new_labels = torch.stack(new_lab_list)
+
+    # 5. Build inputs_embeds
+    inputs_embeds = base.model.embed_tokens(new_input_ids)
+    img_mask = new_input_ids == image_token_id
+    inputs_embeds[img_mask] = compressed.to(inputs_embeds.dtype)
+
+    # 6. Forward — pass input_ids for 3D RoPE position computation,
+    #    inputs_embeds for actual content, new_grid_thw for spatial dims
+    outputs = model(
+        input_ids=new_input_ids,
+        inputs_embeds=inputs_embeds,
+        attention_mask=new_attn_mask,
+        image_grid_thw=new_grid_thw,
+        labels=new_labels,
+    )
+    return outputs
+
+
+@torch.no_grad()
+def validate(model, val_loader, compress_method, compress_ratio, image_token_id, val_batches, device):
+    """Run validation for val_batches batches and return avg loss."""
+    model.eval()
+    total_loss, count = 0.0, 0
+    for i, batch in enumerate(val_loader):
+        if i >= val_batches:
+            break
+        batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+        try:
+            outputs = forward_with_compression(model, batch, compress_method, compress_ratio, image_token_id)
+            total_loss += outputs.loss.item()
+            count += 1
+        except RuntimeError as e:
+            if "out of memory" in str(e):
+                torch.cuda.empty_cache()
+                continue
+            raise
+    model.train()
+    return total_loss / max(count, 1)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, required=True, help="Path to YAML config file")
@@ -178,6 +322,11 @@ def main():
     parser.add_argument("--lr", type=float, default=None, help="Override learning_rate from config")
     parser.add_argument("--bs", type=int, default=None, help="Override batch_size from config")
     parser.add_argument("--wandb", action="store_true", help="Enable wandb logging")
+    parser.add_argument("--compress-method", type=str, default=None, help="Override compress_method")
+    parser.add_argument("--compress-ratio", type=int, default=None, help="Override compress_ratio")
+    parser.add_argument("--experiment", type=str, default=None, help="Override experiment name")
+    parser.add_argument("--val-every", type=int, default=None, help="Validate every N opt steps")
+    parser.add_argument("--val-batches", type=int, default=None, help="Number of val batches")
     args = parser.parse_args()
 
     # ============ Load config ============
@@ -192,25 +341,36 @@ def main():
     quantize = cfg.get("quantize", False)
     dtype_str = cfg.get("dtype", "bfloat16")
     compute_dtype = getattr(torch, dtype_str)
-    lr = args.lr if args.lr is not None else float(cfg["learning_rate"])
+    lr = args.lr if args.lr is not None else float(cfg.get("learning_rate", cfg.get("lr", 2e-4)))
     batch_size = args.bs if args.bs is not None else cfg["batch_size"]
     grad_accum = cfg.get("grad_accum_steps", 1)
-    num_epochs = args.epochs if args.epochs is not None else cfg["num_epochs"]
+    num_epochs = args.epochs if args.epochs is not None else cfg.get("num_epochs", cfg.get("epochs", 1))
     max_length = cfg.get("max_length", 512)
     num_workers = cfg.get("num_workers", 0)
     save_every = cfg.get("save_every", 500)
     min_pixels = cfg.get("min_pixels", 256 * 28 * 28)
     max_pixels = cfg.get("max_pixels", 512 * 28 * 28)
 
+    # Compression & experiment settings
+    compress_method = args.compress_method or cfg.get("compress_method", "none")
+    compress_ratio = args.compress_ratio or cfg.get("compress_ratio", 1)
+    experiment = args.experiment or cfg.get("experiment", "default")
+    val_every = args.val_every or cfg.get("val_every", 0)
+    val_batches = args.val_batches or cfg.get("val_batches", 50)
+
     data_dir = os.path.join(_BASE_DIR, "data_processed")
-    output_dir = os.path.join(_BASE_DIR, "checkpoints_qwen25")
+    output_dir = os.path.join(_BASE_DIR, "checkpoints_qwen25", experiment)
     os.makedirs(output_dir, exist_ok=True)
 
     eff_bs = batch_size * grad_accum
+    print(f"Experiment: {experiment}")
     print(f"Model: {model_id} | dtype: {dtype_str} | quantize: {quantize}")
     print(f"LoRA: r={lora_r} alpha={lora_alpha} dropout={lora_dropout}")
     print(f"BS={batch_size} x accum={grad_accum} = eff_bs={eff_bs} | LR={lr} | max_len={max_length}")
     print(f"Image pixels: {min_pixels} ~ {max_pixels} | workers={num_workers}")
+    print(f"Compression: {compress_method} ratio={compress_ratio}")
+    if val_every > 0:
+        print(f"Validation: every {val_every} opt steps, {val_batches} batches")
 
     # ============ Model setup ============
     load_kwargs = {"device_map": "auto"}
@@ -253,11 +413,16 @@ def main():
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
 
+    # Image token id for compression
+    image_token_id = processor.tokenizer.convert_tokens_to_ids("<|image_pad|>")
+    print(f"Image token id: {image_token_id}")
+
     gpu_mem = torch.cuda.memory_allocated() / 1024**3
     print(f"GPU memory after model load: {gpu_mem:.2f} GB")
 
     # ============ Data setup ============
     train_file = os.path.join(data_dir, "train_mini.json" if args.mini else "train.json")
+    val_file = os.path.join(data_dir, "val.json")
     print(f"Loading dataset: {train_file}")
 
     train_dataset = DriveLMDataset(train_file, processor, max_length=max_length)
@@ -269,6 +434,19 @@ def main():
         collate_fn=collate_fn,
         pin_memory=True,
     )
+
+    val_loader = None
+    if val_every > 0 and os.path.exists(val_file):
+        val_dataset = DriveLMDataset(val_file, processor, max_length=max_length)
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            collate_fn=collate_fn,
+            pin_memory=True,
+        )
+        print(f"Validation samples: {len(val_dataset)}")
 
     num_batches = len(train_loader)
     total_steps = num_batches * num_epochs // grad_accum
@@ -286,13 +464,15 @@ def main():
     # ============ Optional wandb ============
     if args.wandb:
         import wandb
-        wandb.init(project="drivelm-qwen25vl", config={
+        wandb.init(project="drivelm-qwen25vl", name=experiment, config={
             **cfg, "mini": args.mini, "lr": lr, "batch_size": batch_size,
+            "compress_method": compress_method, "compress_ratio": compress_ratio,
         })
 
     # ============ Training loop ============
     print(f"\n{'='*60}")
-    print(f"  Starting training | {num_epochs} epoch(s) | {total_steps} opt steps")
+    print(f"  Starting training | {experiment} | {num_epochs} epoch(s) | {total_steps} opt steps")
+    print(f"  Compression: {compress_method} ratio={compress_ratio}")
     print(f"{'='*60}\n")
     model.train()
     global_step = 0
@@ -314,7 +494,9 @@ def main():
             batch = {k: v.to(model.device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
 
             try:
-                outputs = model(**batch)
+                outputs = forward_with_compression(
+                    model, batch, compress_method, compress_ratio, image_token_id
+                )
                 loss = outputs.loss / grad_accum
                 loss.backward()
                 batch_loss = outputs.loss.item()
@@ -360,6 +542,17 @@ def main():
                     save_path = os.path.join(output_dir, f"checkpoint-{global_step}")
                     model.save_pretrained(save_path)
                     tqdm.write(f"  [SAVE] checkpoint-{global_step}")
+
+                # Validation
+                if val_every > 0 and val_loader is not None and global_step % val_every == 0:
+                    val_loss = validate(
+                        model, val_loader, compress_method, compress_ratio,
+                        image_token_id, val_batches, model.device,
+                    )
+                    tqdm.write(f"  [VAL] step={global_step} val_loss={val_loss:.4f}")
+                    if args.wandb:
+                        import wandb
+                        wandb.log({"val_loss": val_loss}, step=global_step)
 
         pbar.close()
         avg_loss = epoch_loss_sum / max(epoch_loss_count, 1)
