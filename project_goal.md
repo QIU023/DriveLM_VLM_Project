@@ -9,7 +9,7 @@
 | 阶段 | 状态 | 设备 | 说明 |
 |------|------|------|------|
 | Layer 1: LoRA 微调 | **Epoch 1 完成** (ckpt-46000) | GH200 | 继续训练中，等更好的 ckpt |
-| Layer 2: Visual Token 压缩 | 待开始 | GH200 | 核心创新点，依赖 Layer 1 best ckpt |
+| Layer 2: Visual Token 压缩 | **实现中** | GH200 | 4 种压缩方法已实现，待运行实验 |
 | **Layer 3: 本地推理/部署** | **当前任务** | **4070Ti** | 先打通全链路，后续换 ckpt 即可 |
 | Layer 4: Benchmark 报告 | 待开始 | 两者 | 所有实验完成后整理 |
 
@@ -75,12 +75,28 @@
 
 ## Layer 2: Visual Token 压缩 (GH200) — 核心亮点
 
-> 依赖 Layer 1 的 best checkpoint 作为 baseline，在此基础上做 token 压缩实验。
+> 在 visual encoder 输出之后、送入 LLM 之前，压缩视觉 token。
+> 已实现 4 种方法，通过 YAML config 切换，1 epoch 训练 + 对比。
 
-- 在 visual encoder 输出之后、送入 LLM 之前，加 token selection / pooling 模块
-- 将视觉 token 从 256+ 砍到 64/32，测 accuracy-latency tradeoff
-- Qwen2.5-VL 动态分辨率方案天然适合此实验
-- 面试话术："高分辨率输入下视觉 token 可达上千个，LLM prefill 和 KV cache 线性增长。我探索了几种压缩策略，精度损失 X% 的情况下推理延迟降了 Y%。"
+**已实现的压缩方法 (`scripts/visual_compress.py`)**：
+1. **avg_pool** — 2x2 空间平均池化，保留 grid 结构
+2. **fastervlm** — L2 norm 重要性选择 top-K token (FasterVLM, 2024)
+3. **prumerge** — 剪枝低重要性 token + 合并到最近邻 (LLaVA-PruMerge, 2024)
+4. **pyramiddrop** — 两阶段渐进式丢弃 (PyramidDrop, 2024 简化版)
+
+**实验配置** (`configs/`):
+```bash
+python scripts/train_lora.py --config configs/baseline.yaml       # 无压缩 baseline
+python scripts/train_lora.py --config configs/avg_pool_c4.yaml    # avg_pool 4x
+python scripts/train_lora.py --config configs/fastervlm_c4.yaml   # fastervlm 4x
+python scripts/train_lora.py --config configs/prumerge_c4.yaml    # prumerge 4x
+python scripts/train_lora.py --config configs/pyramiddrop_c4.yaml # pyramiddrop 4x
+bash configs/run_all.sh                                           # 顺序跑全部 5 组
+```
+
+- 所有实验 1 epoch，lr=2e-4，每 200 步验证
+- Checkpoint 按实验名保存到 `checkpoints_qwen25/{experiment}/`
+- 面试话术："高分辨率输入下视觉 token 可达上千个，LLM prefill 和 KV cache 线性增长。我探索了几种 token 压缩策略，在精度损失 X% 的情况下把推理延迟降了 Y%。"
 
 ---
 

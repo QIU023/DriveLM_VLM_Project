@@ -1,9 +1,9 @@
-# FasterVLM 4x: CLS-attention pruning, keep top-25% tokens
-# Run on GH200: python scripts/train_lora.py @configs/fastervlm_c4.yaml
+# FasterVLM 4x: importance-based token selection, keep top-25% tokens
+# Run: python scripts/train_lora.py --config configs/fastervlm_c4.yaml
+base_config: gh200.yaml
 experiment: fastervlm_c4
 compress_method: fastervlm
 compress_ratio: 4
-epochs: 3
-lr: 2e-4
+learning_rate: 2e-4
 val_every: 200
 val_batches: 50

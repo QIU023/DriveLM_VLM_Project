@@ -1,9 +1,9 @@
-# PyramidDrop 4x: progressive dropping inside LLM layers
-# Run on GH200: python scripts/train_lora.py @configs/pyramiddrop_c4.yaml
+# PyramidDrop 4x: two-stage progressive dropping by importance
+# Run: python scripts/train_lora.py --config configs/pyramiddrop_c4.yaml
+base_config: gh200.yaml
 experiment: pyramiddrop_c4
 compress_method: pyramiddrop
 compress_ratio: 4
-epochs: 3
-lr: 2e-4
+learning_rate: 2e-4
 val_every: 200
 val_batches: 50

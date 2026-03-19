@@ -22,10 +22,17 @@ Efficient VLM 项目——专注小模型 + 快速微调 + 知识蒸馏/持续�
 ```
 DriveLM/
 ├── configs/
-│   ├── gh200.yaml              # GH200 config: bf16, bs=8, no quant
-│   └── 4070ti.yaml             # 4070 Ti config: 4-bit quant, bs=1, grad_accum=8
+│   ├── gh200.yaml              # GH200 base config: bf16, bs=4, no quant, 1 epoch
+│   ├── 4070ti.yaml             # 4070 Ti config: 4-bit quant, bs=1, grad_accum=8
+│   ├── baseline.yaml           # Layer 2: no compression baseline (inherits gh200)
+│   ├── avg_pool_c4.yaml        # Layer 2: avg_pool 4x compression
+│   ├── fastervlm_c4.yaml       # Layer 2: FasterVLM 4x compression
+│   ├── prumerge_c4.yaml        # Layer 2: PruMerge 4x compression
+│   ├── pyramiddrop_c4.yaml     # Layer 2: PyramidDrop 4x compression
+│   └── run_all.sh              # Run all 5 compression experiments sequentially
 ├── scripts/
 │   ├── train_lora.py           # Main training script, reads --config YAML
+│   ├── visual_compress.py      # Visual token compression methods (avg_pool/fastervlm/prumerge/pyramiddrop)
 │   ├── demo_inference.py       # Eval script, supports --config + --lora
 │   ├── convert_data.py         # DriveLM → Qwen conversation format
 │   ├── train_lora_qwen35.py    # Qwen3.5-4B variant (not yet updated to YAML)
@@ -51,6 +58,12 @@ python scripts/train_lora.py --config configs/gh200.yaml --mini      # quick tes
 python scripts/train_lora.py --config configs/gh200.yaml             # full training
 python scripts/train_lora.py --config configs/gh200.yaml --bs 4      # override batch size
 
+# Layer 2: Visual token compression experiments
+python scripts/train_lora.py --config configs/baseline.yaml          # no compression baseline
+python scripts/train_lora.py --config configs/avg_pool_c4.yaml       # avg_pool 4x
+python scripts/train_lora.py --config configs/fastervlm_c4.yaml      # fastervlm 4x
+bash configs/run_all.sh                                              # run all 5 experiments
+
 # Background training with logs
 nohup python -u scripts/train_lora.py --config configs/gh200.yaml 2>&1 | tee logs/train_full.log &
 
@@ -66,7 +79,9 @@ python scripts/convert_data.py       # regenerate data_processed/ from raw Drive
 ## Architecture Notes
 
 - Training script reads ALL hyperparams from YAML config (no hardcoded values)
-- CLI args `--bs`, `--lr`, `--epochs` can override config values
+- Configs support `base_config: gh200.yaml` inheritance — child overrides parent fields
+- CLI args `--bs`, `--lr`, `--epochs`, `--compress-method`, `--compress-ratio` can override config values
+- Visual token compression: 4 methods in `scripts/visual_compress.py`, selected via `compress_method` in config
 - Model loading: `quantize: true` → BitsAndBytes 4-bit; `quantize: false` → bf16 full precision
 - On GH200: bf16 is faster than quantized (dequant overhead > memory savings)
 - Checkpoints save LoRA adapter only (~50MB each), not full model
