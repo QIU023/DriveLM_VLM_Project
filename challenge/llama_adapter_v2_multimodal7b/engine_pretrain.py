@@ -9,7 +9,7 @@ import util.lr_sched as lr_sched
 
 from llama import LLaMA_adapter
 
-def train_one_epoch(model: LLaMA_adapter,
+def train_one_epoch(model: LLaMA_aapter,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, loss_scaler,
                     log_writer=None,
