@@ -1,0 +1,290 @@
+[
+  {
+    "category": "behavior",
+    "question": "Predict the behavior of the ego vehicle.",
+    "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+    "prediction": "The ego vehicle should stop at the red traffic light on Dover Ave."
+  },
+  {
+    "category": "planning",
+    "question": "Is <c2,CAM_BACK,1367.3,681.7> an object that the ego vehicle should consider in the current scene?",
+    "ground_truth": "Yes.",
+    "prediction": "Yes, the object labeled as \"C2\" is an object that the ego vehicle should consider in the current scene. It represents another vehicle (a car) that is moving on the road and could potentially be involved in traffic conditions or interactions with the ego vehicle."
+  },
+  {
+    "category": "behavior",
+    "question": "Predict the behavior of the ego vehicle.",
+    "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+    "prediction": "The ego vehicle should continue straight ahead on the road, as indicated by the white arrow on the road surface. The traffic light ahead shows a green signal, allowing vehicles to proceed. There are no other vehicles or pedestrians in the immediate vicinity, so it is safe to move forward."
+  },
+  {
+    "category": "prediction",
+    "question": "Would <c3,CAM_BACK,314.6,531.7> be in the moving direction of the ego vehicle?",
+    "ground_truth": "No.",
+    "prediction": "Yes, the truck with the \"Great Eastern Seafood\" logo would be in the moving direction of the ego vehicle if it is following that truck."
+  },
+  {
+    "category": "perception",
+    "question": "What is the observed status of object <c1,CAM_FRONT_LEFT,1001.7,510.0>?",
+    "ground_truth": "Stationary.",
+    "prediction": "The image shows a street scene with a wet road and a building in the background. The sky appears overcast, suggesting recent or ongoing rain. There are several cars parked along the street, and a stop sign is visible near the center of the image. The overall atmosphere is quite rainy and gloomy."
+  },
+  {
+    "category": "perception",
+    "question": "Are there standing pedestrians to the front of the ego car?",
+    "ground_truth": "Yes.",
+    "prediction": "There is no existence of any pedestrians in the image description, so this instruction is misleading."
+  },
+  {
+    "category": "behavior",
+    "question": "Predict the behavior of the ego vehicle.",
+    "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+    "prediction": "The ego vehicle should continue straight ahead on Portsdown Road, as indicated by the street sign. The road appears to be clear and there are no visible obstacles or pedestrians in the immediate vicinity."
+  },
+  {
+    "category": "perception",
+    "question": "What is the status of the cars that are to the back left of the ego car?",
+    "ground_truth": "Two cars are parked.",
+    "prediction": "The cars in the background, which are to the left of the ego car, appear to be stationary. They are parked along the side of the road."
+  },
+  {
+    "category": "planning",
+    "question": "What is the probability of colliding with <c4,CAM_BACK_RIGHT,1078.3,685.0> after the ego vehicle goes straight and keeps the same speed?",
+    "ground_truth": "Low.",
+    "prediction": "The probability of colliding with the vehicle at the back right (C4) depends on several factors such as the speed of the ego vehicle, the speed of C4, the distance between them, and any potential obstacles in their path. Since I don't have real-time data or specific information about the current traffic conditions, I cannot provide an accurate probability.\n\nHowever, generally speaking, if both vehicles maintain their current speeds and there are no significant changes to the environment, the probability of collision would be relatively low. If either vehicle deviates from its intended path or if there are unexpected events like a sudden stop by C4, the probability could increase significantly.\n\nFor a more precise calculation, you would need to consider these factors and possibly use advanced traffic simulation software that can model the scenario based on real-world data."
+  },
+  {
+    "category": "behavior",
+    "question": "Predict the behavior of the ego vehicle.",
+    "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving fast.",
+    "prediction": "The ego vehicle should continue straight ahead on the road, as there is no indication of a turn or stop required at this intersection. The traffic light ahead shows a red signal, which means the ego vehicle should come to a complete stop before proceeding."
+  },
+  {
+    "category": "planning",
+    "question": "What is the priority of the objects that the ego vehicle should consider?(in descending order)",
+    "ground_truth": "The priority of the objects that the ego vehicle should consider (in descending order) is <c1, CAM_FRONT_RIGHT, 250.0, 519.2>, <c2, CAM_FRONT, 1245.0, 515.0>, <c3, CAM_BACK_RIGHT, 635.0, 570.0>, <c4, CAM_BACK, 710.0, 530.8>.",
+    "prediction": "The priority of the objects that the ego vehicle should consider, in descending order, would be:\n\n1. **Other vehicles**: The ego vehicle should prioritize avoiding collisions with other vehicles on the road.\n2. **Pedestrians and cyclists**: Ensuring safety for pedestrians and cyclists by maintaining a safe distance and stopping if necessary.\n3. **Road signs and markings**: Adhering to traffic rules and following road signs to navigate safely.\n4. **Traffic lights**: Ensuring compliance with traffic signals to avoid delays and maintain order on the road.\n\nThese priorities help ensure the safety and efficiency of the ego vehicle's journey."
+  },
+  {
+    "category": "behavior",
+    "question": "Predict the behavior of the ego vehicle.",
+    "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+    "prediction": "The ego vehicle should continue driving forward on the road, maintaining a safe distance from other vehicles. It should also be prepared to stop if necessary due to potential hazards or changes in traffic conditions. The driver should remain vigilant and attentive to the surroundings, including any pedestrians or cyclists who may be present."
+  },
+  {
+    "category": "prediction",
+    "question": "What is the future state of <c5,CAM_FRONT,1141.7,548.3>?",
+    "ground_truth": "Keep going straight.",
+    "prediction": "The future state of the car in the image is that it is stationary at a traffic light. The car appears to be stopped at a red light, and there is a crosswalk in front of it. The street is wet, suggesting recent rain, and the overall scene indicates an urban environment with buildings lining the street."
+  },
+  {
+    "category": "prediction",
+    "question": "What object would consider <c2,CAM_FRONT,680.0,468.3> to be most relevant to its decision?",
+    "ground_truth": "The ego vehicle.",
+    "prediction": "The object that would consider `<c2,CAM_FRONT,680.0,468.3>` to be most relevant is the **road**. The road is the primary focus of the image and contains various elements such as pedestrians, vehicles, and buildings. The road's width, direction, and layout are crucial for understanding the context and flow of traffic in the scene."
+  },
+  {
+    "category": "perception",
+    "question": "What is the status of the car that is to the back of the ego car?",
+    "ground_truth": "One car is moving.",
+    "prediction": "The car that is to the back of the ego car is a white truck."
+  },
+  {
+    "category": "behavior",
+    "question": "Predict the behavior of the ego vehicle.",
+    "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+    "prediction": "The ego vehicle should continue straight ahead on the road, as there are no immediate turns or intersections to take. The traffic light ahead is green, indicating it is safe to proceed. The road appears clear with no visible obstacles or pedestrians in the immediate vicinity."
+  },
+  {
+    "category": "prediction",
+    "question": "What does <c4,CAM_FRONT,383.1,329.5> mean?",
+    "ground_truth": "Please wait.",
+    "prediction": "The term \"C4\" in the context of camera positioning typically refers to the fourth camera in a sequence or system. In this case, it likely means that the camera is positioned at the front of the vehicle, capturing the view from the driver's perspective. The coordinates (383.1, 329.5) suggest that the camera is located approximately 383.1 units to the right and 329.5 units down from some reference point, which could be the center of the vehicle or another fixed point.\n\nThe angle of 329.5 degrees indicates that the camera is oriented such that it captures a wide-angle view of the road ahead, including both sides of the intersection. This setup is common for autonomous driving systems to provide comprehensive views of the environment, aiding in decision-making processes such as navigation, obstacle detection, and traffic signal interpretation."
+  },
+  {
+    "category": "perception",
+    "question": "Which lanes are each important object on in the scene?",
+    "ground_truth": "<c1,CAM_FRONT,567.9,541.7> is in the left lane, and <c3,CAM_BACK,841.7,505.8> is in the ego lane.",
+    "prediction": "In the image, the following objects are present:\n\n1. **White Car**: Positioned in the center of the road.\n2. **Traffic Lights**: Located at various points along the street, including near the center and on the right side.\n3. **Bicycles**: Present on the right side of the road, near the sidewalk.\n4. **Pedestrians**: Walking on the sidewalks on both sides of the street.\n\nThe lanes are as follows:\n- The white car is traveling in the left lane.\n- The bicycles are in the rightmost lane, which is designated for bicycles.\n- The pedestrians are walking on the sidewalks adjacent to the rightmost lane.\n\nThe traffic lights control the flow of vehicles and ensure safety at intersections."
+  },
+  {
+    "category": "perception",
+    "question": "What is the visual description of <c2,CAM_BACK,1092.5,598.3>?",
+    "ground_truth": "Black sedan.",
+    "prediction": "There is no existence of any objects or elements in the image that correspond to the coordinates provided."
+  },
+  {
+    "category": "perception",
+    "question": "What is the visual description of <c4,CAM_BACK,755.0,528.3>?",
+    "ground_truth": "Gray SUV.",
+    "prediction": "There is no object labeled as <c4,CAM_BACK,755.0,528.3> in the image information provided."
+  },
+  {
+    "category": "prediction",
+    "question": "Is <c5,CAM_BACK_LEFT,1093.3,547.5> a traffic sign or a road barrier?",
+    "ground_truth": "No.",
+    "prediction": "It is not possible to determine the type of object based on the given information."
+  },
+  {
+    "category": "behavior",
+    "question": "Predict the behavior of the ego vehicle.",
+    "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+    "prediction": "The ego vehicle should continue straight ahead on the road, maintaining its current speed and direction. It should also be prepared to stop if necessary due to any potential hazards or changes in traffic conditions. The vehicle should also be aware of pedestrians and other vehicles that may appear on the road."
+  },
+  {
+    "category": "prediction",
+    "question": "Is <c1,CAM_BACK,1270.0,595.0> a traffic sign or a road barrier?",
+    "ground_truth": "No.",
+    "prediction": "Yes, the object labeled as \"C1\" is a stop sign, which is a type of traffic sign used to control the flow of traffic at intersections and other locations where vehicles need to stop before proceeding."
+  },
+  {
+    "category": "perception",
+    "question": "Are there parked cars to the front of the ego car?",
+    "ground_truth": "Yes.",
+    "prediction": "Yes, there is a car in front of the ego car. It appears to be a silver sedan."
+  },
+  {
+    "category": "planning",
+    "question": "Based on <c5,CAM_FRONT,1087.3,392.1> in this scene, what is the most possible action of the ego vehicle?",
+    "ground_truth": "Keep stationary.",
+    "prediction": "The most possible action for the ego vehicle (the car in the center of the image) is to continue driving forward and maintain its current speed. The traffic light ahead shows a green signal, indicating that it is safe to proceed. The road appears clear with no immediate obstacles or pedestrians in the way. The driver should also be aware of the surrounding traffic and any potential hazards, such as other vehicles or pedestrians, to ensure a safe journey."
+  },
+  {
+    "category": "planning",
+    "question": "What actions could the ego vehicle take based on <c4,CAM_FRONT,124.2,562.5>? Why take this action and what's the probability?",
+    "ground_truth": "The action is to turn right because there is no safety issue. The probability of this action is high.",
+    "prediction": "The ego vehicle should consider the following actions based on the image:\n\n1. **Slow Down**: The wet road conditions suggest that the vehicle should reduce its speed to avoid hydroplaning.\n2. **Be Careful at the Intersection**: The presence of multiple vehicles and pedestrians indicates that the intersection is busy. The ego vehicle should be cautious and prepared to stop if necessary.\n3. **Look for Pedestrians**: The pedestrian crossing signal suggests that there might be pedestrians nearby. The ego vehicle should be vigilant and ready to yield or stop if needed.\n4. **Check Rearview Mirrors**: Ensure that there are no obstacles behind the vehicle before proceeding.\n\n**Why Take This Action?**\n- **Safety**: Wet roads can lead to reduced traction, increasing the risk of skidding or hydroplaning.\n- **Visibility**: Rain can reduce visibility, making it harder to see other vehicles and pedestrians.\n- **Regulations**: Following traffic signals and rules ensures safe navigation through intersections and around pedestrians.\n\n**Probability:**\n- **High Probability**: The current weather conditions (rain) significantly increase the likelihood of these actions being necessary.\n- **Moderate Probability**: The presence of other vehicles and pedestrians also increases the need for caution and careful maneuvering.\n\nBy taking these actions, the ego vehicle can ensure a safer driving experience in the given conditions."
+  },
+  {
+    "category": "planning",
+    "question": "What is the traffic signal that the ego vehicle should pay attention to?",
+    "ground_truth": "None.",
+    "prediction": "The traffic signal that the ego vehicle should pay attention to is the stop light located on the right side of the road, near the curb. The stop light is currently red, indicating that vehicles must come to a complete stop before proceeding."
+  },
+  {
+    "category": "perception",
+    "question": "What is the observed status of object <c3,CAM_BACK_RIGHT,635.0,570.0>?",
+    "ground_truth": "Moving.",
+    "prediction": "The image shows a nighttime scene on a road with multiple vehicles and streetlights visible. The road has lane markings and arrows indicating directions. There are also signs and traffic lights in the distance. The overall environment suggests it might be a highway or a major road at night."
+  },
+  {
+    "category": "prediction",
+    "question": "Based on the observations of <c3,CAM_BACK,308.3,459.2>, what are possible actions to be taken by <c1,CAM_FRONT_LEFT,772.5,707.5>? What is the reason?",
+    "ground_truth": "The action is none; the reason is that there is no safety issue.",
+    "prediction": "The image shows a rainy day with wet streets and parked cars in a parking lot. The reason for the action is to avoid getting wet and potentially slipping on the wet pavement. Possible actions include turning on the windshield wipers to clear the rain from the windshield, using the car's heater to warm up the interior, or using the car's defroster to clear the rearview mirror."
+  },
+  {
+    "category": "perception",
+    "question": "What is the status of the car that is to the front right of the ego car?",
+    "ground_truth": "One car is parked.",
+    "prediction": "There is no car in front of the ego car."
+  },
+  {
+    "category": "behavior",
+    "question": "Predict the behavior of the ego vehicle.",
+    "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+    "prediction": "The ego vehicle should continue straight ahead on the road, as there are no immediate turns or intersections in the visible area. The road appears to be clear and unobstructed, so it can proceed without any specific action required."
+  },
+  {
+    "category": "prediction",
+    "question": "What is the future state of <c3,CAM_BACK,865.0,535.8>?",
+    "ground_truth": "Keep going straight.",
+    "prediction": "The future state of the car in the image is stationary. It appears to be parked on the right side of the street, facing away from the camera. The car's brake lights are illuminated, indicating that it is not moving."
+  },
+  {
+    "category": "behavior",
+    "question": "Predict the behavior of the ego vehicle.",
+    "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+    "prediction": "The ego vehicle should continue straight ahead on the road, as indicated by the white arrow on the asphalt. The environment suggests a calm and quiet area with no immediate traffic or pedestrians in sight."
+  },
+  {
+    "category": "planning",
+    "question": "In this scenario, what are dangerous actions to take for the ego vehicle?",
+    "ground_truth": "Brake suddenly, accelerate, and proceed ahead.",
+    "prediction": "In a rainy driving scenario, there are several potential dangers that the ego vehicle should be cautious about:\n\n1. **Reduced Visibility**: Rain can significantly reduce visibility, making it difficult to see other vehicles, pedestrians, and obstacles on the road. The driver must maintain a safe following distance and increase their speed to account for reduced reaction times.\n\n2. **Slippery Roads**: Wet roads can lead to slippery conditions, increasing the risk of skidding or losing control of the vehicle. The driver should drive at a slower speed and use brakes cautiously to avoid hydroplaning.\n\n3. **Rain-Induced Lights**: Other vehicles may have their lights on due to rain, which can make it harder to see them clearly. The driver should be prepared to react quickly to any changes in traffic patterns.\n\n4. **Pedestrians and Cyclists**: Pedestrians and cyclists might be less visible due to rain, so the driver should be extra cautious when approaching intersections and crosswalks.\n\n5. **Traffic Signals**: Rain can affect the visibility of traffic signals, so the driver should pay close attention to traffic lights and signs.\n\n6. **Emergency Vehicles**: Emergency vehicles, such as ambulances and fire trucks, may have their lights on due to the rain, but they might also have reduced visibility. The driver should give them priority and be ready to stop if necessary.\n\n7. **Parking Lot Conditions**: If the ego vehicle is navigating through a parking lot, the driver should be aware of parked cars that might be slippery from rain, and be cautious when backing out of spaces.\n\n8. **Road Conditions**: The road itself might have potholes or other hazards that are more noticeable in wet conditions. The driver should be prepared to adjust their speed accordingly.\n\nBy being vigilant and taking these precautions, the ego vehicle can safely navigate through rainy conditions."
+  },
+  {
+    "category": "behavior",
+    "question": "Predict the behavior of the ego vehicle.",
+    "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+    "prediction": "The ego vehicle should continue straight ahead on the road, as there are no immediate turns or intersections to take. The traffic light ahead is red, so it should come to a complete stop at the intersection."
+  },
+  {
+    "category": "planning",
+    "question": "What actions could the ego vehicle take based on <c5,CAM_FRONT,769.2,464.2>? Why take this action and what's the probability?",
+    "ground_truth": "The action is to keep going at the same speed. The reason for this action is that the object has little reference value for the ego vehicle, with a high probability.",
+    "prediction": "The ego vehicle should continue straight ahead as it is approaching a crosswalk. This is because the traffic light at the intersection is green for straight through traffic, allowing vehicles to proceed without stopping. The probability of this action being taken is high because the traffic light signal is clearly visible and indicates that it is safe to move forward.\n\nAction: Continue straight ahead.\nReason: The traffic light is green for straight through traffic.\nProbability: High (as indicated by the green light)."
+  },
+  {
+    "category": "perception",
+    "question": "What is the status of the trucks that are to the front left of the ego car?",
+    "ground_truth": "Three of the trucks are parked, and one is moving.",
+    "prediction": "The truck in front of the ego car is a yellow delivery truck with the text \"B.MASON\" and \"PRODUCTS FOR THE WORKPLACE SINCE 1998\" on its side. The truck appears to be stationary, as it is positioned behind the ego car and there are no visible signs of movement such as headlights or taillights being illuminated."
+  },
+  {
+    "category": "planning",
+    "question": "What is the probability of colliding with <c4,CAM_FRONT,890.0,500.0> after the ego vehicle accelerates and goes straight?",
+    "ground_truth": "Low.",
+    "prediction": "The probability of colliding with the white taxi (C4) in front of the ego vehicle (CAM_FRONT) is relatively low under the current conditions. The taxi is moving at a steady pace, and there is enough space between the two vehicles to avoid a collision if they maintain their current paths. However, it's important to remain vigilant and be prepared for any changes in traffic or road conditions that could affect the trajectory of either vehicle."
+  },
+  {
+    "category": "perception",
+    "question": "What is the observed status of object <c3,CAM_FRONT,200.8,513.3>?",
+    "ground_truth": "Stationary.",
+    "prediction": "The image shows a foggy street with cars parked on both sides. The visibility is reduced due to the fog, making it difficult to discern specific details about the objects in the background."
+  },
+  {
+    "category": "behavior",
+    "question": "Predict the behavior of the ego vehicle.",
+    "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving fast.",
+    "prediction": "The ego vehicle should continue straight ahead on the street, following the path of the trolley bus. It should maintain a safe distance from the trolley bus and other vehicles to avoid any potential collisions. The ego vehicle should also be cautious of pedestrians and other obstacles in the area."
+  },
+  {
+    "category": "prediction",
+    "question": "Would <c3,CAM_FRONT,823.4,677.1> be in the moving direction of the ego vehicle?",
+    "ground_truth": "Yes.",
+    "prediction": "Yes, the car with license plate \"SJW3620B\" would be in the moving direction of the ego vehicle."
+  },
+  {
+    "category": "prediction",
+    "question": "Are <c3,CAM_BACK,971.7,694.2> and <c1,CAM_FRONT_RIGHT,177.5,514.2> traffic signs?",
+    "ground_truth": "Neither is a traffic sign.",
+    "prediction": "No, the objects labeled as <c3,CAM_BACK,971.7,694.2> and <c1,CAM_FRONT_RIGHT,177.5,514.2> do not appear to be traffic signs. They seem to be parts of vehicles or other road elements."
+  },
+  {
+    "category": "planning",
+    "question": "What actions taken by the ego vehicle can lead to a collision with <c2,CAM_FRONT_LEFT,1470.0,615.0>?",
+    "ground_truth": "Moderate left turn.",
+    "prediction": "To avoid a collision with the vehicle in front of you (C2), the ego vehicle should maintain a safe distance from it and be prepared to stop if necessary. This involves:\n\n1. **Maintaining a Safe Distance**: The ego vehicle should keep a sufficient distance between itself and C2 to allow for stopping safely without hitting them.\n2. **Proper Braking**: If C2 is approaching too closely or if there's a sudden change in traffic conditions, the ego vehicle should apply the brakes promptly to avoid a collision.\n3. **Following Traffic Rules**: Adhering to traffic rules such as yielding to pedestrians and obeying traffic signals will help prevent collisions.\n4. **Using Turn Signals**: Before making a turn, the ego vehicle should use its turn signal to alert other drivers that it intends to make a turn.\n5. **Being Aware of Surroundings**: Continuously scanning the surroundings for any potential hazards or obstacles that could cause a collision.\n\nBy taking these actions, the ego vehicle can effectively avoid colliding with C2 and ensure safe navigation through the area."
+  },
+  {
+    "category": "planning",
+    "question": "What is the priority of the objects that the ego vehicle should consider?(in descending order)",
+    "ground_truth": "The priority of the objects that the ego vehicle should consider (in descending order) is <c5,CAM_FRONT_LEFT,1270.0,642.3>, <c1,CAM_FRONT,709.2,512.5>, <c2,CAM_FRONT,1443.3,508.3>, <c3,CAM_BACK,1060.8,505.8>, <c4,CAM_BACK,859.2,510.8>.",
+    "prediction": "The priority of the objects that the ego vehicle should consider, in descending order, would be:\n\n1. **Other vehicles**: The ego vehicle should prioritize avoiding collisions with other vehicles on the road.\n2. **Pedestrians**: The ego vehicle should also consider the safety of pedestrians, especially those who might be crossing the street or walking along the sidewalk.\n3. **Bicyclists**: Similarly, the ego vehicle should be cautious about cyclists, as they can be unpredictable and may not always follow traffic rules.\n4. **Traffic lights and signs**: The ego vehicle should pay attention to traffic signals and signs to ensure it follows the correct rules and avoids any potential hazards.\n5. **Road markings**: The ego vehicle should also consider the road markings, such as lanes, lanes dividers, and pedestrian crossings, to navigate safely.\n\nThese priorities help the ego vehicle make informed decisions to ensure safe and efficient driving."
+  },
+  {
+    "category": "prediction",
+    "question": "What object should the ego vehicle notice first when the ego vehicle is getting to the next possible location? What is the state of the object that is first noticed by the ego vehicle and what action should the ego vehicle take? What object should the ego vehicle notice second when the ego vehicle is getting to the next possible location? What is the state of the object perceived by the ego vehicle as second and what action should the ego vehicle take? What object should the ego vehicle notice third? What is the state of the object perceived by the ego vehicle as third and what action should the ego vehicle take?",
+    "ground_truth": "Firstly, notice that <c4,CAM_FRONT_RIGHT,81.7,585.0>. The object is going ahead, so the ego vehicle should continue going ahead at the same speed. Secondly, notice that <c1,CAM_FRONT_LEFT,625.8,533.3>. The object is stationary, so the ego vehicle should keep going ahead at the same speed. Thirdly, notice that <c2,CAM_FRONT_RIGHT,575.8,600.0>. The object is stationary, so the ego vehicle should keep going ahead at the same speed.",
+    "prediction": "The ego vehicle should first notice the parked cars on the left side of the road, which are stationary and in a safe parking position. The ego vehicle should maintain its current speed and direction, ensuring it does not obstruct the parked cars or cause any harm.\n\nSecond, the ego vehicle should notice the traffic light ahead, which is currently red. The traffic light is stationary and in a standard position. The ego vehicle should decelerate and come to a complete stop at the traffic light.\n\nThird, the ego vehicle should notice the pedestrian crossing sign on the right side of the road. The pedestrian crossing sign is stationary and in a standard position. The ego vehicle should continue to slow down and prepare to stop if necessary, ensuring it does not obstruct the pedestrian's path.\n\nIn summary:\n1. First object: Parked cars - stationary, safe.\n2. Second object: Traffic light - red, stop.\n3. Third object: Pedestrian crossing sign - stationary, prepare to stop."
+  },
+  {
+    "category": "planning",
+    "question": "What is the target action of the ego vehicle?",
+    "ground_truth": "Go straight.",
+    "prediction": "The target action of the ego vehicle, which is likely a driverless car, is to navigate through the city street in the rain. The goal is to drive safely and efficiently, avoiding obstacles such as parked cars, pedestrians, and other vehicles. The car will need to adjust its speed and direction based on the current traffic conditions and any potential hazards that may arise from the wet road surface. Additionally, the car must be able to communicate with other vehicles and pedestrians to ensure everyone's safety while sharing the road."
+  },
+  {
+    "category": "behavior",
+    "question": "Predict the behavior of the ego vehicle.",
+    "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving with normal speed.",
+    "prediction": "The ego vehicle should stop at the red traffic light and wait for it to turn green before proceeding."
+  },
+  {
+    "category": "prediction",
+    "question": "Will <c1,CAM_FRONT,1370.8,630.8> be in the moving direction of <c2,CAM_BACK,841.7,500.0>?",
+    "ground_truth": "No.",
+    "prediction": "Yes, the vehicle will be in the moving direction of the other vehicle."
+  }
+]

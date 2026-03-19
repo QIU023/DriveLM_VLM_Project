@@ -1,0 +1,1830 @@
+{
+  "tag": "Base",
+  "config": "4070ti.yaml",
+  "summary": {
+    "behavior": {
+      "n": 100,
+      "exact_match": 0,
+      "accuracy": 0.0,
+      "avg_tokens": 49.4,
+      "avg_time_s": 8.3
+    },
+    "perception": {
+      "n": 100,
+      "exact_match": 0,
+      "accuracy": 0.0,
+      "avg_tokens": 46.9,
+      "avg_time_s": 10.95
+    },
+    "overall": {
+      "n": 200,
+      "exact_match": 0,
+      "accuracy": 0.0,
+      "avg_tokens": 48.2,
+      "avg_time_s": 9.63,
+      "total_time_min": 32.1
+    }
+  },
+  "results": [
+    {
+      "sample_id": 622,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is stationary, positioned behind a red car that is stopped at a traffic light. The traffic light is visible in the background, indicating that the vehicle is likely waiting for the light to change before proceeding. The surrounding environment suggests it is nighttime, and the road appears wet, possibly due to recent rain.",
+      "num_tokens": 64,
+      "elapsed": 13.52
+    },
+    {
+      "sample_id": 641,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle should stop at the traffic light, as it is currently red.",
+      "num_tokens": 17,
+      "elapsed": 5.358
+    },
+    {
+      "sample_id": 714,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is a pedestrian, and it is standing at a crosswalk, waiting to cross the street. The pedestrian is wearing shorts and sneakers, and they are looking down at their feet.",
+      "num_tokens": 40,
+      "elapsed": 9.888
+    },
+    {
+      "sample_id": 877,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there are no immediate turns or intersections to make. The traffic light at the intersection is red, so it should stop and wait for the light to change before proceeding.",
+      "num_tokens": 46,
+      "elapsed": 12.81
+    },
+    {
+      "sample_id": 1010,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle should stop at the traffic light and wait for it to change to green before proceeding.",
+      "num_tokens": 21,
+      "elapsed": 6.072
+    },
+    {
+      "sample_id": 1070,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as indicated by the white arrow on the pavement. The environment suggests a calm and quiet area with no immediate traffic or pedestrians in the immediate vicinity.",
+      "num_tokens": 41,
+      "elapsed": 9.792
+    },
+    {
+      "sample_id": 1258,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue to drive forward on the wet road, maintaining a safe distance from other vehicles. It should also be cautious of any pedestrians or obstacles that may appear in its path. The driver should also be prepared to stop if necessary due to the wet conditions and potential hazards.",
+      "num_tokens": 58,
+      "elapsed": 15.695
+    },
+    {
+      "sample_id": 1368,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there are no immediate turns or intersections to take. The traffic light ahead is green, indicating it is safe to proceed. The road appears clear with no visible obstacles or pedestrians in the immediate vicinity.",
+      "num_tokens": 52,
+      "elapsed": 13.543
+    },
+    {
+      "sample_id": 1451,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle should stop at the traffic light, as it is a red light.",
+      "num_tokens": 18,
+      "elapsed": 5.983
+    },
+    {
+      "sample_id": 1723,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as indicated by the yellow line and the direction of the arrow on the sign. The road appears to be wide and clear, with no immediate obstacles or pedestrians in sight. The traffic light ahead is green, allowing for a safe continuation of the journey.",
+      "num_tokens": 62,
+      "elapsed": 16.588
+    },
+    {
+      "sample_id": 2300,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving very fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as indicated by the white arrow painted on the pavement. The traffic light in the distance is green, allowing vehicles to proceed. There are no other vehicles or pedestrians visible in the image, so it's safe to assume that the road is clear for a safe drive.",
+      "num_tokens": 65,
+      "elapsed": 15.577
+    },
+    {
+      "sample_id": 2503,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as it is currently in a straight path and there are no immediate turns or obstacles to change direction.",
+      "num_tokens": 32,
+      "elapsed": 6.63
+    },
+    {
+      "sample_id": 2902,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there are no signs or signals indicating a need to turn or change lanes. The road appears to be clear and well-lit, so it is safe to proceed without any immediate concerns.",
+      "num_tokens": 50,
+      "elapsed": 12.405
+    },
+    {
+      "sample_id": 3008,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle should stop at the crosswalk and wait for pedestrians to cross before proceeding.",
+      "num_tokens": 19,
+      "elapsed": 5.817
+    },
+    {
+      "sample_id": 3116,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle should continue straight ahead and proceed through the intersection, as it is approaching a crosswalk. The traffic light at the intersection will likely show a green signal for vehicles to proceed, allowing the ego vehicle to move forward.",
+      "num_tokens": 47,
+      "elapsed": 10.001
+    },
+    {
+      "sample_id": 3313,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should maintain its current speed and direction, as it is currently traveling on a wet road with multiple vehicles ahead. The driver should be cautious and prepared to slow down or stop if necessary due to the slippery conditions. Additionally, the driver should stay alert for any potential hazards such as pedestrians or other obstacles that may appear on the road.",
+      "num_tokens": 70,
+      "elapsed": 15.69
+    },
+    {
+      "sample_id": 3437,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the wet road, maintaining a safe distance from other vehicles. It should also be cautious of any potential hazards such as potholes or slippery surfaces due to the rain. The driver should be prepared to slow down and stop if necessary to avoid accidents.",
+      "num_tokens": 59,
+      "elapsed": 12.796
+    },
+    {
+      "sample_id": 3628,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as indicated by the white arrow on the road surface. The road curves to the right, so it is important to maintain a safe distance from the curb and any other vehicles that may be approaching from the opposite direction.",
+      "num_tokens": 55,
+      "elapsed": 12.552
+    },
+    {
+      "sample_id": 3733,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, maintaining its current speed and direction. It should also be prepared to stop if necessary due to any potential obstacles or changes in traffic conditions. The vehicle should also be aware of pedestrians and other vehicles around it, ensuring safe passage through the intersection.",
+      "num_tokens": 60,
+      "elapsed": 16.573
+    },
+    {
+      "sample_id": 3899,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there are no immediate turns or intersections to make. The traffic light at the intersection is red, so it should stop and wait for the light to change before proceeding.",
+      "num_tokens": 46,
+      "elapsed": 13.233
+    },
+    {
+      "sample_id": 4205,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, maintaining its current speed and direction. It should be cautious of any potential obstacles or pedestrians in the area. The vehicle should also be prepared to stop if necessary due to traffic conditions or other vehicles approaching from the opposite direction.",
+      "num_tokens": 56,
+      "elapsed": 22.938
+    },
+    {
+      "sample_id": 4555,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle should maintain its current position and speed, as it is following a line of traffic on a multi-lane road at night. The vehicle ahead is moving forward, so the ego vehicle should also move forward to stay in the same lane. It should also be cautious of any potential obstacles or changes in traffic conditions that may require a change in speed or lane.",
+      "num_tokens": 75,
+      "elapsed": 17.745
+    },
+    {
+      "sample_id": 4762,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, maintaining its current speed and direction. It should also be prepared to stop if necessary due to potential traffic or pedestrians in front of it. The driver should remain vigilant for any changes in traffic conditions or unexpected obstacles that may require a change in course or speed.",
+      "num_tokens": 63,
+      "elapsed": 5.824
+    },
+    {
+      "sample_id": 4817,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, maintaining its current speed and direction. It should also be prepared to stop if necessary due to potential obstacles or changes in traffic conditions. The driver should remain vigilant for any signs of other vehicles or pedestrians that may require attention.",
+      "num_tokens": 56,
+      "elapsed": 5.492
+    },
+    {
+      "sample_id": 4860,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there are no immediate turns or intersections to make. The road appears to be clear and level, with no visible obstacles or pedestrians in the immediate vicinity. The traffic light at the intersection is not visible, so it's unclear if a stop or yield is required. The vehicle should maintain its current speed and direction until reaching the next intersection or destination.",
+      "num_tokens": 82,
+      "elapsed": 8.172
+    },
+    {
+      "sample_id": 4974,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, maintaining its current speed and direction. It should also be prepared to stop if necessary due to potential traffic or pedestrians in front of it. The vehicle should also be cautious of any changes in traffic conditions or unexpected events that may occur while driving at night.",
+      "num_tokens": 62,
+      "elapsed": 6.45
+    },
+    {
+      "sample_id": 4992,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as it is currently in a stationary position and there are no immediate actions required to change its direction or speed.",
+      "num_tokens": 34,
+      "elapsed": 3.716
+    },
+    {
+      "sample_id": 5024,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is steering to the left. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, following the white dashed line that marks the center of the lane. The truck in front is moving forward, so it's important to maintain a safe distance and avoid any sudden movements or lane changes that could cause a collision.",
+      "num_tokens": 56,
+      "elapsed": 5.473
+    },
+    {
+      "sample_id": 5142,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving very fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there are no immediate turns or intersections to make. The traffic light at the intersection is red, so it should stop and wait for the light to change before proceeding.",
+      "num_tokens": 46,
+      "elapsed": 4.565
+    },
+    {
+      "sample_id": 5363,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there are no immediate obstacles or turns to take. The road appears to be clear and level, with no visible hazards. The vehicle should maintain its current speed and direction until it reaches a stop sign or other traffic signal.",
+      "num_tokens": 57,
+      "elapsed": 5.802
+    },
+    {
+      "sample_id": 5571,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle should stop at the traffic light and wait for the green signal before proceeding.",
+      "num_tokens": 19,
+      "elapsed": 2.089
+    },
+    {
+      "sample_id": 5668,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle should continue straight ahead on the wet road, maintaining a safe distance from the parked cars and the curb. It should also be cautious of any pedestrians or cyclists who may be crossing the street. The driver should also be prepared to stop if necessary due to potential hazards such as potholes or other vehicles that may be turning or stopping.",
+      "num_tokens": 71,
+      "elapsed": 6.996
+    },
+    {
+      "sample_id": 5739,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there are no immediate obstacles or turns to take. The street is well-lit by streetlights, and the road appears to be clear of any other vehicles or pedestrians. The vehicle should maintain its current speed and direction until it reaches a decision point where it needs to make a turn or change lanes.",
+      "num_tokens": 73,
+      "elapsed": 7.012
+    },
+    {
+      "sample_id": 5747,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle should continue straight ahead on Portsdown Road, as indicated by the street sign. The road appears to be clear and there are no visible obstacles or pedestrians in the immediate vicinity.",
+      "num_tokens": 39,
+      "elapsed": 4.197
+    },
+    {
+      "sample_id": 5978,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle should stop at the crosswalk and wait for the pedestrian to cross before proceeding.",
+      "num_tokens": 20,
+      "elapsed": 2.172
+    },
+    {
+      "sample_id": 6217,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as it is approaching a bus stop. The bus will likely stop for passengers before continuing its route. The ego vehicle should maintain its current speed and direction until it reaches the bus stop or changes lanes if necessary.",
+      "num_tokens": 54,
+      "elapsed": 5.426
+    },
+    {
+      "sample_id": 6321,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is steering to the left. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there are no signs of a turn or intersection in the current view. The traffic lights ahead show green signals for both lanes, indicating it is safe to proceed.",
+      "num_tokens": 45,
+      "elapsed": 4.424
+    },
+    {
+      "sample_id": 6409,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there is no indication of a turn or stop required at this intersection. The traffic light ahead shows a red signal, which means the ego vehicle should come to a complete stop before proceeding.",
+      "num_tokens": 50,
+      "elapsed": 4.565
+    },
+    {
+      "sample_id": 6439,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as it is currently traveling in that direction.",
+      "num_tokens": 21,
+      "elapsed": 1.681
+    },
+    {
+      "sample_id": 6628,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is steering to the right. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there are no immediate obstacles or pedestrians in its path. It should maintain a safe speed and be prepared to stop if necessary due to any potential hazards ahead.",
+      "num_tokens": 44,
+      "elapsed": 3.121
+    },
+    {
+      "sample_id": 6762,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the bridge, maintaining its current speed and direction. It should be cautious of any pedestrians or vehicles that may appear in its path. The vehicle should also be prepared to stop if necessary due to potential hazards such as construction zones or other traffic.",
+      "num_tokens": 57,
+      "elapsed": 4.138
+    },
+    {
+      "sample_id": 6984,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as indicated by the white arrow painted on the pavement. The road appears to be a two-way street with no visible traffic signs or signals that would require a change in direction. The surrounding environment suggests it is a parking area with multiple cars parked on both sides of the road. Therefore, the ego vehicle should proceed without making any turns until reaching the end of the road or encountering a stop sign or other traffic control device.",
+      "num_tokens": 96,
+      "elapsed": 6.888
+    },
+    {
+      "sample_id": 7353,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as indicated by the white arrow on the ground. It should also be cautious and attentive to any potential traffic or pedestrians in the area.",
+      "num_tokens": 39,
+      "elapsed": 2.91
+    },
+    {
+      "sample_id": 7803,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there are no immediate turns or intersections to make. The traffic light is green, so it can proceed without stopping. The road appears clear, and there are no other vehicles in front of it.",
+      "num_tokens": 52,
+      "elapsed": 3.86
+    },
+    {
+      "sample_id": 8108,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, maintaining its current speed and direction. It should also be prepared to stop if necessary due to any potential traffic or pedestrians in front of it. The vehicle should also be aware of the surrounding environment, including other vehicles, pedestrians, and any potential hazards such as construction zones or roadwork.",
+      "num_tokens": 69,
+      "elapsed": 4.914
+    },
+    {
+      "sample_id": 8545,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle should continue straight ahead on Dover Cres, as it is a two-way street with no visible traffic signs or signals indicating a need to stop or turn. The traffic light ahead shows a red signal, which means vehicles must stop.",
+      "num_tokens": 49,
+      "elapsed": 3.623
+    },
+    {
+      "sample_id": 8736,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as indicated by the white arrow painted on the road surface. The pedestrian crossing is visible in front, so it should stop and wait for pedestrians to cross before proceeding.",
+      "num_tokens": 45,
+      "elapsed": 3.364
+    },
+    {
+      "sample_id": 8754,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle should continue straight ahead, as indicated by the white arrow on the road. The traffic light is green, allowing vehicles to proceed. There are no other vehicles in the immediate vicinity, so it can safely move forward without stopping or changing lanes.",
+      "num_tokens": 52,
+      "elapsed": 3.703
+    },
+    {
+      "sample_id": 8856,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, maintaining its current speed and lane position. It should also be prepared to stop if necessary due to potential traffic or pedestrians in front. The driver should remain vigilant for any changes in traffic conditions or unexpected events that may require a change in direction or speed.",
+      "num_tokens": 62,
+      "elapsed": 4.338
+    },
+    {
+      "sample_id": 8968,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as indicated by the white arrow painted on the road surface. The road is clear and there are no visible obstacles or pedestrians in the immediate vicinity. The traffic light ahead shows a green signal, allowing vehicles to proceed. The vehicle should maintain its current speed and direction until it reaches the next intersection or end of the road.",
+      "num_tokens": 76,
+      "elapsed": 5.328
+    },
+    {
+      "sample_id": 9217,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there are no visible obstacles or turns in the immediate vicinity. The road appears to be clear and well-lit, allowing for safe navigation.",
+      "num_tokens": 41,
+      "elapsed": 3.063
+    },
+    {
+      "sample_id": 9376,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there are no immediate turns or intersections to take. The road appears to be clear and there are no other vehicles in front of it. The traffic light is red, so the ego vehicle should stop at the intersection.",
+      "num_tokens": 56,
+      "elapsed": 3.915
+    },
+    {
+      "sample_id": 9639,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there are no immediate turns or intersections to take. The road appears to be clear and unobstructed, so it is safe to proceed without any additional actions.",
+      "num_tokens": 46,
+      "elapsed": 3.254
+    },
+    {
+      "sample_id": 9888,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there are no immediate turns or intersections to take. The traffic light ahead is red, so it should come to a complete stop at the intersection.",
+      "num_tokens": 42,
+      "elapsed": 3.041
+    },
+    {
+      "sample_id": 9930,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there are no immediate turns or intersections in the direction it is heading. The bus and other vehicles are moving in the same direction, so it would be safe to follow them.",
+      "num_tokens": 48,
+      "elapsed": 3.401
+    },
+    {
+      "sample_id": 10044,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle should continue to drive forward and maintain its current speed, as it is following the traffic flow on the road. It should also be cautious of any potential hazards or obstacles in its path, such as other vehicles, pedestrians, or debris. The ego vehicle should also be prepared to stop if necessary, as there may be a need to yield to other vehicles or pedestrians.",
+      "num_tokens": 77,
+      "elapsed": 5.481
+    },
+    {
+      "sample_id": 10268,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as indicated by the white arrow markings on the asphalt. The traffic light in front is red, so it should stop at this intersection. After stopping, it should proceed when the light turns green.",
+      "num_tokens": 51,
+      "elapsed": 3.671
+    },
+    {
+      "sample_id": 10519,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there are no immediate obstacles or pedestrians in its path. It should maintain a safe speed and be prepared to stop if necessary due to any potential hazards ahead.",
+      "num_tokens": 44,
+      "elapsed": 3.245
+    },
+    {
+      "sample_id": 10674,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there are no immediate turns or intersections to take. The traffic light ahead is red, so it should come to a complete stop at the intersection.",
+      "num_tokens": 42,
+      "elapsed": 2.98
+    },
+    {
+      "sample_id": 10880,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there are no immediate turns or intersections to make. The traffic light ahead is green, indicating it is safe to proceed. The road appears clear with no visible obstacles or pedestrians in its path.",
+      "num_tokens": 51,
+      "elapsed": 3.656
+    },
+    {
+      "sample_id": 10911,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle should stop at the traffic light as it is currently red.",
+      "num_tokens": 16,
+      "elapsed": 1.272
+    },
+    {
+      "sample_id": 11261,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there are no immediate turns or intersections to make. The traffic light at the intersection is green, allowing vehicles to proceed. The road appears clear and unobstructed, so there are no immediate hazards to avoid. The vehicle should maintain its current speed and direction until it reaches the next intersection or end of the road.",
+      "num_tokens": 77,
+      "elapsed": 5.354
+    },
+    {
+      "sample_id": 11381,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle should continue straight ahead on the wet road, maintaining a safe distance from other vehicles and pedestrians. It should also be cautious of any potential hazards such as potholes or slippery surfaces. The driver should also be prepared to stop if necessary due to the rainy conditions.",
+      "num_tokens": 57,
+      "elapsed": 4.086
+    },
+    {
+      "sample_id": 11705,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as indicated by the \"SLOW\" sign and the direction arrow. The road appears to be clear with no immediate obstacles or pedestrians in sight.",
+      "num_tokens": 41,
+      "elapsed": 3.001
+    },
+    {
+      "sample_id": 11780,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as it is approaching a roundabout. The traffic light ahead shows a red signal, indicating that vehicles must stop. The pedestrian is crossing the street, so the ego vehicle should yield to them and wait for them to cross before proceeding.",
+      "num_tokens": 59,
+      "elapsed": 4.239
+    },
+    {
+      "sample_id": 12092,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as indicated by the white arrow painted on the pavement. The road appears to be clear and well-lit, with no immediate obstacles or hazards in the immediate vicinity. The vehicle should maintain its current speed and direction until it reaches the next intersection or exit. It is important to stay alert and vigilant while driving at night, as visibility can be reduced due to darkness. The driver should also be prepared to stop if necessary, such as when approaching a stop sign or traffic light.",
+      "num_tokens": 107,
+      "elapsed": 9.637
+    },
+    {
+      "sample_id": 12261,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle should continue straight ahead on the wet road, as indicated by the sign pointing to the right. The road appears to be wet, which could affect traction and visibility, so it's important to drive cautiously.",
+      "num_tokens": 45,
+      "elapsed": 3.329
+    },
+    {
+      "sample_id": 12290,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as it is approaching a roundabout. The traffic light at the intersection will change to green, allowing the ego vehicle to proceed through the intersection safely.",
+      "num_tokens": 42,
+      "elapsed": 3.077
+    },
+    {
+      "sample_id": 12348,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is steering to the right. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there are no immediate turns or intersections to make. The road appears to be clear with no other vehicles in sight. The traffic light at the intersection is not visible, so it's safe to proceed without stopping.",
+      "num_tokens": 55,
+      "elapsed": 3.994
+    },
+    {
+      "sample_id": 12613,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there is no indication that it needs to turn or stop. The road appears to be clear and there are no other vehicles in sight.",
+      "num_tokens": 40,
+      "elapsed": 3.054
+    },
+    {
+      "sample_id": 12757,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there are no signs or signals indicating a need to turn or stop. The road appears to be clear and unobstructed, so it is safe to proceed forward.",
+      "num_tokens": 47,
+      "elapsed": 4.955
+    },
+    {
+      "sample_id": 13004,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle should stop at the traffic light and wait for the green signal before proceeding.",
+      "num_tokens": 19,
+      "elapsed": 1.86
+    },
+    {
+      "sample_id": 13112,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle should stop at the stop sign and then proceed when it is safe to do so, considering the traffic conditions ahead.",
+      "num_tokens": 27,
+      "elapsed": 4.315
+    },
+    {
+      "sample_id": 13568,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle should stop at the traffic light, as it is a pedestrian crossing and the bus has stopped in front of it.",
+      "num_tokens": 27,
+      "elapsed": 6.35
+    },
+    {
+      "sample_id": 13727,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, maintaining its current speed and lane position. It should also be prepared to stop if necessary due to any potential traffic or pedestrians ahead. The vehicle should also be aware of the surrounding traffic and make sure to yield to any vehicles that may be approaching from behind.",
+      "num_tokens": 63,
+      "elapsed": 13.992
+    },
+    {
+      "sample_id": 13802,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there are no immediate obstacles or turns to take. The environment appears to be a quiet urban area with buildings and trees lining the street. The vehicle should maintain its current speed and direction until it reaches the next intersection or end of the road.",
+      "num_tokens": 61,
+      "elapsed": 16.615
+    },
+    {
+      "sample_id": 13824,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead in the parking lot, as there are no immediate obstacles or pedestrians in its path. It should maintain a safe distance from the parked trucks and other vehicles to avoid any potential collisions. The vehicle should also be cautious of any pedestrians or other vehicles that may enter the parking area from the opposite direction.",
+      "num_tokens": 67,
+      "elapsed": 16.908
+    },
+    {
+      "sample_id": 14235,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should maintain its current position and speed, as it is already in the left lane and following the traffic flow. It should also be prepared to stop if necessary due to the wet road conditions, which could lead to reduced traction and increased stopping distance. The driver should also be cautious of any pedestrians or cyclists who may be crossing the street, as they might not be visible due to the rain.",
+      "num_tokens": 82,
+      "elapsed": 21.94
+    },
+    {
+      "sample_id": 14300,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle should stop at the traffic light, as it is currently red.",
+      "num_tokens": 17,
+      "elapsed": 3.656
+    },
+    {
+      "sample_id": 14734,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is steering to the right. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle should stop at the crosswalk and wait for the pedestrian to cross before proceeding.",
+      "num_tokens": 20,
+      "elapsed": 6.17
+    },
+    {
+      "sample_id": 15360,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there is no indication to turn or stop. The traffic light ahead shows a green signal, which allows vehicles to proceed.",
+      "num_tokens": 37,
+      "elapsed": 9.849
+    },
+    {
+      "sample_id": 15504,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight down the street, as there are no immediate turns or intersections ahead. The road is clear and there are no pedestrians or other vehicles in the immediate vicinity. The traffic light at the intersection ahead is red, so the ego vehicle should stop and wait for it to turn green before proceeding.",
+      "num_tokens": 64,
+      "elapsed": 16.902
+    },
+    {
+      "sample_id": 15680,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there are no immediate turns or intersections to make. The traffic lights ahead indicate that it is safe to proceed.",
+      "num_tokens": 35,
+      "elapsed": 10.025
+    },
+    {
+      "sample_id": 15764,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is steering to the left. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as indicated by the white arrow painted on the pavement. The environment suggests a residential or commercial area with no immediate obstacles or pedestrians in the immediate vicinity.",
+      "num_tokens": 42,
+      "elapsed": 13.12
+    },
+    {
+      "sample_id": 16008,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the street, following the path of the trolley bus. It should maintain a safe distance from the trolley bus and other vehicles to avoid any potential collisions. The ego vehicle should also be cautious of pedestrians and other obstacles in the area.",
+      "num_tokens": 57,
+      "elapsed": 16.581
+    },
+    {
+      "sample_id": 16095,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead, as it is approaching a traffic light and there are no other vehicles in its path.",
+      "num_tokens": 26,
+      "elapsed": 7.14
+    },
+    {
+      "sample_id": 16163,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is steering to the right. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle should slow down and prepare to stop at the upcoming hump. It should also be cautious of any pedestrians or cyclists who may be crossing the street. The vehicle should maintain a safe distance from other vehicles and follow traffic signals and signs.",
+      "num_tokens": 51,
+      "elapsed": 15.955
+    },
+    {
+      "sample_id": 16358,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should maintain its current speed and direction, as it is approaching a bus stop. It should also be prepared to stop if necessary, as the bus may not always stop at the stop sign. The ego vehicle should also be aware of other vehicles on the road and adjust its speed accordingly.",
+      "num_tokens": 61,
+      "elapsed": 16.318
+    },
+    {
+      "sample_id": 16469,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle should continue straight ahead on Kent Ridge Road, as indicated by the traffic light and the direction sign. The speed limit is 40 km/h, so it should maintain a safe speed while proceeding.",
+      "num_tokens": 44,
+      "elapsed": 10.413
+    },
+    {
+      "sample_id": 16569,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should maintain its current position and speed, as it is currently stationary at a stop sign. The driver should wait for the traffic light to change before proceeding. If the traffic light changes to green, the ego vehicle should accelerate and continue down the road.",
+      "num_tokens": 54,
+      "elapsed": 16.839
+    },
+    {
+      "sample_id": 16669,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there are no signs or instructions to turn or change direction. The road appears to be clear and there are no other vehicles in sight.",
+      "num_tokens": 40,
+      "elapsed": 12.681
+    },
+    {
+      "sample_id": 16934,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving very fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there are no immediate turns or intersections to take. The rider in front is also moving forward, so it's safe to assume that the road is clear for both vehicles.",
+      "num_tokens": 47,
+      "elapsed": 10.664
+    },
+    {
+      "sample_id": 17109,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as indicated by the white arrow in the center of the intersection.",
+      "num_tokens": 25,
+      "elapsed": 6.635
+    },
+    {
+      "sample_id": 17126,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as indicated by the white arrow painted on the pavement. The traffic light is green, allowing vehicles to proceed. There are no pedestrians or other vehicles in the immediate vicinity that would require stopping. The environment appears to be a commercial area with multiple buildings and parked cars, suggesting it might be a typical day with moderate traffic.",
+      "num_tokens": 76,
+      "elapsed": 19.864
+    },
+    {
+      "sample_id": 17851,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there are no signs or instructions indicating a turn or change in direction. The road appears to be clear and unobstructed, so it is safe to proceed forward.",
+      "num_tokens": 47,
+      "elapsed": 13.371
+    },
+    {
+      "sample_id": 18257,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there are no immediate turns or intersections to make. It should maintain its current speed and avoid any sudden movements or lane changes until it reaches its destination or a stop sign.",
+      "num_tokens": 47,
+      "elapsed": 13.024
+    },
+    {
+      "sample_id": 18306,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is steering to the right. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, as there are no signs of a turn or intersection in the image. The road appears to be clear and unobstructed, so it is safe to proceed without any immediate action required.",
+      "num_tokens": 50,
+      "elapsed": 13.045
+    },
+    {
+      "sample_id": 18452,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle should continue straight ahead on the road, maintaining its current speed and direction. It should also be prepared to stop if necessary due to potential traffic or pedestrians in front. The vehicle should also be aware of any changes in traffic conditions or road signs that may require a change in direction or speed.",
+      "num_tokens": 62,
+      "elapsed": 13.936
+    },
+    {
+      "sample_id": 18508,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle should continue straight ahead on the wet road, as it is approaching a crosswalk. The driver should be cautious and prepared to stop if necessary due to the wet conditions, which can affect traction and visibility.",
+      "num_tokens": 45,
+      "elapsed": 12.708
+    },
+    {
+      "sample_id": 18852,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving very fast.",
+      "prediction": "The ego vehicle should stop at the traffic light and wait for it to change before proceeding.",
+      "num_tokens": 19,
+      "elapsed": 6.175
+    },
+    {
+      "sample_id": 7,
+      "category": "perception",
+      "question": "What is the status of the cars that are to the front of the ego car?",
+      "ground_truth": "Two of the cars are parked, and three are moving.",
+      "prediction": "The cars in front of the ego car are stationary.",
+      "num_tokens": 12,
+      "elapsed": 3.302
+    },
+    {
+      "sample_id": 194,
+      "category": "perception",
+      "question": "Identify all the traffic elements in the front view, categorize them, determine their status, and predict the bounding box around each one. The output should be a list formatted as (c, s, x1, y1, x2, y2), where c represents the category, s denotes the status, and x1, y1, x2, y2 are the offsets of the top-left and bottom-right corners of the box relative to the center point.",
+      "ground_truth": "There are many traffic elements in the front view. The information of these traffic elements is [(traffic light, green, 1502.83, 247.35, 1547.55, 362.06), (traffic light, unknown, 1548.2, 266.21, 1598.96, 357.87), (traffic light, green, 1311.7, 309.55, 1348.11, 333.53), (traffic light, green, 1311.52, 309.62, 1348.19, 333.07), (traffic light, red, 983.92, 389.2, 995.5, 412.55), (traffic light, unknown, 916.36, 136.1, 953.47, 169.45), (traffic light, unknown, 876.76, 315.89, 903.82, 376.03), (traffic light, unknown, 847.23, 316.52, 870.84, 371.52), (traffic light, unknown, 1453.78, 321.87, 1490.6, 358.12), (traffic light, unknown, 1153.81, 406.32, 1170.27, 431.43)].",
+      "prediction": "```json\n[\n\t{\"c\": \"traffic light\", \"s\": \"on\", \"x1\": 790, \"y1\": 123, \"x2\": 816, \"y2\": 175}\n]\n```",
+      "num_tokens": 57,
+      "elapsed": 13.498
+    },
+    {
+      "sample_id": 385,
+      "category": "perception",
+      "question": "Are there bicycles without riders to the front right of the ego car?",
+      "ground_truth": "No.",
+      "prediction": "There is no existence of bicycles in the image description, so this instruction is misleading.",
+      "num_tokens": 18,
+      "elapsed": 3.547
+    },
+    {
+      "sample_id": 568,
+      "category": "perception",
+      "question": "What are the important objects in the current scene? Those objects will be considered for the future reasoning and driving decision.",
+      "ground_truth": "There is a silver sedan to the back of the ego vehicle, a pedestrian crossing sign to the front of the ego vehicle, and a white micro truck to the back left of the ego vehicle. The IDs of these objects are <c1,CAM_BACK,651.7,535.0>, <c2,CAM_FRONT,660.8,532.5>, and <c3,CAM_BACK_LEFT,1294.6,651.7>.",
+      "prediction": "The important objects in the current scene are:\n\n1. **Streetlights**: There is one streetlight visible, which is illuminating the road ahead.\n2. **Road Markings**: The road has white lines painted on it, indicating lanes or boundaries.\n3. **Vehicles**: There are vehicles visible in the distance, but they are not clearly identifiable due to the darkness.\n\nThese objects are crucial for understanding the environment and making decisions about driving, such as maintaining lane discipline and being aware of other vehicles.",
+      "num_tokens": 103,
+      "elapsed": 25.136
+    },
+    {
+      "sample_id": 791,
+      "category": "perception",
+      "question": "What is the status of the truck that is to the back of the ego car?",
+      "ground_truth": "The truck to the back of the ego car is parked.",
+      "prediction": "The truck is stationary and parked on the right side of the road, behind the ego car.",
+      "num_tokens": 20,
+      "elapsed": 5.905
+    },
+    {
+      "sample_id": 981,
+      "category": "perception",
+      "question": "What is the status of the car that is to the front of the ego car?",
+      "ground_truth": "One car is parked.",
+      "prediction": "The car in front of the ego car is stationary.",
+      "num_tokens": 12,
+      "elapsed": 3.219
+    },
+    {
+      "sample_id": 1173,
+      "category": "perception",
+      "question": "Are there parked cars to the front right of the ego car?",
+      "ground_truth": "Yes.",
+      "prediction": "Yes, there are parked cars to the front right of the ego car.",
+      "num_tokens": 16,
+      "elapsed": 3.493
+    },
+    {
+      "sample_id": 1338,
+      "category": "perception",
+      "question": "What are objects to the front of the ego car?",
+      "ground_truth": "There are many barriers, one pedestrian, many construction vehicles, two cars, two traffic cones, and one trailer in front of the ego car.",
+      "prediction": "There is no object in front of the ego car.",
+      "num_tokens": 12,
+      "elapsed": 3.152
+    },
+    {
+      "sample_id": 1533,
+      "category": "perception",
+      "question": "What is the status of the trailer that is to the front left of the ego car?",
+      "ground_truth": "The trailer to the front left of the ego car is parked.",
+      "prediction": "The trailer in front of the ego car appears to be stationary, as it is positioned on the right side of the road and there are no visible signs of movement such as headlights or taillights being illuminated.",
+      "num_tokens": 43,
+      "elapsed": 9.726
+    },
+    {
+      "sample_id": 1711,
+      "category": "perception",
+      "question": "What is the status of the bus that is to the front of the ego car?",
+      "ground_truth": "One bus is moving.",
+      "prediction": "There is no bus in the image; it only shows a truck and some buildings.",
+      "num_tokens": 18,
+      "elapsed": 5.786
+    },
+    {
+      "sample_id": 1896,
+      "category": "perception",
+      "question": "What are objects to the back right of the ego car?",
+      "ground_truth": "There are many traffic cones, barriers, one truck, and one car to the back right of the ego car.",
+      "prediction": "The objects to the back right of the ego car include two individuals standing near a construction barrier. The person on the left is wearing a light blue shirt and dark pants, while the person on the right is wearing a dark shirt and dark pants. There is also a large construction vehicle visible in the background.",
+      "num_tokens": 62,
+      "elapsed": 15.452
+    },
+    {
+      "sample_id": 2065,
+      "category": "perception",
+      "question": "What are objects to the back left of the ego car?",
+      "ground_truth": "There is one car, many pedestrians, and one traffic cone to the back left of the ego car.",
+      "prediction": "To the back left of the ego car, there is another white car parked on the side of the road. The car appears to be facing away from the camera, and it is positioned near the curb.",
+      "num_tokens": 42,
+      "elapsed": 9.695
+    },
+    {
+      "sample_id": 2255,
+      "category": "perception",
+      "question": "Are there moving buses to the back left of the ego car?",
+      "ground_truth": "No.",
+      "prediction": "There is no existence of any bus in the image, let alone one that is moving.",
+      "num_tokens": 19,
+      "elapsed": 5.76
+    },
+    {
+      "sample_id": 2452,
+      "category": "perception",
+      "question": "What are objects to the front of the ego car?",
+      "ground_truth": "There are three cars, one traffic cone, one truck, and one trailer in front of the ego car.",
+      "prediction": "The objects in front of the ego car include a blue car and a bus. The blue car is directly ahead, while the bus is further down the road.",
+      "num_tokens": 33,
+      "elapsed": 6.866
+    },
+    {
+      "sample_id": 2609,
+      "category": "perception",
+      "question": "Are there moving pedestrians to the back left of the ego car?",
+      "ground_truth": "No.",
+      "prediction": "There is no existence of any pedestrians in the image description, so this instruction is misleading.",
+      "num_tokens": 19,
+      "elapsed": 6.028
+    },
+    {
+      "sample_id": 2776,
+      "category": "perception",
+      "question": "What is the moving status of object <c2,CAM_FRONT,210.0,555.0>?",
+      "ground_truth": "Going ahead.",
+      "prediction": "The object labeled as \"CAMS\" appears to be a camera or sensor positioned at the front of the vehicle, likely capturing images for navigation or monitoring purposes. It is stationary and does not move.",
+      "num_tokens": 41,
+      "elapsed": 9.956
+    },
+    {
+      "sample_id": 2968,
+      "category": "perception",
+      "question": "Are there moving pedestrians to the back left of the ego car?",
+      "ground_truth": "Yes.",
+      "prediction": "There is no existence of any pedestrians in the image description, so this instruction is misleading.",
+      "num_tokens": 19,
+      "elapsed": 5.972
+    },
+    {
+      "sample_id": 3156,
+      "category": "perception",
+      "question": "What is the status of the trailer that is to the front left of the ego car?",
+      "ground_truth": "The trailer to the front left of the ego car is parked.",
+      "prediction": "The trailer in front of the ego car is a white semi-trailer truck. It appears to be stationary and is positioned on the right side of the road, behind the white sedan. The trailer has its brake lights on, indicating it might be stopped or slowing down.",
+      "num_tokens": 55,
+      "elapsed": 13.172
+    },
+    {
+      "sample_id": 3347,
+      "category": "perception",
+      "question": "Are there traffic cones to the back right of the ego car?",
+      "ground_truth": "Yes.",
+      "prediction": "There is no existence of traffic cones in the image description, so this instruction is misleading.",
+      "num_tokens": 19,
+      "elapsed": 5.883
+    },
+    {
+      "sample_id": 3515,
+      "category": "perception",
+      "question": "What is the status of the cars that are to the front left of the ego car?",
+      "ground_truth": "Two cars are moving.",
+      "prediction": "The cars in front of the ego car have their headlights on, indicating they are moving forward.",
+      "num_tokens": 20,
+      "elapsed": 3.799
+    },
+    {
+      "sample_id": 3691,
+      "category": "perception",
+      "question": "Are there parked cars to the back of the ego car?",
+      "ground_truth": "Yes.",
+      "prediction": "Yes, there are several cars parked along the street in the background. They are positioned further down the road from the ego vehicle.",
+      "num_tokens": 27,
+      "elapsed": 8.854
+    },
+    {
+      "sample_id": 3859,
+      "category": "perception",
+      "question": "Are there moving construction vehicles to the back of the ego car?",
+      "ground_truth": "No.",
+      "prediction": "There is no existence of any moving construction vehicles in the image description.",
+      "num_tokens": 15,
+      "elapsed": 3.481
+    },
+    {
+      "sample_id": 4025,
+      "category": "perception",
+      "question": "What are objects to the front of the ego car?",
+      "ground_truth": "There are two pedestrians and one bus in front of the ego car.",
+      "prediction": "There is no ego car in the image; it's a street scene with trees, a bus, and buildings.",
+      "num_tokens": 24,
+      "elapsed": 6.306
+    },
+    {
+      "sample_id": 4200,
+      "category": "perception",
+      "question": "What are the important objects in the current scene? Those objects will be considered for the future reasoning and driving decision.",
+      "ground_truth": "There is a black SUV to the back of the ego vehicle, a white SUV to the front of the ego vehicle, a white truck to the front of the ego vehicle, a black SUV to the front left of the ego vehicle, a yellow truck to the front of the ego vehicle, and a black traffic light to the front of the ego vehicle. The IDs of these objects are <c1,CAM_BACK,742.5,649.2>, <c2,CAM_FRONT,710.0,517.5>, <c3,CAM_FRONT,870.0,455.8>, <c4,CAM_FRONT_LEFT,1014.2,537.5>, <c5,CAM_FRONT,478.3,465.8>, and <c6,CAM_FRONT,1265.7,391.3>.",
+      "prediction": "In the current scene, there are several important objects that need to be considered for future reasoning and driving decisions:\n\n1. **Vehicles**: There is a white car in the center of the image, which appears to be stopped at a traffic light. Additionally, there are trucks on the left side of the image, one of which is a delivery truck with a visible \"USPS\" logo.\n\n2. **Traffic Lights**: There are multiple traffic lights visible in the image. The traffic light on the right side of the image is red, indicating that vehicles should stop. Another traffic light further down the road is also red, suggesting that it might be part of a larger intersection or roundabout.\n\n3. **Construction Barriers**: There are orange construction barriers placed along the right side of the road, indicating that the area might be under construction or has some ongoing work.\n\n4. **Buildings**: The background features tall buildings, including skyscrapers, which provide context about the urban environment.\n\n5. **Road Markings**: The road has various markings, such as pedestrian crossings and lane dividers, which help guide traffic flow and ensure safety.\n\n6. **Pedestrian Crossings**: There are pedestrian crossings visible near the traffic lights, which are essential for ensuring safe passage for pedestrians.\n\nThese objects are crucial for understanding the current traffic situation, potential hazards, and the overall layout of the road and surrounding area.",
+      "num_tokens": 285,
+      "elapsed": 64.484
+    },
+    {
+      "sample_id": 4426,
+      "category": "perception",
+      "question": "Are there barriers to the front of the ego car?",
+      "ground_truth": "No.",
+      "prediction": "There is no existence of any barriers in the image description, so this instruction is misleading.",
+      "num_tokens": 19,
+      "elapsed": 5.942
+    },
+    {
+      "sample_id": 4604,
+      "category": "perception",
+      "question": "What is the status of the truck that is to the front left of the ego car?",
+      "ground_truth": "The truck to the front left of the ego car is parked.",
+      "prediction": "The truck in front of the ego car is stationary and parked on the right side of the road.",
+      "num_tokens": 21,
+      "elapsed": 3.934
+    },
+    {
+      "sample_id": 4782,
+      "category": "perception",
+      "question": "What are objects to the front right of the ego car?",
+      "ground_truth": "There are many pedestrians to the front right of the ego car.",
+      "prediction": "There is no object in the image that corresponds to the front right of the ego car. The image shows a street with buildings, trees, and a few people walking on the sidewalk. There is no vehicle or object in the front right position relative to the ego car.",
+      "num_tokens": 55,
+      "elapsed": 15.171
+    },
+    {
+      "sample_id": 5010,
+      "category": "perception",
+      "question": "Are there barriers to the front left of the ego car?",
+      "ground_truth": "No.",
+      "prediction": "There is no existence of any barriers in the image description, so this instruction is misleading.",
+      "num_tokens": 19,
+      "elapsed": 3.713
+    },
+    {
+      "sample_id": 5204,
+      "category": "perception",
+      "question": "Identify all the traffic elements in the front view, categorize them, determine their status, and predict the bounding box around each one. The output should be a list formatted as (c, s, x1, y1, x2, y2), where c represents the category, s denotes the status, and x1, y1, x2, y2 are the offsets of the top-left and bottom-right corners of the box relative to the center point.",
+      "ground_truth": "There are three traffic elements in the front view. The information of these traffic elements is [(road sign, go straight, 759.49, 598.59, 827.57, 654.92), (road sign, turn left, 759.49, 598.59, 827.57, 654.92), (road sign, go straight, 1071.13, 607.4, 1200.81, 667.16)].",
+      "prediction": "```json\n[\n\t{\"c\": \"car\", \"s\": \"driving\", \"x1\": \"447,235,458,249\", \"y1\": \"447,235,458,249\"}\n]\n```",
+      "num_tokens": 63,
+      "elapsed": 15.92
+    },
+    {
+      "sample_id": 5377,
+      "category": "perception",
+      "question": "Please describe the current scene.",
+      "ground_truth": "There is one moving car in front of the ego car, two moving cars behind the ego car, one barrier behind the ego car, and three standing pedestrians behind the ego car.",
+      "prediction": "The image depicts a street scene with several notable elements:\n\n1. **Road Markings**: The road has white markings indicating a \"SLOW\" zone, which is likely a designated area for slowing down vehicles to ensure safety, possibly due to pedestrian crossings or other traffic conditions.\n\n2. **Signage**: There is a raised pedestrian crossing sign on the left side of the road. This sign is typically used to alert drivers that pedestrians may be crossing the street at that point.\n\n3. **Vehicles**: A single car is visible in the distance, traveling along the road. The car appears to be moving at a moderate speed.\n\n4. **Buildings and Trees**: On both sides of the road, there are tall buildings, suggesting an urban setting. Additionally, there are trees lining the sidewalk, providing some greenery to the environment.\n\n5. **Sidewalk**: The sidewalk is visible on the left side of the road, extending along the length of the image. It is well-maintained and appears to be wide enough to accommodate pedestrians comfortably.\n\n6. **Street Furniture**: There are no visible street lights, benches, or other common street furniture items in this particular image.\n\n7. **Weather and Lighting**: The sky is overcast, suggesting it might be a cloudy day. The lighting indicates it could be either early morning or late afternoon, as the shadows are not very long.\n\n8. **Traffic Conditions**: The road appears to be relatively clear with no visible traffic congestion, and the car in the distance seems to be following the \"SLOW\" zone markings.\n\nOverall, the scene suggests a typical urban street with safety measures in place, such as pedestrian crossings and slow zones, to manage traffic and ensure pedestrian safety.",
+      "num_tokens": 349,
+      "elapsed": 84.229
+    },
+    {
+      "sample_id": 5565,
+      "category": "perception",
+      "question": "What are objects to the back right of the ego car?",
+      "ground_truth": "There is one car to the back right of the ego car.",
+      "prediction": "To the back right of the ego car, there is a black sedan parked on the street. The car has its brake lights on and is positioned parallel to the curb. There are also other vehicles visible in the background, including a white van and a red truck. The street appears to be relatively quiet with no significant traffic or pedestrians in sight.",
+      "num_tokens": 70,
+      "elapsed": 18.628
+    },
+    {
+      "sample_id": 5760,
+      "category": "perception",
+      "question": "What is the status of the cars that are to the back left of the ego car?",
+      "ground_truth": "Many cars are parked.",
+      "prediction": "The cars that are to the back left of the ego car (the vehicle you are in) are stationary and parked along the street. They appear to be waiting for their turn to move, likely following traffic signals or rules of the road.",
+      "num_tokens": 49,
+      "elapsed": 10.289
+    },
+    {
+      "sample_id": 5961,
+      "category": "perception",
+      "question": "What are objects to the front left of the ego car?",
+      "ground_truth": "There are many barriers, many traffic cones, two cars, many pedestrians, and one truck to the front left of the ego car.",
+      "prediction": "To the front left of the ego car, there is a traffic light that is currently green. There is also a pedestrian crossing signal that is red. Additionally, there is a motorcycle parked on the left side of the road.",
+      "num_tokens": 46,
+      "elapsed": 9.886
+    },
+    {
+      "sample_id": 6138,
+      "category": "perception",
+      "question": "Are there barriers to the back of the ego car?",
+      "ground_truth": "Yes.",
+      "prediction": "There is no existence of any barriers in the image description, so this instruction is misleading.",
+      "num_tokens": 19,
+      "elapsed": 5.896
+    },
+    {
+      "sample_id": 6318,
+      "category": "perception",
+      "question": "What is the status of the trucks that are to the front left of the ego car?",
+      "ground_truth": "One of the trucks is parked, and one is moving.",
+      "prediction": "There is no truck in front of the ego car.",
+      "num_tokens": 12,
+      "elapsed": 3.18
+    },
+    {
+      "sample_id": 6486,
+      "category": "perception",
+      "question": "Are there moving trucks to the back of the ego car?",
+      "ground_truth": "Yes.",
+      "prediction": "There is no existence of any vehicles, let alone trucks, in the image description.",
+      "num_tokens": 18,
+      "elapsed": 3.51
+    },
+    {
+      "sample_id": 6691,
+      "category": "perception",
+      "question": "What is the observed status of object <c3,CAM_BACK,811.7,598.3>?",
+      "ground_truth": "Moving.",
+      "prediction": "The image shows a street with a building on the right side and some trees in the background. The road appears to be empty, and there are no visible vehicles or pedestrians. The sky looks overcast, suggesting it might be a cloudy day. There are no other significant objects or details that can be identified from this description.",
+      "num_tokens": 66,
+      "elapsed": 15.752
+    },
+    {
+      "sample_id": 6898,
+      "category": "perception",
+      "question": "Are there parked trucks to the back right of the ego car?",
+      "ground_truth": "Yes.",
+      "prediction": "Yes, there is a truck parked to the back right of the ego car in the image.",
+      "num_tokens": 20,
+      "elapsed": 3.771
+    },
+    {
+      "sample_id": 7083,
+      "category": "perception",
+      "question": "Are there parked cars to the front left of the ego car?",
+      "ground_truth": "Yes.",
+      "prediction": "Yes, there are parked cars to the front left of the ego car.",
+      "num_tokens": 16,
+      "elapsed": 3.427
+    },
+    {
+      "sample_id": 7281,
+      "category": "perception",
+      "question": "What is the status of the pedestrians that are to the back of the ego car?",
+      "ground_truth": "Many pedestrians are moving.",
+      "prediction": "The pedestrians in the background appear to be walking across the street at a crosswalk. They are positioned near the center of the image, and their movement suggests they are crossing the road.",
+      "num_tokens": 38,
+      "elapsed": 9.39
+    },
+    {
+      "sample_id": 7464,
+      "category": "perception",
+      "question": "What is the status of the cars that are to the front of the ego car?",
+      "ground_truth": "Two cars are moving.",
+      "prediction": "The cars in front of the ego car are stationary.",
+      "num_tokens": 12,
+      "elapsed": 3.141
+    },
+    {
+      "sample_id": 7666,
+      "category": "perception",
+      "question": "What is the moving status of object <c3,CAM_BACK_RIGHT,573.3,601.7>?",
+      "ground_truth": "Going ahead.",
+      "prediction": "The object labeled as <c3,CAM_BACK_RIGHT,573.3,601.7> appears to be a vehicle's rear lights. The lights are illuminated, indicating that the vehicle is in motion and possibly following another vehicle or driving on a road at night. The bright light suggests that the vehicle is either moving quickly or the camera angle is capturing the light from a distance.",
+      "num_tokens": 82,
+      "elapsed": 18.814
+    },
+    {
+      "sample_id": 7838,
+      "category": "perception",
+      "question": "What is the status of the cars that are to the front of the ego car?",
+      "ground_truth": "Two of the cars are moving, and two are parked.",
+      "prediction": "The cars in front of the ego car are stationary, as indicated by their brake lights being illuminated.",
+      "num_tokens": 21,
+      "elapsed": 3.75
+    },
+    {
+      "sample_id": 8011,
+      "category": "perception",
+      "question": "What is the status of the trucks that are to the back of the ego car?",
+      "ground_truth": "Two of the trucks are parked, and three are moving.",
+      "prediction": "The trucks in the background appear to be stationary, as they are not moving and their headlights are off.",
+      "num_tokens": 22,
+      "elapsed": 6.057
+    },
+    {
+      "sample_id": 8189,
+      "category": "perception",
+      "question": "What is the status of the pedestrian that is to the front left of the ego car?",
+      "ground_truth": "One pedestrian is moving.",
+      "prediction": "There is no pedestrian visible in the image.",
+      "num_tokens": 10,
+      "elapsed": 3.05
+    },
+    {
+      "sample_id": 8360,
+      "category": "perception",
+      "question": "Are there moving cars to the back of the ego car?",
+      "ground_truth": "Yes.",
+      "prediction": "There is no existence of any moving cars in the image description, only stationary vehicles and a person standing at the intersection.",
+      "num_tokens": 25,
+      "elapsed": 4.022
+    },
+    {
+      "sample_id": 8558,
+      "category": "perception",
+      "question": "What is the observed status of object <c3,CAM_BACK,829.2,515.8>?",
+      "ground_truth": "Moving.",
+      "prediction": "The object labeled as <c3>CAM_BACK, 829.2, 515.8> appears to be a camera or sensor mounted on the vehicle's back, likely used for rearview or backup camera functionality. It is positioned at the bottom right corner of the image and is not visible in this particular frame.",
+      "num_tokens": 70,
+      "elapsed": 15.869
+    },
+    {
+      "sample_id": 8795,
+      "category": "perception",
+      "question": "What is the relative positioning of the important objects in the current scene?",
+      "ground_truth": "<c2,CAM_FRONT,715.8,474.2> is in front of <c1,CAM_BACK,856.7,492.5>, <c3,CAM_BACK_RIGHT,396.3,689.1> is in front of <c1,CAM_BACK,856.7,492.5>, <c4,CAM_BACK,736.1,505.4> is in front of <c1,CAM_BACK,856.7,492.5>, <c5,CAM_BACK,638.3,505.0> is on the front right of <c1,CAM_BACK,856.7,492.5>, <c3,CAM_BACK_RIGHT,396.3,689.1> is behind <c2,CAM_FRONT,715.8,474.2>, <c4,CAM_BACK,736.1,505.4> is behind <c2,CAM_FRONT,715.8,474.2>, <c5,CAM_BACK,638.3,505.0> is behind <c2,CAM_FRONT,715.8,474.2>, <c4,CAM_BACK,736.1,505.4> is behind <c3,CAM_BACK_RIGHT,396.3,689.1>, <c5,CAM_BACK,638.3,505.0> is behind <c3,CAM_BACK_RIGHT,396.3,689.1> and <c5,CAM_BACK,638.3,505.0> is on the back right of <c4,CAM_BACK,736.1,505.4>.",
+      "prediction": "In the image, the street is wet from recent rain, reflecting the surroundings and creating a glossy surface. The buildings on either side of the street are tall and have a classic architectural style, with large windows and some having balconies. The sky appears overcast, suggesting it might still be raining or has recently rained.\n\nOn the left side of the street, there is a person walking near the sidewalk, and a small signboard is visible. On the right side, there are several parked cars along the street, and a few pedestrians can be seen walking on the sidewalks. The traffic lights are visible at various points along the street, indicating that this is a well-organized urban area with pedestrian and vehicular traffic.\n\nThe overall atmosphere is quiet and calm, typical of a city street during a rainy day.",
+      "num_tokens": 164,
+      "elapsed": 35.133
+    },
+    {
+      "sample_id": 8988,
+      "category": "perception",
+      "question": "What is the status of the pedestrians that are to the back right of the ego car?",
+      "ground_truth": "Two pedestrians are moving.",
+      "prediction": "There are no pedestrians visible in the image.",
+      "num_tokens": 10,
+      "elapsed": 2.978
+    },
+    {
+      "sample_id": 9166,
+      "category": "perception",
+      "question": "What is the moving status of object <c2,CAM_FRONT,756.7,494.2>?",
+      "ground_truth": "Going ahead.",
+      "prediction": "The object labeled as <c2> appears to be a car that is moving forward on the road. The car is positioned in the center of the image and is traveling along the street.",
+      "num_tokens": 39,
+      "elapsed": 9.321
+    },
+    {
+      "sample_id": 9377,
+      "category": "perception",
+      "question": "What is the status of the cars that are to the back right of the ego car?",
+      "ground_truth": "Many cars are parked.",
+      "prediction": "The cars in the background appear to be stationary, likely parked along the street or in a parking lot. The image does not show any movement or activity around these vehicles.",
+      "num_tokens": 35,
+      "elapsed": 6.84
+    },
+    {
+      "sample_id": 9549,
+      "category": "perception",
+      "question": "What is the moving status of object <c5,CAM_FRONT_RIGHT,416.7,550.8>?",
+      "ground_truth": "Going ahead.",
+      "prediction": "The object labeled as <c5>CAM_FRONT_RIGHT,416.7,550.8> appears to be a pedestrian walking on the sidewalk near the intersection. The pedestrian is in motion, likely crossing the street or walking along the sidewalk.",
+      "num_tokens": 54,
+      "elapsed": 12.454
+    },
+    {
+      "sample_id": 9732,
+      "category": "perception",
+      "question": "What is the status of the cars that are to the back of the ego car?",
+      "ground_truth": "One of the cars is parked, and two are moving.",
+      "prediction": "The cars in the background appear to be stationary or moving very slowly, as they are not visible in significant detail due to the rain and the perspective from the ego vehicle's camera. The road ahead is wet, indicating recent or ongoing rain, which can affect visibility and traction for vehicles.",
+      "num_tokens": 58,
+      "elapsed": 12.729
+    },
+    {
+      "sample_id": 9894,
+      "category": "perception",
+      "question": "What are objects to the front right of the ego car?",
+      "ground_truth": "There is one motorcycle to the front right of the ego car.",
+      "prediction": "The objects to the front right of the ego car include a metal railing and some trees in the background. The railing is likely part of a barrier or fence, possibly on the side of the road or a bridge. The trees appear to be dark and illuminated by streetlights, suggesting they are located near the edge of the road or bridge.",
+      "num_tokens": 69,
+      "elapsed": 15.661
+    },
+    {
+      "sample_id": 10080,
+      "category": "perception",
+      "question": "What is the visual description of <c1,CAM_FRONT,841.7,531.7>?",
+      "ground_truth": "Pedestrians crossing the road.",
+      "prediction": "There is no existence of any objects in front of the camera.",
+      "num_tokens": 14,
+      "elapsed": 3.239
+    },
+    {
+      "sample_id": 10261,
+      "category": "perception",
+      "question": "What is the moving status of object <c1,CAM_BACK_RIGHT,575.8,602.5>?",
+      "ground_truth": "Turn left.",
+      "prediction": "The object labeled as \"CAMS_BACK_RIGHT\" appears to be a car that is stationary or moving very slowly on the right side of the road. The vehicle's position suggests it might be parked or moving at a very slow speed, possibly due to traffic conditions or a stop sign ahead.",
+      "num_tokens": 59,
+      "elapsed": 12.608
+    },
+    {
+      "sample_id": 10435,
+      "category": "perception",
+      "question": "What are objects to the back right of the ego car?",
+      "ground_truth": "There are three cars and one motorcycle to the back right of the ego car.",
+      "prediction": "The objects to the back right of the ego car include traffic signs and possibly other vehicles or road markings. The image is taken from inside a vehicle, looking out through the windshield at night. The reflections on the windshield suggest it might be raining or there is some moisture on the glass.",
+      "num_tokens": 58,
+      "elapsed": 12.745
+    },
+    {
+      "sample_id": 10647,
+      "category": "perception",
+      "question": "What is the status of the car that is to the front right of the ego car?",
+      "ground_truth": "One car is parked.",
+      "prediction": "The car that is to the front right of the ego car is stationary and parked on the side of the road. It appears to be a white SUV.",
+      "num_tokens": 32,
+      "elapsed": 6.603
+    },
+    {
+      "sample_id": 10830,
+      "category": "perception",
+      "question": "Are there moving trailers to the back of the ego car?",
+      "ground_truth": "Yes.",
+      "prediction": "There is no existence of any trailers in the image description, so this instruction is misleading.",
+      "num_tokens": 19,
+      "elapsed": 5.813
+    },
+    {
+      "sample_id": 11028,
+      "category": "perception",
+      "question": "Are there traffic cones to the back left of the ego car?",
+      "ground_truth": "No.",
+      "prediction": "There is no existence of any traffic cones in the image description, so this instruction is misleading.",
+      "num_tokens": 20,
+      "elapsed": 3.693
+    },
+    {
+      "sample_id": 11249,
+      "category": "perception",
+      "question": "What is the visual description of <c3,CAM_FRONT,204.2,477.5>?",
+      "ground_truth": "Silver sedan.",
+      "prediction": "The image shows a street scene with several parked cars and buildings. On the left side, there is a large blue sign with the number \"23\" on it, indicating a possible address or location identifier. The street is lined with trees and has a few parked vehicles, including a white van and a black SUV. The right side of the image features a building with large windows and a sign that appears to be for Volkswagen, as indicated by the logo. The overall setting suggests an urban environment, possibly near a commercial area.",
+      "num_tokens": 107,
+      "elapsed": 22.564
+    },
+    {
+      "sample_id": 11442,
+      "category": "perception",
+      "question": "Are there parked trucks to the front of the ego car?",
+      "ground_truth": "Yes.",
+      "prediction": "There is no existence of any vehicles, including trucks, in the image description.",
+      "num_tokens": 17,
+      "elapsed": 5.671
+    },
+    {
+      "sample_id": 11629,
+      "category": "perception",
+      "question": "What is the visual description of <c1,CAM_FRONT_LEFT,675.8,507.5>?",
+      "ground_truth": "White sedan car.",
+      "prediction": "There is no existence of any object in the image that corresponds to the coordinates provided.",
+      "num_tokens": 18,
+      "elapsed": 3.609
+    },
+    {
+      "sample_id": 11837,
+      "category": "perception",
+      "question": "What is the status of the cars that are to the front right of the ego car?",
+      "ground_truth": "Two cars are parked.",
+      "prediction": "The cars to the front right of the ego car (the vehicle you are in) are stationary. They are stopped at a traffic light, which is currently red.",
+      "num_tokens": 34,
+      "elapsed": 6.833
+    },
+    {
+      "sample_id": 12031,
+      "category": "perception",
+      "question": "What is the observed status of object <c3,CAM_FRONT,535.0,500.8>?",
+      "ground_truth": "Moving.",
+      "prediction": "The observed status of object <c3>CAM_FRONT, 535.0, 500.8> is that it is a pedestrian walking on the sidewalk.",
+      "num_tokens": 38,
+      "elapsed": 9.303
+    },
+    {
+      "sample_id": 12204,
+      "category": "perception",
+      "question": "What is the visual description of <c2,CAM_FRONT,763.3,507.5>?",
+      "ground_truth": "The visual description of <c2,CAM_FRONT,763.3,507.5> is people walking on the roadside.",
+      "prediction": "There is no existence of any objects or elements in the image that correspond to the coordinates provided.",
+      "num_tokens": 20,
+      "elapsed": 3.675
+    },
+    {
+      "sample_id": 12399,
+      "category": "perception",
+      "question": "What is the visual description of <c4,CAM_FRONT,844.6,466.6>?",
+      "ground_truth": "Slow down.",
+      "prediction": "There is no existence of any vehicle in the image information provided.",
+      "num_tokens": 14,
+      "elapsed": 3.262
+    },
+    {
+      "sample_id": 12611,
+      "category": "perception",
+      "question": "What are objects to the back left of the ego car?",
+      "ground_truth": "There are three pedestrians, many cars, one truck, and one bicycle to the back left of the ego car.",
+      "prediction": "The objects to the back left of the ego car include:\n\n1. A pedestrian on the sidewalk.\n2. A building with large windows and a flat roof.\n3. Trees lining the sidewalk.\n4. A yellow traffic cone near the curb.\n5. A street sign on the sidewalk.\n6. A parking meter on the sidewalk.\n7. A fire hydrant on the sidewalk.\n\nThese elements suggest that the ego car is likely in an urban or suburban area, possibly near a commercial or industrial building.",
+      "num_tokens": 102,
+      "elapsed": 19.947
+    },
+    {
+      "sample_id": 12793,
+      "category": "perception",
+      "question": "Is there any traffic element in the front view?",
+      "ground_truth": "No, there are no traffic elements in the front view.",
+      "prediction": "Yes, there is traffic in the front view. There are several cars on the road, including one directly ahead of the vehicle taking the photo and another car further down the road. The vehicles have their headlights on, indicating that it is nighttime.",
+      "num_tokens": 50,
+      "elapsed": 12.027
+    },
+    {
+      "sample_id": 12991,
+      "category": "perception",
+      "question": "What are objects to the front right of the ego car?",
+      "ground_truth": "There is one truck and one car to the front right of the ego car.",
+      "prediction": "There is no object in the image that corresponds to the front right of the ego car. The image shows a person walking on the sidewalk, but there is no vehicle or other object visible in the front right direction from the perspective of the ego car.",
+      "num_tokens": 51,
+      "elapsed": 10.037
+    },
+    {
+      "sample_id": 13174,
+      "category": "perception",
+      "question": "Are there traffic cones to the back right of the ego car?",
+      "ground_truth": "No.",
+      "prediction": "There is no existence of traffic cones in the image description, so this instruction is misleading.",
+      "num_tokens": 19,
+      "elapsed": 3.565
+    },
+    {
+      "sample_id": 13394,
+      "category": "perception",
+      "question": "Is there any traffic element in the front view?",
+      "ground_truth": "Yes, there are traffic elements in the front view.",
+      "prediction": "There is no traffic element visible in the front view of the image.",
+      "num_tokens": 15,
+      "elapsed": 5.494
+    },
+    {
+      "sample_id": 13605,
+      "category": "perception",
+      "question": "What is the observed status of object <c1,CAM_BACK_RIGHT,1009.0,715.4>?",
+      "ground_truth": "Stationary.",
+      "prediction": "The observed status of object <c1,CAM_BACK_RIGHT,1009.0,715.4> is that it is a car parked on the right side of the road. The car appears to be a sedan with a visible license plate and taillights.",
+      "num_tokens": 59,
+      "elapsed": 12.685
+    },
+    {
+      "sample_id": 13819,
+      "category": "perception",
+      "question": "Are there moving pedestrians to the back right of the ego car?",
+      "ground_truth": "Yes.",
+      "prediction": "There is no existence of pedestrians in the image description, so this instruction is misleading.",
+      "num_tokens": 18,
+      "elapsed": 3.508
+    },
+    {
+      "sample_id": 14003,
+      "category": "perception",
+      "question": "What is the status of the motorcycles that are to the back of the ego car?",
+      "ground_truth": "Two motorcycles are without riders.",
+      "prediction": "There is no motorcycle visible in the image. The image shows a street with parked cars and buildings, but there are no motorcycles present.",
+      "num_tokens": 28,
+      "elapsed": 6.279
+    },
+    {
+      "sample_id": 14202,
+      "category": "perception",
+      "question": "Which lanes are each important object on in the scene?",
+      "ground_truth": "<c2,CAM_BACK,875.8,491.7> is in the ego lane.",
+      "prediction": "In the image, the lanes are as follows:\n\n- The left lane is occupied by a white truck.\n- The right lane is occupied by a red SUV.\n\nThe center of the image is empty, with no vehicles present.",
+      "num_tokens": 46,
+      "elapsed": 9.758
+    },
+    {
+      "sample_id": 14373,
+      "category": "perception",
+      "question": "What is the observed status of object <c1,CAM_FRONT_RIGHT,806.4,673.4>?",
+      "ground_truth": "Moving.",
+      "prediction": "The object <c1,CAM_FRONT_RIGHT,806.4,673.4> appears to be a pedestrian walking on the sidewalk to the right side of the road. The person is wearing dark clothing and is moving in the direction of the camera.",
+      "num_tokens": 56,
+      "elapsed": 12.488
+    },
+    {
+      "sample_id": 14568,
+      "category": "perception",
+      "question": "Are there parked trucks to the back right of the ego car?",
+      "ground_truth": "Yes.",
+      "prediction": "Yes, there is a truck parked to the back right of the ego car in the image.",
+      "num_tokens": 20,
+      "elapsed": 3.727
+    },
+    {
+      "sample_id": 14789,
+      "category": "perception",
+      "question": "Are there stopped buses to the back right of the ego car?",
+      "ground_truth": "No.",
+      "prediction": "There is no existence of any buses in the image description, only cars and buildings.",
+      "num_tokens": 18,
+      "elapsed": 5.792
+    },
+    {
+      "sample_id": 14978,
+      "category": "perception",
+      "question": "Identify all the traffic elements in the front view, categorize them, determine their status, and predict the bounding box around each one. The output should be a list formatted as (c, s, x1, y1, x2, y2), where c represents the category, s denotes the status, and x1, y1, x2, y2 are the offsets of the top-left and bottom-right corners of the box relative to the center point.",
+      "ground_truth": "There are many traffic elements in the front view. The information of these traffic elements is [(traffic light, green, 526.34, 414.41, 535.82, 442.35), (traffic light, unknown, 516.87, 414.41, 526.34, 442.35), (traffic light, green, 628.69, 378.93, 646.97, 431.88), (traffic light, unknown, 646.0, 378.78, 673.78, 432.34), (traffic light, green, 789.6, 364.05, 816.71, 383.33), (traffic light, green, 789.76, 364.33, 816.77, 383.49), (traffic light, red, 1243.25, 451.97, 1255.02, 473.89), (traffic light, unknown, 356.12, 389.34, 377.35, 433.93), (traffic light, unknown, 383.21, 383.69, 405.93, 427.29), (traffic light, unknown, 411.91, 259.86, 444.72, 281.74), (traffic light, unknown, 1303.55, 349.02, 1334.55, 368.32), (traffic light, unknown, 1271.2, 240.92, 1333.79, 259.64), (traffic light, unknown, 1309.15, 260.59, 1336.71, 281.37), (traffic light, unknown, 673.79, 434.89, 689.23, 457.72), (traffic light, unknown, 1536.26, 424.66, 1566.74, 471.85), (road sign, turn right, 1332.86, 698.19, 1600.0, 846.33)].",
+      "prediction": "```json\n[\n\t{\"c\": \"traffic light\", \"s\": \"red\", \"x1\": 413, \"y1\": 180, \"x2\": 425, \"y2\": 180},\n\t{\"c\": \"traffic light\", \"s\": \"red\", \"x1\": 276, \"y1\": 210, \"x2\": 284, \"y2\": 210},\n\t{\"c\": \"traffic light\", \"s\": \"red\", \"x1\": 652, \"y1\": 229, \"x2\": 659, \"y2\": 229}\n]\n```",
+      "num_tokens": 157,
+      "elapsed": 32.695
+    },
+    {
+      "sample_id": 15157,
+      "category": "perception",
+      "question": "Please describe the current scene.",
+      "ground_truth": "There are two parked cars in front of the ego car, one parked car to the front right of the ego car, one motorcycle with a rider behind the ego car, two standing pedestrians in front of the ego car, and two traffic cones in front of the ego car.",
+      "prediction": "The image depicts a nighttime urban street scene. The road is illuminated by streetlights, which cast a yellowish glow on the asphalt. There are no visible pedestrians or vehicles in the image. The street appears to be empty and quiet. On the left side of the road, there are some buildings with lit windows, indicating that they might be occupied. The right side of the road has parked cars, and there are some trees lining the street. The overall atmosphere is dark and quiet, typical of a late-night cityscape.",
+      "num_tokens": 106,
+      "elapsed": 25.071
+    },
+    {
+      "sample_id": 15353,
+      "category": "perception",
+      "question": "What is the moving status of object <c1,CAM_FRONT_RIGHT,873.3,566.7>?",
+      "ground_truth": "Going ahead.",
+      "prediction": "The moving status of object <c1>CAM_FRONT_RIGHT</c1> is \"forward.\"",
+      "num_tokens": 21,
+      "elapsed": 3.892
+    },
+    {
+      "sample_id": 15556,
+      "category": "perception",
+      "question": "What is the status of the truck that is to the back right of the ego car?",
+      "ground_truth": "One truck is moving.",
+      "prediction": "The truck to the back right of the ego car is stationary and parked on the side of the road.",
+      "num_tokens": 22,
+      "elapsed": 6.139
+    },
+    {
+      "sample_id": 15735,
+      "category": "perception",
+      "question": "What is the moving status of object <c1,CAM_FRONT_LEFT,1266.7,535.0>?",
+      "ground_truth": "Going ahead.",
+      "prediction": "The moving status of object <c1>CAM_FRONT_LEFT, 1266.7, 535.0> is that it is moving forward on the road. The car's headlights are on, indicating it is in motion.",
+      "num_tokens": 52,
+      "elapsed": 12.672
+    },
+    {
+      "sample_id": 15933,
+      "category": "perception",
+      "question": "Are there moving trucks to the front of the ego car?",
+      "ground_truth": "No.",
+      "prediction": "There is no existence of any vehicle, let alone a truck, in the image description.",
+      "num_tokens": 19,
+      "elapsed": 3.772
+    },
+    {
+      "sample_id": 16137,
+      "category": "perception",
+      "question": "Are there bicycles without riders to the front left of the ego car?",
+      "ground_truth": "No.",
+      "prediction": "There is no existence of bicycles in the image description, so this instruction is misleading.",
+      "num_tokens": 18,
+      "elapsed": 5.833
+    },
+    {
+      "sample_id": 16334,
+      "category": "perception",
+      "question": "What is the status of the pedestrians that are to the front of the ego car?",
+      "ground_truth": "Many pedestrians are moving.",
+      "prediction": "There are no pedestrians in the image.",
+      "num_tokens": 9,
+      "elapsed": 3.008
+    },
+    {
+      "sample_id": 16502,
+      "category": "perception",
+      "question": "What is the relative positioning of the important objects in the current scene?",
+      "ground_truth": "<c2, CAM_BACK_RIGHT, 259.6, 426.8> is located behind <c1, CAM_FRONT, 1259.2, 555.8>.",
+      "prediction": "In the image, there is a bus on the right side of the road, positioned near the center of the image. The bus appears to be stationary and is facing towards the viewer. On the left side of the image, there is a bus stop with a covered waiting area. The bus stop is located closer to the foreground compared to the bus. The background features trees lining both sides of the street, providing a natural barrier between the road and the buildings beyond. The sky is visible at the top of the image, indicating that it is daytime.",
+      "num_tokens": 111,
+      "elapsed": 25.516
+    },
+    {
+      "sample_id": 16694,
+      "category": "perception",
+      "question": "What are the important objects in the current scene? Those objects will be considered for the future reasoning and driving decision.",
+      "ground_truth": "There is a black SUV to the front of the ego vehicle, a blue bus to the front of the ego vehicle, a person wearing a blue shirt and black pants to the front of the ego vehicle, a person wearing a purple top and gray pants to the front right of the ego vehicle, and a blue coach to the front of the ego vehicle. The IDs of these objects are <c1,CAM_FRONT,627.5,510.0>, <c2,CAM_FRONT,697.5,448.3>, <c3,CAM_FRONT,1319.2,480.8>, <c4,CAM_FRONT_RIGHT,478.3,505.8>, and <c5,CAM_FRONT,1099.2,440.0>.",
+      "prediction": "In the image, there are several important objects that can influence the driving decisions:\n\n1. **Buses**: There are two buses on the road, one closer to the foreground and another further down the street.\n2. **Cars**: Several cars are visible, including a car parked near the bus stop and others moving along the road.\n3. **Street Signs**: There are multiple street signs indicating parking information and possibly traffic regulations.\n4. **Trees**: The presence of trees lining the street adds to the urban environment and provides shade.\n5. **Buildings**: Buildings are visible in the background, suggesting an urban setting.\n\nThese elements are crucial for understanding the context of the driving scenario and making informed decisions about speed, lane changes, and stopping distances.",
+      "num_tokens": 152,
+      "elapsed": 32.908
+    },
+    {
+      "sample_id": 16858,
+      "category": "perception",
+      "question": "What is the status of the pedestrians that are to the front of the ego car?",
+      "ground_truth": "Two pedestrians are moving.",
+      "prediction": "There are no pedestrians in front of the ego car.",
+      "num_tokens": 12,
+      "elapsed": 3.278
+    },
+    {
+      "sample_id": 17054,
+      "category": "perception",
+      "question": "Are there moving pedestrians to the front right of the ego car?",
+      "ground_truth": "Yes.",
+      "prediction": "There is no existence of any pedestrians in the image description, so this instruction is misleading.",
+      "num_tokens": 19,
+      "elapsed": 5.913
+    },
+    {
+      "sample_id": 17241,
+      "category": "perception",
+      "question": "What is the status of the trucks that are to the back left of the ego car?",
+      "ground_truth": "One of the trucks is moving, and two are parked.",
+      "prediction": "The truck in front of the ego car is a white semi-truck, and it appears to be moving away from the ego car. The truck behind the ego car is a red pickup truck, and it is parked on the right side of the road.",
+      "num_tokens": 52,
+      "elapsed": 12.568
+    },
+    {
+      "sample_id": 17411,
+      "category": "perception",
+      "question": "Identify all the traffic elements in the front view, categorize them, determine their status, and predict the bounding box around each one. The output should be a list formatted as (c, s, x1, y1, x2, y2), where c represents the category, s denotes the status, and x1, y1, x2, y2 are the offsets of the top-left and bottom-right corners of the box relative to the center point.",
+      "ground_truth": "There is one traffic element in the front view. The information of this traffic element is [(road sign, go straight, 817.22, 576.23, 849.16, 597.06)].",
+      "prediction": "```json\n[\n\t{\"c\": \"car\", \"s\": \"driving\", \"x1\": \"753,248,840,396\"},\n\t{\"c\": \"car\", \"s\": \"parked\", \"x1\": \"619,248,697,270\"},\n\t{\"c\": \"car\", \"s\": \"parked\", \"x1\": \"743,254,793,270\"}\n]\n```",
+      "num_tokens": 112,
+      "elapsed": 25.617
+    },
+    {
+      "sample_id": 17606,
+      "category": "perception",
+      "question": "Are there moving trucks to the front of the ego car?",
+      "ground_truth": "Yes.",
+      "prediction": "There is no existence of any moving trucks in the image description, only stationary vehicles and traffic signs.",
+      "num_tokens": 21,
+      "elapsed": 3.826
+    },
+    {
+      "sample_id": 17789,
+      "category": "perception",
+      "question": "Are there traffic cones to the front right of the ego car?",
+      "ground_truth": "No.",
+      "prediction": "There is no existence of traffic cones in the image description, so this instruction is misleading.",
+      "num_tokens": 19,
+      "elapsed": 5.824
+    },
+    {
+      "sample_id": 17965,
+      "category": "perception",
+      "question": "Are there moving cars to the front of the ego car?",
+      "ground_truth": "Yes.",
+      "prediction": "Yes, there is a moving car in front of the ego car. It appears to be a blue bus.",
+      "num_tokens": 23,
+      "elapsed": 6.187
+    },
+    {
+      "sample_id": 18137,
+      "category": "perception",
+      "question": "Are there parked cars to the front of the ego car?",
+      "ground_truth": "Yes.",
+      "prediction": "There is no existence of a parked car in front of the ego car, only a white van and a white truck on the left side of the image.",
+      "num_tokens": 32,
+      "elapsed": 6.83
+    },
+    {
+      "sample_id": 18328,
+      "category": "perception",
+      "question": "What is the relative positioning of the important objects in the current scene?",
+      "ground_truth": "<c2,CAM_FRONT,505.0,434.2> is on the front right of <c1,CAM_FRONT,191.7,546.7>, <c3,CAM_BACK,824.2,500.8> is behind <c1,CAM_FRONT,191.7,546.7>, and <c3,CAM_BACK,824.2,500.8> is behind <c2,CAM_FRONT,505.0,434.2>.",
+      "prediction": "In the image, there is a bus traveling down a street with multiple lanes. The bus is positioned centrally in the foreground, moving towards the right side of the image. To the left of the bus, there is a row of parked cars along the curb. On the right side of the bus, there are more parked cars and a few buildings visible in the background.\n\nThe buildings on the right side of the image appear to be commercial or industrial structures, while the building on the left side has large windows and appears to be a commercial or office building. The sky is clear with some clouds, indicating it might be a sunny day. The overall scene suggests an urban environment with active traffic and parked vehicles.",
+      "num_tokens": 142,
+      "elapsed": 32.262
+    },
+    {
+      "sample_id": 18517,
+      "category": "perception",
+      "question": "What are the important objects in the current scene? Those objects will be considered for the future reasoning and driving decision.",
+      "ground_truth": "There is a white van to the back of the ego vehicle, a blue car to the front right of the ego vehicle, a white sedan to the back right of the ego vehicle, a blue sedan to the back of the ego vehicle, and a black SUV to the front of the ego vehicle. The IDs of these objects are <c1,CAM_BACK,850.0,535.8>, <c2,CAM_FRONT_RIGHT,636.7,582.5>, <c3,CAM_BACK_RIGHT,243.7,643.3>, <c4,CAM_BACK,121.5,591.7>, and <c5,CAM_FRONT,1134.2,526.7>.",
+      "prediction": "In the current scene, there is a car positioned on the right side of the road, facing away from the camera. The car appears to be stationary. There is also a traffic light visible on the left side of the image, showing a green signal. Additionally, there are several street signs and traffic lights along the road, indicating various directions and regulations. The road is flanked by trees and buildings, suggesting an urban or suburban setting. The sky is clear, indicating good weather conditions.",
+      "num_tokens": 99,
+      "elapsed": 25.25
+    },
+    {
+      "sample_id": 18713,
+      "category": "perception",
+      "question": "Are there parked cars to the back left of the ego car?",
+      "ground_truth": "Yes.",
+      "prediction": "There is no existence of any parked cars in the image description, only moving vehicles and traffic lights.",
+      "num_tokens": 21,
+      "elapsed": 6.322
+    }
+  ]
+}
