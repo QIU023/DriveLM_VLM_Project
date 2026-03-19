@@ -1,0 +1,31 @@
+# Config for 4070 Ti — BitsAndBytes INT8 quantization
+# Middle ground between bf16 and NF4
+
+model_id: "Qwen/Qwen2.5-VL-3B-Instruct"
+
+# LoRA (same as other configs)
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+lora_target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+
+# 8-bit quantization
+quantize: true
+quant_bits: 8
+
+# Inference
+dtype: "bfloat16"
+batch_size: 1
+max_length: 512
+num_workers: 0
+
+# Image resolution (same as 4070ti.yaml)
+min_pixels: 200704        # 256 * 28 * 28
+max_pixels: 401408        # 512 * 28 * 28
