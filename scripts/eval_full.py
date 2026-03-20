@@ -2,6 +2,7 @@
 
 Runs LoRA (or base) model on val.json, computes per-category metrics,
 saves results incrementally so it can resume after interruption.
+Supports visual token compression methods (fastervlm, prumerge, etc.)
 
 Usage:
   # Eval LoRA checkpoint on all val data (resume-safe)
@@ -9,6 +10,9 @@ Usage:
 
   # Eval base model
   python scripts/eval_full.py --config configs/4070ti.yaml --no-lora
+
+  # Eval with compression (reads from config)
+  python scripts/eval_full.py --config configs/fastervlm_c4.yaml --lora checkpoints_qwen25/fastervlm_c4/final --max-per-cat 100
 
   # Limit samples per category (faster, still representative)
   python scripts/eval_full.py --config configs/4070ti.yaml --lora checkpoints/checkpoint-46000 --max-per-cat 200
@@ -19,6 +23,7 @@ Usage:
 import argparse
 import json
 import os
+import sys
 import time
 import collections
 import yaml
@@ -26,6 +31,8 @@ import torch
 from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig
 from peft import PeftModel
 from PIL import Image
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VAL_FILE = os.path.join(BASE_DIR, "data_processed", "val.json")
@@ -93,6 +100,13 @@ def extract_parts(sample):
     return image_path, question, ground_truth, system_prompt
 
 
+def get_base_model(model):
+    """Unwrap PEFT to get the original Qwen2.5-VL model."""
+    if hasattr(model, "base_model") and hasattr(model.base_model, "model"):
+        return model.base_model.model
+    return model
+
+
 def run_inference(model, processor, image_path, question, system_prompt, max_tokens=512):
     """Run single-sample inference, return answer string and timing."""
     msgs = []
@@ -113,6 +127,83 @@ def run_inference(model, processor, image_path, question, system_prompt, max_tok
     elapsed = time.time() - t0
 
     new_tokens = output_ids[:, inputs["input_ids"].shape[1]:]
+    answer = processor.batch_decode(new_tokens, skip_special_tokens=True)[0].strip()
+    return answer, new_tokens.shape[1], elapsed
+
+
+def run_inference_compressed(model, processor, image_path, question, system_prompt,
+                             compress_method, compress_ratio, image_token_id, max_tokens=512):
+    """Run inference with visual token compression applied."""
+    from visual_compress import compress_visual_tokens
+
+    msgs = []
+    if system_prompt:
+        msgs.append({"role": "system", "content": [{"type": "text", "text": system_prompt}]})
+    msgs.append({
+        "role": "user",
+        "content": [{"type": "image"}, {"type": "text", "text": question}],
+    })
+
+    image = Image.open(image_path).convert("RGB")
+    text = processor.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
+    inputs = processor(text=[text], images=[image], return_tensors="pt").to(model.device)
+
+    t0 = time.time()
+    with torch.no_grad():
+        base = get_base_model(model)
+
+        # 1. Run vision encoder
+        pixel_values = inputs["pixel_values"]
+        image_grid_thw = inputs["image_grid_thw"]
+        vis_dtype = next(base.model.visual.parameters()).dtype
+        vis_out = base.model.visual(pixel_values.to(vis_dtype), grid_thw=image_grid_thw)
+        image_embeds = vis_out.pooler_output if hasattr(vis_out, "pooler_output") else vis_out
+        if isinstance(image_embeds, (tuple, list)):
+            image_embeds = image_embeds[0]
+
+        # 2. Compress visual tokens
+        raw_grid = image_grid_thw
+        merge_size = getattr(base.model.visual, "spatial_merge_size", 2)
+        post_grid = raw_grid.clone()
+        post_grid[:, 1] = raw_grid[:, 1] // merge_size
+        post_grid[:, 2] = raw_grid[:, 2] // merge_size
+        compressed, new_grid_thw = compress_visual_tokens(
+            image_embeds, post_grid, compress_method, compress_ratio
+        )
+
+        # 3. Remove excess image placeholder tokens
+        input_ids = inputs["input_ids"]
+        attention_mask = inputs["attention_mask"]
+        orig_count = int((post_grid[:, 0] * post_grid[:, 1] * post_grid[:, 2]).sum())
+        new_count = int((new_grid_thw[:, 0] * new_grid_thw[:, 1] * new_grid_thw[:, 2]).sum())
+
+        img_pos = (input_ids[0] == image_token_id).nonzero(as_tuple=True)[0]
+        n_remove = len(img_pos) - new_count
+
+        if n_remove > 0:
+            remove_pos = img_pos[new_count:]
+            keep = torch.ones(input_ids.shape[1], dtype=torch.bool, device=input_ids.device)
+            keep[remove_pos] = False
+            input_ids = input_ids[:, keep]
+            attention_mask = attention_mask[:, keep]
+
+        # 4. Build inputs_embeds with compressed visual tokens
+        inputs_embeds = base.model.language_model.embed_tokens(input_ids).clone()
+        img_mask = input_ids[0] == image_token_id
+        inputs_embeds[0, img_mask] = compressed.to(inputs_embeds.dtype)
+
+        # 5. Generate
+        output_ids = model.generate(
+            input_ids=input_ids,
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            image_grid_thw=new_grid_thw,
+            max_new_tokens=max_tokens,
+            do_sample=False,
+        )
+    elapsed = time.time() - t0
+
+    new_tokens = output_ids[:, input_ids.shape[1]:]
     answer = processor.batch_decode(new_tokens, skip_special_tokens=True)[0].strip()
     return answer, new_tokens.shape[1], elapsed
 
@@ -174,6 +265,20 @@ def print_summary(summary, tag):
     print("=" * 70)
 
 
+def load_config(config_path):
+    """Load YAML config with optional base_config inheritance."""
+    with open(config_path, "r") as f:
+        cfg = yaml.safe_load(f)
+    if "base_config" in cfg:
+        base_path = cfg.pop("base_config")
+        if not os.path.isabs(base_path):
+            base_path = os.path.join(os.path.dirname(config_path), base_path)
+        base_cfg = load_config(base_path)
+        base_cfg.update(cfg)
+        cfg = base_cfg
+    return cfg
+
+
 def main():
     parser = argparse.ArgumentParser(description="Full DriveLM evaluation")
     parser.add_argument("--config", type=str, required=True)
@@ -187,9 +292,15 @@ def main():
     parser.add_argument("--save-every", type=int, default=50, help="Save results every N samples")
     args = parser.parse_args()
 
-    # Config
-    with open(args.config, encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
+    # Config — support base_config inheritance
+    cfg = load_config(args.config)
+
+    # Compression settings
+    compress_method = cfg.get("compress_method", "none")
+    compress_ratio = cfg.get("compress_ratio", 1)
+    experiment = cfg.get("experiment", "default")
+    use_compression = compress_method != "none" and compress_ratio > 1
+    print(f"Experiment: {experiment} | Compression: {compress_method} ratio={compress_ratio}")
 
     # Determine output path
     if args.output:
@@ -245,6 +356,16 @@ def main():
     lora_path = None if args.no_lora else (args.lora or os.path.join(BASE_DIR, "checkpoints_qwen25", "final"))
     model, processor, tag = load_model(cfg, lora_path)
 
+    # Get image token id for compression
+    image_token_id = None
+    if use_compression:
+        image_token_id = processor.tokenizer.convert_tokens_to_ids("<|image_pad|>")
+        print(f"Using compression: {compress_method} ratio={compress_ratio} | image_token_id={image_token_id}")
+
+    # Update tag with compression info
+    if use_compression:
+        tag = f"{tag} [{compress_method} {compress_ratio}x]"
+
     # Run evaluation
     skipped = 0
     t_start = time.time()
@@ -258,9 +379,15 @@ def main():
             continue
 
         try:
-            answer, num_tokens, elapsed = run_inference(
-                model, processor, image_path, question, system_prompt, args.max_tokens
-            )
+            if use_compression:
+                answer, num_tokens, elapsed = run_inference_compressed(
+                    model, processor, image_path, question, system_prompt,
+                    compress_method, compress_ratio, image_token_id, args.max_tokens
+                )
+            else:
+                answer, num_tokens, elapsed = run_inference(
+                    model, processor, image_path, question, system_prompt, args.max_tokens
+                )
         except Exception as e:
             print(f"  ERROR sample {sid}: {e}")
             skipped += 1
@@ -291,6 +418,7 @@ def main():
         if done % args.save_every == 0:
             summary = compute_metrics(results)
             payload = {"tag": tag, "config": os.path.basename(args.config),
+                       "compress_method": compress_method, "compress_ratio": compress_ratio,
                        "summary": summary, "results": results}
             with open(out_path, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2, ensure_ascii=False)
@@ -300,6 +428,9 @@ def main():
     payload = {
         "tag": tag,
         "config": os.path.basename(args.config),
+        "experiment": experiment,
+        "compress_method": compress_method,
+        "compress_ratio": compress_ratio,
         "lora": args.lora,
         "total_samples": len(results),
         "skipped": skipped,
