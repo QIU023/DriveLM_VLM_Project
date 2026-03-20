@@ -209,16 +209,28 @@ def forward_with_compression(model, batch, compress_method, compress_ratio, imag
     base = get_base_model(model)
     device = batch["input_ids"].device
 
-    # 1. Vision encoder
-    vis_dtype = next(base.visual.parameters()).dtype
-    image_embeds = base.visual(batch["pixel_values"].to(vis_dtype), grid_thw=batch["image_grid_thw"])
+    # 1. Vision encoder (no grad — LoRA is only on LLM layers)
+    vis_dtype = next(base.model.visual.parameters()).dtype
+    with torch.no_grad():
+        vis_out = base.model.visual(batch["pixel_values"].to(vis_dtype), grid_thw=batch["image_grid_thw"])
+        image_embeds = vis_out.pooler_output if hasattr(vis_out, "pooler_output") else vis_out
+        if isinstance(image_embeds, (tuple, list)):
+            image_embeds = image_embeds[0]
+        image_embeds = image_embeds.detach()
+    del vis_out  # free last_hidden_state
 
-    # 2. Compress
-    grid_thw = batch["image_grid_thw"]
-    compressed, new_grid_thw = compress_visual_tokens(image_embeds, grid_thw, compress_method, compress_ratio)
+    # 2. Compress — use post-merger grid (the merger does 2x2 spatial merge,
+    #    so actual token grid is grid_thw with h/2, w/2)
+    raw_grid = batch["image_grid_thw"]
+    merge_size = getattr(base.model.visual, "spatial_merge_size", 2)
+    post_grid = raw_grid.clone()
+    post_grid[:, 1] = raw_grid[:, 1] // merge_size
+    post_grid[:, 2] = raw_grid[:, 2] // merge_size
+    compressed, new_grid_thw = compress_visual_tokens(image_embeds, post_grid, compress_method, compress_ratio)
+    del image_embeds  # free pre-compression tokens
 
     # per-image token counts
-    orig_counts = (grid_thw[:, 0] * grid_thw[:, 1] * grid_thw[:, 2]).tolist()
+    orig_counts = (post_grid[:, 0] * post_grid[:, 1] * post_grid[:, 2]).tolist()
     new_counts = (new_grid_thw[:, 0] * new_grid_thw[:, 1] * new_grid_thw[:, 2]).tolist()
 
     input_ids = batch["input_ids"]
@@ -276,7 +288,7 @@ def forward_with_compression(model, batch, compress_method, compress_ratio, imag
     new_labels = torch.stack(new_lab_list)
 
     # 5. Build inputs_embeds
-    inputs_embeds = base.model.embed_tokens(new_input_ids)
+    inputs_embeds = base.model.language_model.embed_tokens(new_input_ids).clone()
     img_mask = new_input_ids == image_token_id
     inputs_embeds[img_mask] = compressed.to(inputs_embeds.dtype)
 
