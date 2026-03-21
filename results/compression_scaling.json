@@ -1,0 +1,168 @@
+{
+  "config": "configs/gh200.yaml",
+  "lora": "checkpoints_qwen25/default/checkpoint-46000",
+  "method": "fastervlm",
+  "samples_per_cat": 100,
+  "ratios": {
+    "1": {
+      "behavior": {
+        "n": 100,
+        "correct": 44,
+        "accuracy": 44.0,
+        "avg_visual_tokens": 480
+      },
+      "perception": {
+        "n": 100,
+        "correct": 50,
+        "accuracy": 50.0,
+        "avg_visual_tokens": 480
+      },
+      "planning": {
+        "n": 100,
+        "correct": 43,
+        "accuracy": 43.0,
+        "avg_visual_tokens": 480
+      },
+      "prediction": {
+        "n": 100,
+        "correct": 68,
+        "accuracy": 68.0,
+        "avg_visual_tokens": 480
+      },
+      "overall": {
+        "n": 400,
+        "correct": 205,
+        "accuracy": 51.2,
+        "avg_visual_tokens": 480
+      }
+    },
+    "2": {
+      "behavior": {
+        "n": 100,
+        "correct": 43,
+        "accuracy": 43.0,
+        "avg_visual_tokens": 240
+      },
+      "perception": {
+        "n": 100,
+        "correct": 49,
+        "accuracy": 49.0,
+        "avg_visual_tokens": 240
+      },
+      "planning": {
+        "n": 100,
+        "correct": 42,
+        "accuracy": 42.0,
+        "avg_visual_tokens": 240
+      },
+      "prediction": {
+        "n": 100,
+        "correct": 70,
+        "accuracy": 70.0,
+        "avg_visual_tokens": 240
+      },
+      "overall": {
+        "n": 400,
+        "correct": 204,
+        "accuracy": 51.0,
+        "avg_visual_tokens": 240
+      }
+    },
+    "4": {
+      "behavior": {
+        "n": 100,
+        "correct": 44,
+        "accuracy": 44.0,
+        "avg_visual_tokens": 120
+      },
+      "perception": {
+        "n": 100,
+        "correct": 47,
+        "accuracy": 47.0,
+        "avg_visual_tokens": 120
+      },
+      "planning": {
+        "n": 100,
+        "correct": 43,
+        "accuracy": 43.0,
+        "avg_visual_tokens": 120
+      },
+      "prediction": {
+        "n": 100,
+        "correct": 70,
+        "accuracy": 70.0,
+        "avg_visual_tokens": 120
+      },
+      "overall": {
+        "n": 400,
+        "correct": 204,
+        "accuracy": 51.0,
+        "avg_visual_tokens": 120
+      }
+    },
+    "8": {
+      "behavior": {
+        "n": 100,
+        "correct": 43,
+        "accuracy": 43.0,
+        "avg_visual_tokens": 60
+      },
+      "perception": {
+        "n": 100,
+        "correct": 46,
+        "accuracy": 46.0,
+        "avg_visual_tokens": 60
+      },
+      "planning": {
+        "n": 100,
+        "correct": 44,
+        "accuracy": 44.0,
+        "avg_visual_tokens": 60
+      },
+      "prediction": {
+        "n": 100,
+        "correct": 70,
+        "accuracy": 70.0,
+        "avg_visual_tokens": 60
+      },
+      "overall": {
+        "n": 400,
+        "correct": 203,
+        "accuracy": 50.7,
+        "avg_visual_tokens": 60
+      }
+    },
+    "16": {
+      "behavior": {
+        "n": 100,
+        "correct": 38,
+        "accuracy": 38.0,
+        "avg_visual_tokens": 30
+      },
+      "perception": {
+        "n": 100,
+        "correct": 46,
+        "accuracy": 46.0,
+        "avg_visual_tokens": 30
+      },
+      "planning": {
+        "n": 100,
+        "correct": 41,
+        "accuracy": 41.0,
+        "avg_visual_tokens": 30
+      },
+      "prediction": {
+        "n": 100,
+        "correct": 70,
+        "accuracy": 70.0,
+        "avg_visual_tokens": 30
+      },
+      "overall": {
+        "n": 400,
+        "correct": 195,
+        "accuracy": 48.8,
+        "avg_visual_tokens": 30
+      }
+    }
+  }
+}
