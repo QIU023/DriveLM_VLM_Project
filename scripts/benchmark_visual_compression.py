@@ -100,15 +100,25 @@ def inference_with_timing(model, processor, image_path, prompt, compress_method,
     image_grid_thw = inputs["image_grid_thw"]
 
     base = get_base_model(model)
-    n_visual_before = int((image_grid_thw[:, 0] * image_grid_thw[:, 1] * image_grid_thw[:, 2]).sum().item())
+
+    # Post-merger grid (merger does 2x2 spatial merge)
+    merge_size = getattr(base.model.visual, "spatial_merge_size", 2)
+    post_grid = image_grid_thw.clone()
+    post_grid[:, 1] = image_grid_thw[:, 1] // merge_size
+    post_grid[:, 2] = image_grid_thw[:, 2] // merge_size
+    n_visual_before = int((post_grid[:, 0] * post_grid[:, 1] * post_grid[:, 2]).sum().item())
 
     torch.cuda.synchronize()
 
-    # --- Vision encoder ---
+    # --- Vision encoder (includes merger: 1280-dim → 2048-dim) ---
     t0 = time.perf_counter()
-    vis_dtype = next(base.visual.parameters()).dtype
+    vis_dtype = next(base.model.visual.parameters()).dtype
     with torch.no_grad():
-        image_embeds = base.visual(pixel_values.to(vis_dtype), grid_thw=image_grid_thw)
+        vis_output = base.model.visual(pixel_values.to(vis_dtype), grid_thw=image_grid_thw)
+        # pooler_output = post-merger tokens (2048-dim, spatially merged)
+        image_embeds = vis_output.pooler_output if hasattr(vis_output, "pooler_output") and vis_output.pooler_output is not None else vis_output.last_hidden_state
+        if isinstance(image_embeds, (tuple, list)):
+            image_embeds = image_embeds[0]
     torch.cuda.synchronize()
     t_vision = time.perf_counter() - t0
 
@@ -116,9 +126,9 @@ def inference_with_timing(model, processor, image_path, prompt, compress_method,
     t0 = time.perf_counter()
     if compress_method != "none":
         compressed, new_grid_thw = compress_visual_tokens(
-            image_embeds, image_grid_thw, compress_method, compress_ratio)
+            image_embeds, post_grid, compress_method, compress_ratio)
     else:
-        compressed, new_grid_thw = image_embeds, image_grid_thw
+        compressed, new_grid_thw = image_embeds, post_grid
     torch.cuda.synchronize()
     t_compress = time.perf_counter() - t0
 
@@ -127,7 +137,6 @@ def inference_with_timing(model, processor, image_path, prompt, compress_method,
     # --- Build inputs_embeds with compressed tokens ---
     if compress_method != "none":
         # Adjust input_ids: remove excess image placeholders
-        orig_count = n_visual_before
         new_count = n_visual_after
         img_positions = (input_ids[0] == image_token_id).nonzero(as_tuple=True)[0]
         if len(img_positions) > new_count:
@@ -140,7 +149,7 @@ def inference_with_timing(model, processor, image_path, prompt, compress_method,
             new_input_ids = input_ids
             new_attn = inputs["attention_mask"]
 
-        inputs_embeds = base.model.embed_tokens(new_input_ids)
+        inputs_embeds = base.model.language_model.embed_tokens(new_input_ids)
         img_mask = new_input_ids == image_token_id
         inputs_embeds[img_mask] = compressed.to(inputs_embeds.dtype)
 
