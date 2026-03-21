@@ -8,10 +8,10 @@
 
 | 阶段 | 状态 | 设备 | 说明 |
 |------|------|------|------|
-| Layer 1: LoRA 微调 | **Epoch 1 完成** (ckpt-46000) | GH200 | 继续训练中，等更好的 ckpt |
-| Layer 2: Visual Token 压缩 | **2/4 完成** | GH200 | fastervlm_c4 ✅, prumerge_c4 ✅, pyramiddrop 进行中 |
-| **Layer 3: 本地推理/部署** | **脚本就绪，待执行** | **4070Ti** | 3 个 LoRA 的 merge→量化→benchmark 全链路 |
-| Layer 4: Benchmark 报告 | 待开始 | 两者 | 所有实验完成后整理 |
+| Layer 1: LoRA 微调 | **Epoch 1 完成** (ckpt-46000) | GH200 | baseline LoRA |
+| Layer 2: Visual Token 压缩 | **3/4 完成** | GH200 | fastervlm ✅, prumerge ✅, pyramiddrop ✅, avg_pool 待跑 |
+| **Layer 3: 本地推理/部署** | **✅ 全链路完成** | **4070Ti** | 4 个 LoRA merge→GGUF Q4_K_M→llama.cpp benchmark |
+| Layer 4: Benchmark 报告 | **部分完成** | 两者 | LLM throughput ✅, visual compression benchmark 待跑 (GH200) |
 
 ---
 
@@ -31,7 +31,7 @@
 ## Layer 3: 4070Ti 本地量化部署全链路 — 当前任务
 
 > **原则：本地不跑 raw torch 推理，所有推理/评测通过推理框架完成。**
-> 目标：3 个 LoRA (baseline / fastervlm_c4 / prumerge_c4) 合并 → 量化导出 → 推理框架部署 → throughput 测试。
+> 目标：4 个 LoRA (baseline / fastervlm / prumerge / pyramiddrop) 合并 → GGUF Q4_K_M 量化 → llama.cpp 部署 → throughput 测试。
 > 精度评测在 GH200 上完成，4070Ti 只测性能。后续有更好的 ckpt 只需替换路径重跑。
 
 ### Step 3.1: LoRA 合并 & 模型导出 — 脚本就绪
@@ -170,7 +170,7 @@ bash configs/run_all.sh                                           # 顺序跑全
 > 测试条件: llama-server b8429, CUDA 12.4, -ngl 99, -c 2048, 4 slots, 20 requests/level, max_tokens=128
 > 注意: 此为纯 LLM backbone throughput。三个模型的 token 压缩差异只体现在 visual encoder 阶段（prefill），LLM decode 速度基本一致。
 
-**三模型 × 三并发度对比**
+**四模型 × 三并发度对比**
 
 | 模型 | 并发 | TTFT P50 (ms) | TTFT P95 (ms) | Tokens/s P50 | Aggregate TPS | Latency P50 (ms) | GPU (MB) |
 |------|:----:|:-------------:|:-------------:|:------------:|:-------------:|:-----------------:|:--------:|
@@ -183,13 +183,45 @@ bash configs/run_all.sh                                           # 顺序跑全
 | prumerge | 1 | 141 | 356 | 173 | 74 | 233 | 5238 |
 | prumerge | 2 | 174 | 347 | 153 | 123 | 269 | 5234 |
 | prumerge | 4 | 182 | 366 | 114 | 197 | 338 | 5219 |
+| pyramiddrop | 1 | 141 | 422 | 171 | 72 | 232 | 4897 |
+| pyramiddrop | 2 | 162 | 341 | 150 | 126 | 261 | 4893 |
+| pyramiddrop | 4 | 196 | 335 | 120 | 185 | 312 | 4900 |
 
 **关键发现:**
-- 单请求 decode 速度: ~170 tokens/s (三个模型一致，因为 LLM 权重相同结构)
-- 4 并发聚合 throughput: ~196-202 tokens/s
-- TTFT: ~140ms (单请求) → ~180ms (4 并发)
-- 显存占用: ~5.2GB (模型 1.8GB + KV cache + compute buffer)，12GB 卡还剩 ~7GB
-- Token 压缩的加速效果需要在多模态推理 (带图片 prefill) 场景下才能体现
+
+- 单请求 decode 速度: ~170 tokens/s (四个模型一致，因为 LLM backbone 结构相同)
+- 4 并发聚合 throughput: ~185-202 tokens/s
+- TTFT: ~141ms (单请求) → ~180-196ms (4 并发)
+- 显存占用: ~4.9-5.3GB (模型 1.8GB + KV cache + compute buffer)，12GB 卡还剩 ~7GB
+- **Token 压缩的加速效果不体现在此测试中** — GGUF 只包含 LLM backbone，text-only benchmark 不经过 vision encoder。真正的压缩收益需在 GH200 上用 `benchmark_visual_compression.py` 带图片测 prefill 时间
+
+### 待完成: Visual Token 压缩 Latency 对比 (GH200, bf16, 带图片)
+
+> 此 benchmark 测量 token 压缩的真正收益：fewer visual tokens → faster prefill → lower TTFT
+> 脚本: `scripts/benchmark_visual_compression.py`
+
+```bash
+# 在 GH200 上运行
+python scripts/benchmark_visual_compression.py \
+    --config configs/gh200.yaml \
+    --experiments \
+        baseline=checkpoints/baseline/checkpoint-46000 \
+        fastervlm=checkpoints/fastervlm/final:fastervlm:4 \
+        prumerge=checkpoints/prumerge/final:prumerge:4 \
+        pyramiddrop=checkpoints/pyramiddrop/final:pyramiddrop:4 \
+    --n 30 --max-tokens 128
+```
+
+| 模型 | Visual Tokens | Compression | Input Tokens | Vision (ms) | Compress (ms) | Generate (ms) | Total (ms) | Speedup | GPU (GB) |
+|------|:------------:|:-----------:|:------------:|:-----------:|:-------------:|:-------------:|:----------:|:-------:|:--------:|
+| baseline | N→N | 1x | — | — | 0 | — | — | 1.00x | — |
+| fastervlm | N→N/4 | 4x | — | — | — | — | — | —x | — |
+| prumerge | N→N/4 | 4x | — | — | — | — | — | —x | — |
+| pyramiddrop | N→N/4 | 4x | — | — | — | — | — | —x | — |
+
+> 跑完后填入数据。预期：4x compression → Generate 时间下降 40-60%（prefill 占比），Total 延迟下降 30-50%
+
+---
 
 **量化方案对比 (4070Ti 12GB)**
 

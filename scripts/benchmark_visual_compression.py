@@ -2,7 +2,7 @@
 
 Measures the REAL benefit of token compression: fewer visual tokens → faster
 prefill → lower TTFT for image inputs. Compares baseline (full tokens) vs
-compressed (fastervlm / prumerge) on the same images.
+compressed (fastervlm / prumerge / pyramiddrop) on the same images.
 
 Runs on GH200 (bf16, full precision) with base model + LoRA adapter.
 
@@ -19,9 +19,11 @@ Metrics per sample:
 Usage (on GH200):
     python scripts/benchmark_visual_compression.py \
         --config configs/gh200.yaml \
-        --experiments baseline=checkpoints/baseline/checkpoint-46000 \
-                      fastervlm=checkpoints/fastervlm/final:fastervlm:4 \
-                      prumerge=checkpoints/prumerge/final:prumerge:4 \
+        --experiments \
+            baseline=checkpoints/baseline/checkpoint-46000 \
+            fastervlm=checkpoints/fastervlm/final:fastervlm:4 \
+            prumerge=checkpoints/prumerge/final:prumerge:4 \
+            pyramiddrop=checkpoints/pyramiddrop/final:pyramiddrop:4 \
         --n 30 --max-tokens 128
 
     Format: name=lora_path[:compress_method:compress_ratio]
