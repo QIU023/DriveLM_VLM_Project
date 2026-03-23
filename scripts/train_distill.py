@@ -57,7 +57,13 @@ def kl_div_loss(student_logits, teacher_logits, temperature=2.0, labels=None):
     """Output-level KL divergence loss with temperature scaling.
 
     Only computes KD loss on positions where labels != -100 (valid tokens).
+    Handles vocab size mismatch by truncating to the smaller vocab.
     """
+    # Align vocab sizes (3B and 7B may differ slightly)
+    v = min(student_logits.shape[-1], teacher_logits.shape[-1])
+    student_logits = student_logits[..., :v]
+    teacher_logits = teacher_logits[..., :v]
+
     if labels is not None:
         mask = labels != -100
         if not mask.any():
