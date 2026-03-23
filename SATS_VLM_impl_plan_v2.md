@@ -1,8 +1,9 @@
-# SATS → Efficient VLM 实验方案 (v2)
+# SATS → Efficient VLM 实验方案 (GH200, 4天)
 
-## 环境假设
+## 环境
 
 ```
+硬件:     GH200 96GB (单卡, 可同时加载 7B teacher + 3B student)
 模型:     Qwen2.5-VL-3B (student), Qwen2.5-VL-7B (teacher, 方向2.5)
 数据集:   DriveLM-nuScenes
 已有:     LoRA fine-tune pipeline, FasterVLM/PruMerge/PyramidDrop
@@ -11,11 +12,30 @@ ViT:      depth=32, hidden=1280, heads=16, patch=14
           fullatt layers: [7, 15, 23, 31]
           3B/7B **共享同一 ViT**, 差异只在 LLM 和 merger
 LLM:      3B = 36层/2048dim/16heads, 7B = 28层/3584dim/28heads
+
+显存预估:
+  7B bf16 加载            ~15GB
+  3B bf16 + LoRA          ~7GB
+  双模型在线蒸馏 + 梯度    ~45-55GB  → 96GB 够用, 无需离线存 teacher
 ```
 
 ---
 
-## 方向 2: Attention-Guided Token Compression
+## VLM 蒸馏现状 (调研结论)
+
+| 方法 | 会议 | 蒸馏层级 | 和 SATS 关系 |
+|------|------|---------|------------|
+| LLaVA-KD (RDist) | ICCV 2025 | visual token 间 cosine sim matrix | **最接近**, 但无 region pooling, 全量 O(N²) |
+| LLaVA-MoD | ICLR 2025 | output KL + DPO preference | 纯 output-level |
+| CompoDistill | 2025 preprint | attention map distillation | 发现现有 KD 蒸不了 visual perception, 验证了 attn distill 方向 |
+| MoVE-KD | CVPR 2025 | 多 visual encoder → 单 encoder | encoder 层面, 不涉及 LLM |
+| TinyLLaVA / MiniLLM | 2024 | output reverse KL | 纯 output-level |
+
+**关键 gap**: 没有任何一篇在 VLM 蒸馏中做过 **region-aware attention pooling**。
+LLaVA-KD 的 RDist 是全量 token-pair, CompoDistill 做了 attention distill 但没有 CRP。
+你的 CRP (bbox-guided region pooling) 在 VLM 蒸馏中是 novel 的。
+
+---
 
 ### 目标
 
@@ -335,13 +355,16 @@ def region_relation_distill_loss(teacher_attns, student_attns,
     return loss / len(layer_map)
 ```
 
-### Step 3: 训练流程
+### Step 3: 训练流程 (GH200 在线蒸馏)
+
+GH200 96GB 可同时加载 teacher + student, 无需离线提取 teacher attention。
 
 ```python
 # train_distill.py (伪代码)
 
-teacher = load_7b_with_lora(freeze=True)
-student = load_3b()
+# 同时加载 (~22GB total, 96GB 够用)
+teacher = load_7b_with_lora(freeze=True)   # ~15GB, no grad
+student = load_3b()                         # ~7GB
 student_lora = apply_lora(student, rank=16)
 
 # Layer mapping: 均匀采样
@@ -350,7 +373,7 @@ student_lora = apply_lora(student, rank=16)
 layer_map = {6: 8, 13: 17, 20: 26, 27: 35}
 
 for batch in drivelm_loader:
-    # Teacher forward (no grad)
+    # Teacher forward (no grad, 在线)
     with torch.no_grad():
         t_out = teacher(**batch, output_attentions=True)
         t_vis_attn = extract_visual_attns(t_out, batch.visual_mask, 
@@ -361,9 +384,9 @@ for batch in drivelm_loader:
     s_vis_attn = extract_visual_attns(s_out, batch.visual_mask,
                                        list(layer_map.values()))
     
-    # Losses
-    L_ce = s_out.loss  # autoregressive CE
-    L_rrd = region_relation_distill_loss(
+    # Losses (对应 SATS 公式 3: L = L_c + λ_a·L_a + λ_d·L_d)
+    L_ce = s_out.loss                        # autoregressive CE
+    L_rrd = region_relation_distill_loss(    # attention relation KD
         t_vis_attn, s_vis_attn, 
         batch.patch_labels, batch.num_classes,
         layer_map
@@ -371,7 +394,7 @@ for batch in drivelm_loader:
     L_kd = kl_div(s_out.logits, t_out.logits)  # output KD
     
     loss = L_ce + lambda_a * L_rrd + lambda_d * L_kd
-    loss.backward()
+    loss.backward()  # 只有 student 有梯度, ~30GB 峰值
     optimizer.step()
 ```
 
@@ -396,42 +419,129 @@ for batch in drivelm_loader:
 
 ### 相关工作
 
-- **ϕ-DPO** (arXiv 2602.22601): DPO-based CL for LMMs, SOTA on CoIN/MLLM-CL
-  - 证明 DPO loss 上下界约束 KL divergence → 替代传统 KD
-  - Fairness DPO 解决 imbalanced data gradient bias
-  - 引用了你的 SATS ([74])
-  - 需要 16x A100, LLaVA v1.5 + Vicuna 7B
+- **ϕ-DPO** (arXiv 2602.22601, Feb 2026): DPO-based CL for LMMs, SOTA
+  - 用 DPO loss 替代传统 KD 做 forgetting mitigation
+  - 证明 KL(πt-1 || πt) 被 DPO loss 上下界约束 (Lemma 1-2)
+  - Fairness DPO: focal-loss 风格的 modulating factor 解决 imbalanced gradient
+  - Benchmark: CoIN (8 tasks), MLLM-CL Domain (5 domains), MLLM-CL Ability (4 tasks)
+  - 基于 LLaVA v1.5 + Vicuna 7B, 需要 16x A100
+  - **引用了你的 SATS ([74])**，在 related work 中作为 continual segmentation KD 方法
+  - 核心局限: 只做 output-level 的 DPO, 没有蒸馏 internal attention representation
 
-### 可能方向
+### 你的 SATS 可以补的 gap
 
-- 在 ϕ-DPO 框架中加入 attention distillation 作为 DPO 的补充
-- 简化版: DriveLM 上 2-stage CL (perception → planning)
-- 需要构建 DPO preference data
+ϕ-DPO 证明了 DPO 可以替代 KD 做 forgetting mitigation,
+但它和 SATS 解决的是**不同层面**的问题:
+- ϕ-DPO: output-level preference alignment (类比 SATS 的 L_d)
+- SATS: internal attention relation distillation (L_a)
+- 两者理论上互补, 类似你论文中 L_a + L_d > L_d alone
+
+### 可能实验 (需要资源时)
+
+1. **ϕ-DPO + Attention Distillation**: 在 ϕ-DPO loss 基础上加 CRP attention distill
+2. **简化版 (可在 GH200 上做)**: DriveLM 2-stage CL
+   - Stage 1: DriveLM perception QA → Stage 2: 通用 VQA (GQA/TextVQA)
+   - 对比: LoRA vs LoRA + attn distill vs DPO vs DPO + attn distill
+   - 不需要 16x A100, 单卡可跑
+3. 需要构建 DPO preference data (参考 ϕ-DPO 的方法: 用 LLM 生成 hallucinated y-)
 
 ### 暂缓原因
 
-计算资源不足, benchmark 复杂度高, 留待后续有 multi-GPU 资源时实施。
+CoIN/MLLM-CL 完整实验需 16x A100 + 大量 benchmark 适配工作。
+简化版可在有余力时做, 作为面试中"未来方向"的 talking point。
 
 ---
 
-## 执行优先级
+## 执行计划 (GH200 96GB, 4 天)
+
+### 显存优势
+
+GH200 96GB 的核心改变: **方向 2.5 可以在线蒸馏**, 7B teacher + 3B student
+同时在显存中, 不需要离线存 teacher attention 再读取。省去大量 I/O 和存储。
+
+| 操作 | 显存占用 | GH200 耗时 |
+|------|---------|-----------|
+| 7B bf16 加载 | ~15GB | - |
+| 3B bf16 + LoRA 加载 | ~7GB | - |
+| 双模型同时推理 + 梯度 | ~45-55GB | 够用 |
+| ViT attention 提取 (DriveLM 全量) | 推理 only | ~1-2 小时 |
+| 方向 2 实验 (3 组压缩率 × 3 方法) | 推理 only | 每组 ~20min |
+| 方向 2.5 蒸馏训练 (1 epoch LoRA) | 双模型 forward | ~3-4 小时 |
+
+### 日程
 
 ```
-Week 1: 方向 2
-  - 离线提取 ViT attention map
-  - 预计算 nuScenes bbox → patch labels
-  - 实现 CRP importance + token selection
-  - 跑 4×/8×/16× 压缩实验, 对比 FasterVLM baseline
+Day 1 上午: 环境搭建 + monkey-patch ViT attention forward
+           → 用 1 张图跑通 full pipeline forward, 确认所有 shape 正确
+Day 1 下午: 离线提取 ViT attention map + bbox→patch label 预计算
+           (批量跑 DriveLM 全量 keyframe, ~1-2h)
 
-Week 2: 方向 2.5
-  - 实现 LLM visual attention 提取
-  - 实现 region relation distillation loss
-  - 7B→3B 蒸馏训练
-  - 对比 output-only KD vs RRD vs 组合
+Day 2 上午: CRP importance 实现 + token selection/merge 代码
+Day 2 下午: 方向 2 全部实验跑完 (4×/8×/16× 各方法对比 + 消融)
 
-Week 3: 整合 + 简历
-  - 汇总实验数字
-  - 更新 DriveLM 项目 bullet
-  - 更新 SATS 项目 bullet
-  - 面试叙事线排练
+Day 3 上午: 方向 2.5 — 双模型在线蒸馏代码 (LLM visual attn 提取 + CRP loss)
+Day 3 下午: 方向 2.5 — 蒸馏训练 (~3-4h for 1 epoch)
+
+Day 4 上午: 方向 2.5 消融实验 (CRP vs GlobalPool vs NoPool, layer map 对比)
+Day 4 下午: 汇总数字 → 更新简历 bullet → 面试叙事整理
 ```
+
+### 瓶颈预判 & Workaround
+
+| 瓶颈 | 预计卡点 | 快速解法 |
+|------|---------|---------|
+| ViT flash attn 不输出 weights | Day 1 | monkey-patch attention forward, 手动算 `softmax(QK^T/√d)`, ~10 行 |
+| nuScenes 3D→2D bbox 坐标系变换 | Day 1 | 直接用 `nusc.get_box()` + devkit 的 `render_annotation` 内部逻辑抄过来 |
+| 7B/3B heads 不匹配 (28 vs 16) | Day 3 | 对 heads 维度 mean 后对齐 (C,C) relation matrix, 不做 per-head 对齐 |
+| 蒸馏 loss NaN | Day 3 | relation matrix 加 eps, 检查空 region 的 mask |
+| 方向 2 提升不明显 | Day 2 | 加 merge 模式 (同类 token 合并), 或 Attn-CRP 和 FasterVLM 组合 |
+
+### Day 1 验证清单 (最重要)
+
+用 **1 张 DriveLM 图** 跑通以下 pipeline, 确认 shape 全部正确:
+
+```
+1. 图片 → processor → ViT forward → attention hook 拿到 (H, N, N)    ✓/✗
+2. sample_token → nuScenes bbox → 2D bbox → patch label (N,)         ✓/✗
+3. attention map + patch label → CRP → importance (N,)                ✓/✗
+4. importance → top-k selection → compressed tokens → LLM forward     ✓/✗
+5. 7B LLM forward → visual attn sub-matrix (heads, N_vis, N_vis)     ✓/✗
+6. 3B LLM forward → visual attn sub-matrix (heads, N_vis, N_vis)     ✓/✗
+7. 两个 sub-matrix + patch label → CRP → region relation (C, C)      ✓/✗
+8. MSE loss backward 无 NaN                                           ✓/✗
+```
+
+全部通过后再批量跑, 避免浪费 GPU 时间在 debug 上。
+
+---
+
+## 简历 bullet 更新
+
+完成方向 2 和 2.5 后, DriveLM 项目新增 (填入实际数字):
+
+```latex
+\item Applied SATS-style \textbf{class-region attention pooling} to 
+    visual token compression in Qwen2.5-VL: used nuScenes bbox-guided 
+    ViT attention importance for token selection, achieving 
+    \textbf{XX.X\%} accuracy at 4$\times$ compression vs 
+    \textbf{57.4\%} (FasterVLM) --- demonstrating 
+    \textbf{region-aware} selection outperforms heuristic methods
+\item Designed \textbf{region-aware relation distillation} (7B$\to$3B): 
+    distilled LLM decoder's visual attention via class-region pooling, 
+    improving 3B accuracy by \textbf{+X.X\%} over logit-only KD
+```
+
+SATS 论文 bullet 改写 (强调可迁移性):
+
+```latex
+\item Proposed \textbf{relational knowledge distillation} on Vision 
+    Transformer by distilling \textbf{patch-level self-attention} 
+    patterns with class-aware region pooling --- a lightweight plug-in 
+    for transferring inter-patch relationships in ViT-based models. 
+    Achieved \textbf{state-of-the-art} continual segmentation on 
+    VOC \& ADE20K. \textbf{Published in Pattern Recognition} as 
+    \textbf{1st author} 
+    (\href{...}{Link}, 52 citations)
+```
+
+三条 bullet 形成叙事线: **论文方法论 → token compression 应用 → VLM 蒸馏应用**。
