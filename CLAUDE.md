@@ -10,10 +10,10 @@ Efficient VLM 项目——专注小模型 + 快速微调 + 知识蒸馏/持续�
 
 ## Environment
 
-- **GPU**: NVIDIA GH200 480GB (96GB HBM3 GPU memory)
+- **GPU**: NVIDIA B200 (large VRAM)
 - **Arch**: aarch64
-- **Conda env**: `qwen25vl` (Python 3.10, torch 2.10.0+cu128, transformers 5.3.0, peft 0.18.1)
-- **Activate**: `export PATH="/home/ubuntu/miniconda3/bin:$PATH" && conda activate qwen25vl`
+- **Conda env**: `main` at `/venv/main` (torch 2.10.0+cu130, transformers 5.3.0, peft 0.18.1)
+- **Activate**: `/opt/miniforge3/bin/conda run -n main` or `source /venv/main/bin/activate`
 - **HuggingFace**: logged in (gated repo access for OpenDriveLab/DriveLM)
 - **Git remote**: `git@github.com:QIU023/DriveLM_VLM_Project.git` (SSH, user: QIU023)
 

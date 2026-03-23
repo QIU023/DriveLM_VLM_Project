@@ -2,8 +2,8 @@
 # GB200 online distillation (both models in VRAM simultaneously)
 # Run: python scripts/train_distill.py --config configs/distill_7b_3b.yaml
 
-teacher_model_id: "Qwen/Qwen2.5-VL-7B-Instruct"
-student_model_id: "Qwen/Qwen2.5-VL-3B-Instruct"
+teacher_model_id: "/root/models/Qwen2.5-VL-7B-Instruct"
+student_model_id: "/root/models/Qwen2.5-VL-3B-Instruct"
 
 # Optional: path to fine-tuned teacher LoRA (null = use base 7B)
 teacher_lora: null
@@ -27,7 +27,7 @@ dtype: "bfloat16"
 # Training
 learning_rate: 2e-4
 batch_size: 4
-grad_accum_steps: 2       # effective batch = 8
+grad_accum_steps: 1
 num_epochs: 1
 max_length: 2048
 num_workers: 8

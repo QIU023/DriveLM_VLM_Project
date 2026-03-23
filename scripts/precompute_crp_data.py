@@ -127,7 +127,14 @@ def _get_apply_rotary():
 
 
 class ViTAttentionExtractor:
-    """Monkey-patches Qwen2.5-VL ViT fullatt layers to capture attention weights."""
+    """Monkey-patches Qwen2.5-VL ViT fullatt layers to capture attention weights.
+
+    Compatible with transformers 5.x API:
+      forward(hidden_states, cu_seqlens, rotary_pos_emb=None,
+              position_embeddings=None, **kwargs)
+    where position_embeddings = (cos, sin) replaces the old rotary_pos_emb tensor.
+    apply_rotary_pos_emb_vision(q, k, cos, sin) — four separate args.
+    """
 
     def __init__(self, visual_model):
         self.visual = visual_model
@@ -146,15 +153,29 @@ class ViTAttentionExtractor:
         store = self.store
         apply_rope = self._apply_rope
 
-        def forward(hidden_states, cu_seqlens, rotary_pos_emb):
+        def forward(hidden_states, cu_seqlens,
+                    rotary_pos_emb=None, position_embeddings=None, **kwargs):
             seq_length = hidden_states.shape[0]
-            qkv = attn_mod.qkv(hidden_states)
-            qkv = qkv.reshape(seq_length, 3, attn_mod.num_heads, -1)
-            q, k, v = qkv.unbind(1)
+            # (seq_len, 3, num_heads, head_dim) → unbind → (seq_len, num_heads, head_dim)
+            q, k, v = (
+                attn_mod.qkv(hidden_states)
+                .reshape(seq_length, 3, attn_mod.num_heads, -1)
+                .permute(1, 0, 2, 3)
+                .unbind(0)
+            )
 
             if apply_rope is not None:
-                q = apply_rope(q.unsqueeze(0), rotary_pos_emb).squeeze(0)
-                k = apply_rope(k.unsqueeze(0), rotary_pos_emb).squeeze(0)
+                if position_embeddings is not None:
+                    # transformers 5.x: position_embeddings = (cos, sin)
+                    cos, sin = position_embeddings
+                    q, k = apply_rope(q, k, cos, sin)
+                elif rotary_pos_emb is not None:
+                    # transformers 4.x: rotary_pos_emb was a tensor; try old call
+                    try:
+                        q = apply_rope(q.unsqueeze(0), rotary_pos_emb).squeeze(0)
+                        k = apply_rope(k.unsqueeze(0), rotary_pos_emb).squeeze(0)
+                    except TypeError:
+                        pass  # skip RoPE if API mismatch
 
             head_dim = q.shape[-1]
             q_h = q.transpose(0, 1)  # (H, N, D)
@@ -234,6 +255,7 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
 
     importance_dict = {}
+    patch_labels_dict = {}
     dummy_text = "<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>hi<|im_end|>"
 
     for name, path in tqdm(image_paths.items(), desc="Computing CRP importance"):
@@ -270,14 +292,28 @@ def main():
             imp_post = pool_importance_to_post_merger(imp, t, h, w, merge_size)
             importance_dict[name] = imp_post
 
+            # Pool patch labels to post-merger resolution (max = preserve foreground)
+            lbl = labels.view(t, h, w)
+            new_h = (h // merge_size) * merge_size
+            new_w = (w // merge_size) * merge_size
+            lbl = lbl[:, :new_h, :new_w].reshape(
+                t, new_h // merge_size, merge_size, new_w // merge_size, merge_size
+            ).amax(dim=(2, 4)).flatten()
+            patch_labels_dict[name] = lbl
+
         except Exception as e:
             tqdm.write(f"[WARN] {name}: {e}")
             continue
 
-    # Save
+    # Save importance scores (for visual token compression)
     out_path = args.output or os.path.join(output_dir, "crp_importance.pt")
     torch.save(importance_dict, out_path)
     print(f"\nSaved CRP importance for {len(importance_dict)} images → {out_path}")
+
+    # Save patch labels (for region-aware distillation)
+    labels_path = os.path.join(output_dir, "crp_patch_labels.pt")
+    torch.save(patch_labels_dict, labels_path)
+    print(f"Saved CRP patch labels for {len(patch_labels_dict)} images → {labels_path}")
 
     extractor.unpatch()
 

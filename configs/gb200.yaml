@@ -1,7 +1,7 @@
 # Config for NVIDIA GB200 (192GB HBM3e)
 # bf16 full precision, large batch, no quantization — max throughput
 
-model_id: "Qwen/Qwen2.5-VL-3B-Instruct"
+model_id: "/root/models/Qwen2.5-VL-3B-Instruct"
 
 # LoRA
 lora_r: 16
