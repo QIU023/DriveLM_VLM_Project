@@ -2,6 +2,7 @@
 # Run: python scripts/train_lora.py --config configs/crp_c8.yaml
 base_config: gb200.yaml
 experiment: crp_c8
+batch_size: 4
 compress_method: crp
 compress_ratio: 8
 learning_rate: 2e-4

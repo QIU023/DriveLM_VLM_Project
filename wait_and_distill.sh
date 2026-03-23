@@ -1,25 +1,36 @@
 #!/bin/bash
-# Wait for full precompute to finish, then run distillation
+# 蒸馏完成后，自动接 CRP 压缩实验 2x/4x/8x/16x
 cd /root/DriveLM_VLM_Project
 
-echo "Waiting for full precompute (need 4000+ images in crp_importance.pt)..."
-while true; do
-    count=$(/venv/main/bin/python -c "
-import torch, sys
-try:
-    d = torch.load('precomputed/crp_importance.pt', weights_only=True)
-    print(len(d))
-except:
-    print(0)
-" 2>/dev/null)
-    if [ "$count" -ge 4000 ] 2>/dev/null; then
-        echo "Precompute ready! ($count images)"
-        break
-    fi
-    echo -n "."
-    sleep 60
-done
+echo "=========================================="
+echo "  启动蒸馏实验 7B→3B RRD"
+echo "  $(date)"
+echo "=========================================="
+nohup /venv/main/bin/python -u scripts/train_distill.py --config configs/distill_7b_3b.yaml 2>&1 | tee logs/distill_7b_3b.log
 
 echo ""
-echo "Starting 7B->3B distillation..."
-nohup /venv/main/bin/python -u scripts/train_distill.py --config configs/distill_7b_3b.yaml 2>&1 | tee logs/distill_7b_3b.log
+echo "=========================================="
+echo "  蒸馏完成，开始 CRP 压缩实验"
+echo "  $(date)"
+echo "=========================================="
+
+echo ""
+echo "=== 1/4  CRP 2x ==="
+/venv/main/bin/python -u scripts/train_lora.py --config configs/crp_c2.yaml 2>&1 | tee logs/crp_c2.log
+
+echo ""
+echo "=== 2/4  CRP 4x ==="
+/venv/main/bin/python -u scripts/train_lora.py --config configs/crp_c4.yaml 2>&1 | tee logs/crp_c4.log
+
+echo ""
+echo "=== 3/4  CRP 8x ==="
+/venv/main/bin/python -u scripts/train_lora.py --config configs/crp_c8.yaml 2>&1 | tee logs/crp_c8.log
+
+echo ""
+echo "=== 4/4  CRP 16x ==="
+/venv/main/bin/python -u scripts/train_lora.py --config configs/crp_c16.yaml 2>&1 | tee logs/crp_c16.log
+
+echo ""
+echo "=========================================="
+echo "  所有实验完成！$(date)"
+echo "=========================================="
