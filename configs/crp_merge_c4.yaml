@@ -1,0 +1,10 @@
+# CRP attention-guided prune + merge, 4x compression
+# Run: python scripts/train_lora.py --config configs/crp_merge_c4.yaml
+base_config: gb200.yaml
+experiment: crp_merge_c4
+compress_method: crp_merge
+compress_ratio: 4
+learning_rate: 2e-4
+val_every: 200
+val_batches: 50
+crp_importance_path: precomputed/crp_importance.pt

@@ -70,6 +70,7 @@ class DriveLMDataset(Dataset):
 
         # Extract images and build clean messages
         images = []
+        image_name = ""
         clean_messages = []
         for msg in proc_messages:
             if isinstance(msg["content"], list):
@@ -80,6 +81,7 @@ class DriveLMDataset(Dataset):
                         if image_path.startswith("file://"):
                             image_path = image_path[7:]
                         images.append(Image.open(image_path).convert("RGB"))
+                        image_name = os.path.basename(image_path)
                         new_content.append({"type": "image"})
                     else:
                         new_content.append(part)
@@ -137,6 +139,9 @@ class DriveLMDataset(Dataset):
         if image_grid_thw is not None:
             result["image_grid_thw"] = image_grid_thw.squeeze(0) if image_grid_thw.dim() > 1 else image_grid_thw
 
+        # Store image name for CRP importance lookup
+        result["image_name"] = image_name if 'image_name' in dir() else ""
+
         return result
 
 
@@ -178,6 +183,8 @@ def collate_fn(batch):
             [item["image_grid_thw"].unsqueeze(0) if item["image_grid_thw"].dim() == 1 else item["image_grid_thw"] for item in batch],
             dim=0,
         )
+    if "image_name" in batch[0]:
+        result["image_names"] = [item["image_name"] for item in batch]
     return result
 
 
@@ -188,6 +195,9 @@ def get_base_model(model):
     if hasattr(model, "base_model") and hasattr(model.base_model, "model"):
         return model.base_model.model
     return model
+
+
+_CRP_IMPORTANCE = {}  # Global cache for CRP precomputed importance
 
 
 def forward_with_compression(model, batch, compress_method, compress_ratio, image_token_id):
@@ -201,6 +211,8 @@ def forward_with_compression(model, batch, compress_method, compress_ratio, imag
       4. Build inputs_embeds with compressed visual tokens
       5. Forward through LoRA-wrapped LLM with proper 3D RoPE positions
     """
+    # Strip non-tensor keys before model forward
+    image_names = batch.pop("image_names", [])
     if compress_method == "none" or "pixel_values" not in batch:
         return model(**batch)
 
@@ -226,7 +238,12 @@ def forward_with_compression(model, batch, compress_method, compress_ratio, imag
     post_grid = raw_grid.clone()
     post_grid[:, 1] = raw_grid[:, 1] // merge_size
     post_grid[:, 2] = raw_grid[:, 2] // merge_size
-    compressed, new_grid_thw = compress_visual_tokens(image_embeds, post_grid, compress_method, compress_ratio)
+    # Build importance list for CRP methods
+    importance_list = None
+    if compress_method in ("crp", "crp_merge") and _CRP_IMPORTANCE:
+        importance_list = [_CRP_IMPORTANCE.get(n) for n in image_names]
+
+    compressed, new_grid_thw = compress_visual_tokens(image_embeds, post_grid, compress_method, compress_ratio, importance_list=importance_list)
     del image_embeds  # free pre-compression tokens
 
     # per-image token counts
@@ -431,6 +448,18 @@ def main():
 
     gpu_mem = torch.cuda.memory_allocated() / 1024**3
     print(f"GPU memory after model load: {gpu_mem:.2f} GB")
+
+    # ============ Load CRP importance (if needed) ============
+    global _CRP_IMPORTANCE
+    if compress_method in ("crp", "crp_merge"):
+        crp_path = cfg.get("crp_importance_path", os.path.join(_BASE_DIR, "precomputed", "crp_importance.pt"))
+        if not os.path.isabs(crp_path):
+            crp_path = os.path.join(_BASE_DIR, crp_path)
+        if os.path.exists(crp_path):
+            _CRP_IMPORTANCE = torch.load(crp_path, weights_only=True)
+            print(f"Loaded CRP importance for {len(_CRP_IMPORTANCE)} images")
+        else:
+            print(f"[WARN] CRP importance not found at {crp_path}, falling back to L2 norm")
 
     # ============ Data setup ============
     train_file = os.path.join(data_dir, "train_mini.json" if args.mini else "train.json")
