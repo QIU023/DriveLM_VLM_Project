@@ -1,0 +1,56 @@
+# Knowledge distillation: 7B teacher → 3B student
+# GB200 online distillation (both models in VRAM simultaneously)
+# Run: python scripts/train_distill.py --config configs/distill_7b_3b.yaml
+
+teacher_model_id: "Qwen/Qwen2.5-VL-7B-Instruct"
+student_model_id: "Qwen/Qwen2.5-VL-3B-Instruct"
+
+# Optional: path to fine-tuned teacher LoRA (null = use base 7B)
+teacher_lora: null
+
+# Student LoRA
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+lora_target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+
+quantize: false
+dtype: "bfloat16"
+
+# Training
+learning_rate: 2e-4
+batch_size: 4
+grad_accum_steps: 2       # effective batch = 8
+num_epochs: 1
+max_length: 2048
+num_workers: 8
+save_every: 1000
+
+# Image resolution
+min_pixels: 200704        # 256 * 28 * 28
+max_pixels: 401408        # 512 * 28 * 28
+
+# Distillation losses
+lambda_kd: 1.0            # output KL divergence weight
+lambda_rrd: 0.5           # region relation distillation weight
+kd_temperature: 2.0
+
+# Layer mapping: teacher_layer → student_layer (uniformly sampled)
+# 7B: 28 LLM layers → [6, 13, 20, 27]
+# 3B: 36 LLM layers → [8, 17, 26, 35]
+teacher_layers: [6, 13, 20, 27]
+student_layers: [8, 17, 26, 35]
+
+# CRP patch labels for region-aware distillation
+crp_importance_path: precomputed/crp_importance.pt
+
+experiment: distill_7b_3b
+val_every: 200
+val_batches: 50

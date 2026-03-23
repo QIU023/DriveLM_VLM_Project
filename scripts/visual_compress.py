@@ -17,14 +17,15 @@ import torch
 import torch.nn.functional as F
 
 
-def compress_visual_tokens(image_embeds, grid_thw, method, ratio):
+def compress_visual_tokens(image_embeds, grid_thw, method, ratio, importance_list=None):
     """Compress visual tokens.
 
     Args:
         image_embeds: (total_tokens, hidden_dim) concatenated visual tokens
         grid_thw: (num_images, 3) — (temporal, height, width) per image
-        method: "avg_pool" | "fastervlm" | "prumerge" | "pyramiddrop"
+        method: "avg_pool" | "fastervlm" | "prumerge" | "pyramiddrop" | "crp" | "crp_merge"
         ratio: compression ratio (4 = keep 1/4 of tokens)
+        importance_list: optional list of (N,) importance tensors per image (for crp methods)
 
     Returns:
         compressed: (total_compressed, hidden_dim)
@@ -38,6 +39,8 @@ def compress_visual_tokens(image_embeds, grid_thw, method, ratio):
         "fastervlm": _fastervlm,
         "prumerge": _prumerge,
         "pyramiddrop": _pyramiddrop,
+        "crp": lambda e, g, r: _crp(e, g, r, importance_list),
+        "crp_merge": lambda e, g, r: _crp_merge(e, g, r, importance_list),
     }
     if method not in fn:
         raise ValueError(f"Unknown compress method: {method}")
@@ -106,6 +109,73 @@ def _prumerge(image_embeds, grid_thw, ratio):
 
         if pruned.shape[0] > 0 and kept.shape[0] > 0:
             # cosine similarity → assign each pruned token to nearest kept
+            sim = torch.mm(F.normalize(pruned, dim=-1), F.normalize(kept, dim=-1).t())
+            assignments = sim.argmax(dim=-1)
+            for j in range(k):
+                mask_j = assignments == j
+                if mask_j.any():
+                    kept[j] = torch.cat([kept[j : j + 1], pruned[mask_j]]).mean(dim=0)
+
+        results.append(kept)
+        new_thws.append([t, 1, k])
+        offset += n
+
+    return torch.cat(results), torch.tensor(new_thws, dtype=grid_thw.dtype, device=grid_thw.device)
+
+
+def _crp(image_embeds, grid_thw, ratio, importance_list=None):
+    """CRP attention-guided top-K token selection using precomputed importance."""
+    results, new_thws = [], []
+    offset = 0
+    for i in range(grid_thw.shape[0]):
+        t, h, w = int(grid_thw[i, 0]), int(grid_thw[i, 1]), int(grid_thw[i, 2])
+        n = t * h * w
+        tokens = image_embeds[offset : offset + n]
+        k = max(1, n // ratio)
+
+        if importance_list is not None and i < len(importance_list) and importance_list[i] is not None:
+            imp = importance_list[i].to(tokens.device)
+            # Handle size mismatch (resize importance to match token count)
+            if imp.shape[0] != n:
+                imp = F.interpolate(imp.unsqueeze(0).unsqueeze(0).float(), size=n, mode="linear", align_corners=False).squeeze()
+        else:
+            # Fallback to L2 norm if no precomputed importance
+            imp = tokens.norm(dim=-1)
+
+        _, idx = imp.topk(k)
+        idx = idx.sort().values
+        results.append(tokens[idx])
+        new_thws.append([t, 1, k])
+        offset += n
+
+    return torch.cat(results), torch.tensor(new_thws, dtype=grid_thw.dtype, device=grid_thw.device)
+
+
+def _crp_merge(image_embeds, grid_thw, ratio, importance_list=None):
+    """CRP-guided prune + merge: keep top-K by CRP importance, merge pruned into nearest kept."""
+    results, new_thws = [], []
+    offset = 0
+    for i in range(grid_thw.shape[0]):
+        t, h, w = int(grid_thw[i, 0]), int(grid_thw[i, 1]), int(grid_thw[i, 2])
+        n = t * h * w
+        tokens = image_embeds[offset : offset + n]
+        k = max(1, n // ratio)
+
+        if importance_list is not None and i < len(importance_list) and importance_list[i] is not None:
+            imp = importance_list[i].to(tokens.device)
+            if imp.shape[0] != n:
+                imp = F.interpolate(imp.unsqueeze(0).unsqueeze(0).float(), size=n, mode="linear", align_corners=False).squeeze()
+        else:
+            imp = tokens.norm(dim=-1)
+
+        _, topk_idx = imp.topk(k)
+        keep_mask = torch.zeros(n, dtype=torch.bool, device=tokens.device)
+        keep_mask[topk_idx] = True
+
+        kept = tokens[keep_mask].clone()
+        pruned = tokens[~keep_mask]
+
+        if pruned.shape[0] > 0 and kept.shape[0] > 0:
             sim = torch.mm(F.normalize(pruned, dim=-1), F.normalize(kept, dim=-1).t())
             assignments = sim.argmax(dim=-1)
             for j in range(k):
