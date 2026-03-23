@@ -1,10 +1,10 @@
-# CRP attention-guided token selection, 16x compression
-# Run: python scripts/train_lora.py --config configs/crp_c16.yaml
+# CRP attention-guided token selection, 2x compression
+# Run: python scripts/train_lora.py --config configs/crp_c2.yaml
 base_config: gb200.yaml
-experiment: crp_c16
+experiment: crp_c2
 batch_size: 4
 compress_method: crp
-compress_ratio: 16
+compress_ratio: 2
 learning_rate: 2e-4
 val_every: 200
 val_batches: 50
