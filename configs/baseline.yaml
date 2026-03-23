@@ -1,6 +1,6 @@
 # Baseline: no compression, full visual tokens
 # Run: python scripts/train_lora.py --config configs/baseline.yaml
-base_config: gh200.yaml
+base_config: gb200.yaml
 experiment: baseline
 compress_method: none
 compress_ratio: 1

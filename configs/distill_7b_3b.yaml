@@ -26,7 +26,7 @@ dtype: "bfloat16"
 
 # Training
 learning_rate: 2e-4
-batch_size: 4
+batch_size: 12
 grad_accum_steps: 1
 num_epochs: 1
 max_length: 2048

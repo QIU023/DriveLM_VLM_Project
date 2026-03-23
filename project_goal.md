@@ -8,23 +8,21 @@
 
 | 阶段 | 状态 | 设备 | 说明 |
 |------|------|------|------|
-| Layer 1: LoRA 微调 | **Epoch 1 完成** (ckpt-46000) | GH200 | baseline LoRA |
-| Layer 2: Visual Token 压缩 | **3/4 完成** | GH200 | fastervlm ✅, prumerge ✅, pyramiddrop ✅, avg_pool 待跑 |
+| Layer 1: LoRA 微调 | **✅ Epoch 1 完成** (ckpt-46000) | B200 | baseline LoRA |
+| Layer 2: Visual Token 压缩 | **✅ 4/4 完成** | B200 | fastervlm ✅, prumerge ✅, pyramiddrop ✅, avg_pool ❌(跳过) |
+| **SATS 方向 2: CRP 压缩** | **🔄 进行中** | **B200** | precompute 28%→训练队列中 (crp_c4/c8/c16/merge) |
+| **SATS 方向 2.5: RRD 蒸馏** | **🔄 待启动** | **B200** | 等 precompute 完成后自动启动 7B→3B 在线蒸馏 |
 | **Layer 3: 本地推理/部署** | **✅ 全链路完成** | **4070Ti** | 4 个 LoRA merge→GGUF Q4_K_M→llama.cpp benchmark |
-| Layer 4: Benchmark 报告 | **部分完成** | 两者 | LLM throughput ✅, visual compression benchmark 待跑 (GH200) |
+| Layer 4: Benchmark 报告 | **部分完成** | 两者 | LLM throughput ✅, CRP/RRD benchmark 待跑 |
 
 ---
 
-## Layer 1: LoRA 微调 (GH200) — Epoch 1 Done
+## Layer 1: LoRA 微调 (B200) — Epoch 1 Done
 
 **已完成：**
 - Qwen2.5-VL-3B + LoRA (r=16, alpha=32) 在 DriveLM v1.1 上完成第一轮训练
 - checkpoint-46000 已保存，可用于推理
 - 训练配置：bf16, bs=4, grad_accum=2, lr=1e-4, max_seq=2048
-
-**进行中：**
-- GH200 继续跑后续 epoch，等待 loss 收敛 / 更好的 checkpoint
-- 后续拿到 best ckpt 后直接替换到 Layer 3 链路中重新评测
 
 ---
 
@@ -105,6 +103,51 @@ bash configs/run_all.sh                                           # 顺序跑全
 - 所有实验 1 epoch，lr=2e-4，每 200 步验证
 - Checkpoint 按实验名保存到 `checkpoints_qwen25/{experiment}/`
 - 面试话术："高分辨率输入下视觉 token 可达上千个，LLM prefill 和 KV cache 线性增长。我探索了几种 token 压缩策略，在精度损失 X% 的情况下把推理延迟降了 Y%。"
+
+---
+
+## SATS 方向 2: CRP Attention-Guided Token 压缩 — 🔄 进行中
+
+> 用 ViT self-attention (fullatt layers [7,15,23,31]) + DriveLM 对象坐标 → CRP importance → top-k token selection/merge
+> 替代 FasterVLM/PruMerge/PyramidDrop 的启发式规则，加入 region-aware 语义信息
+
+**环境修复 (2026-03-23)：**
+- transformers 5.3.0 ViT attention 签名变更 (`position_embeddings=(cos,sin)` 替代 `rotary_pos_emb`)
+- monkey-patch 已更新兼容新 API
+- 设备：NVIDIA B200（取代 GH200），conda env: `main` at `/venv/main`
+
+**实验矩阵 (`tmux: crp_train`)**：
+
+| 方法 | 4× (120 tok) | 8× (60 tok) | 16× (30 tok) | 状态 |
+|------|:-----------:|:-----------:|:------------:|------|
+| FasterVLM (已有) | 56.9% | — | 54.3% | ✅ |
+| PruMerge (已有) | 57.4% | — | — | ✅ |
+| PyramidDrop (已有) | 57.3% | — | — | ✅ |
+| **CRP prune** | ? | ? | ? | 🔄 队列中 |
+| **CRP merge+prune** | ? | — | — | 🔄 队列中 |
+
+**前置步骤：** precompute_crp_data.py — 4072 张图，~30min (`tmux: crp_precompute`, 28%进行中)
+
+---
+
+## SATS 方向 2.5: Region-Aware Relation Distillation (7B→3B) — 🔄 待启动
+
+> 在 LLM decoder 的 visual token attention sub-matrix 上做 CRP，O(N²) → O(C²) region relation
+> 7B teacher (frozen) + 3B student (LoRA) **在线蒸馏**，Loss = L_ce + λ_kd·L_kd + λ_rrd·L_rrd
+
+**实现状态：**
+- `scripts/train_distill.py` — 在线蒸馏主脚本 ✅
+- `scripts/region_relation_loss.py` — RRD loss (CRP region pooling) ✅
+- `configs/distill_7b_3b.yaml` — teacher/student/layer_map 配置 ✅
+- CRP patch labels 接线修复 (2026-03-23) ✅
+
+**实验矩阵 (`tmux: sats_distill`)**：
+
+| 方法 | DriveLM Acc | 状态 |
+|------|:-----------:|------|
+| 3B LoRA baseline | 56.7% | ✅ |
+| 3B + output KD from 7B | ? | 🔄 队列中 |
+| **3B + RRD (ours, CRP region-level)** | ? | 🔄 队列中 |
 
 ---
 

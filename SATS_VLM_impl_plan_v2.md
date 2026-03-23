@@ -452,66 +452,55 @@ CoIN/MLLM-CL 完整实验需 16x A100 + 大量 benchmark 适配工作。
 
 ---
 
-## 执行计划 (GH200 96GB, 4 天)
+## 执行状态 (B200, 2026-03-23)
 
-### 显存优势
+### 环境
 
-GH200 96GB 的核心改变: **方向 2.5 可以在线蒸馏**, 7B teacher + 3B student
-同时在显存中, 不需要离线存 teacher attention 再读取。省去大量 I/O 和存储。
+- **GPU**: NVIDIA B200（取代原计划 GH200 96GB）
+- **Conda env**: `main` at `/venv/main` (torch 2.10.0+cu130, transformers 5.3.0, peft 0.18.1)
+- **数据**: 359,057 QA pairs, 4,072 unique CAM_FRONT 图
 
-| 操作 | 显存占用 | GH200 耗时 |
-|------|---------|-----------|
-| 7B bf16 加载 | ~15GB | - |
-| 3B bf16 + LoRA 加载 | ~7GB | - |
-| 双模型同时推理 + 梯度 | ~45-55GB | 够用 |
-| ViT attention 提取 (DriveLM 全量) | 推理 only | ~1-2 小时 |
-| 方向 2 实验 (3 组压缩率 × 3 方法) | 推理 only | 每组 ~20min |
-| 方向 2.5 蒸馏训练 (1 epoch LoRA) | 双模型 forward | ~3-4 小时 |
+### 修复的关键问题
 
-### 日程
+| 问题 | 修复 |
+|------|------|
+| transformers 5.3.0 ViT attn 签名变更 | monkey-patch 支持 `position_embeddings=(cos,sin)` + `**kwargs` |
+| `precompute_crp_data.py` 只存 importance，未存 patch_labels | 新增 `crp_patch_labels.pt` 输出 |
+| `train_distill.py` 加载 crp_data 但 patch_labels_batch 永远 None | 改为从 `batch["image_names"]` 查表 |
+| `run_all_gb200.sh` 包含旧 Layer2 实验 | 精简为 precompute + crp_c4/c8/c16/merge + distill |
+| `distill_7b_3b.yaml` grad_accum=2 | 改为 1 |
+| 模型路径用 HuggingFace hub ID | 改为 `/root/models/` 本地路径 |
 
-```
-Day 1 上午: 环境搭建 + monkey-patch ViT attention forward
-           → 用 1 张图跑通 full pipeline forward, 确认所有 shape 正确
-Day 1 下午: 离线提取 ViT attention map + bbox→patch label 预计算
-           (批量跑 DriveLM 全量 keyframe, ~1-2h)
+### 当前运行状态
 
-Day 2 上午: CRP importance 实现 + token selection/merge 代码
-Day 2 下午: 方向 2 全部实验跑完 (4×/8×/16× 各方法对比 + 消融)
+| tmux session | 任务 | 状态 |
+|---|---|---|
+| `crp_precompute` | 全量 precompute (4072图) | 🔄 28%，~24min剩 |
+| `crp_train` | crp_c4 → c8 → c16 → merge_c4 | ⏳ 等 precompute |
+| `sats_distill` | 7B→3B 在线 RRD 蒸馏 | ⏳ 等 precompute |
 
-Day 3 上午: 方向 2.5 — 双模型在线蒸馏代码 (LLM visual attn 提取 + CRP loss)
-Day 3 下午: 方向 2.5 — 蒸馏训练 (~3-4h for 1 epoch)
+两个训练 session 都在 polling `crp_importance.pt` 条目数 ≥ 4000，precompute 完成后自动启动。
 
-Day 4 上午: 方向 2.5 消融实验 (CRP vs GlobalPool vs NoPool, layer map 对比)
-Day 4 下午: 汇总数字 → 更新简历 bullet → 面试叙事整理
-```
-
-### 瓶颈预判 & Workaround
-
-| 瓶颈 | 预计卡点 | 快速解法 |
-|------|---------|---------|
-| ViT flash attn 不输出 weights | Day 1 | monkey-patch attention forward, 手动算 `softmax(QK^T/√d)`, ~10 行 |
-| nuScenes 3D→2D bbox 坐标系变换 | Day 1 | 直接用 `nusc.get_box()` + devkit 的 `render_annotation` 内部逻辑抄过来 |
-| 7B/3B heads 不匹配 (28 vs 16) | Day 3 | 对 heads 维度 mean 后对齐 (C,C) relation matrix, 不做 per-head 对齐 |
-| 蒸馏 loss NaN | Day 3 | relation matrix 加 eps, 检查空 region 的 mask |
-| 方向 2 提升不明显 | Day 2 | 加 merge 模式 (同类 token 合并), 或 Attn-CRP 和 FasterVLM 组合 |
-
-### Day 1 验证清单 (最重要)
-
-用 **1 张 DriveLM 图** 跑通以下 pipeline, 确认 shape 全部正确:
+### Day 1 验证清单 — ✅ 全部通过 (2026-03-23)
 
 ```
-1. 图片 → processor → ViT forward → attention hook 拿到 (H, N, N)    ✓/✗
-2. sample_token → nuScenes bbox → 2D bbox → patch label (N,)         ✓/✗
-3. attention map + patch label → CRP → importance (N,)                ✓/✗
-4. importance → top-k selection → compressed tokens → LLM forward     ✓/✗
-5. 7B LLM forward → visual attn sub-matrix (heads, N_vis, N_vis)     ✓/✗
-6. 3B LLM forward → visual attn sub-matrix (heads, N_vis, N_vis)     ✓/✗
-7. 两个 sub-matrix + patch label → CRP → region relation (C, C)      ✓/✗
-8. MSE loss backward 无 NaN                                           ✓/✗
+1. 图片 → processor → ViT forward → attention hook 拿到 (H, N, N)    ✅
+2. DriveLM obj refs → patch label (N,)                               ✅ (用<cx,CAM_FRONT,x,y>替代nuScenes bbox)
+3. attention map + patch label → CRP → importance (N,)               ✅
+4. importance → top-k selection → compressed tokens                  ✅
+5. pool importance/labels 到 post-merger 分辨率                       ✅ (merge_size=2, amax pooling)
+6. train_distill hooks 拿 Q,K → visual attn sub-matrix               ✅
+7. region_relation_distill_loss backward 无 NaN                      ✅ (mini smoke test通过)
+8. precompute mini (472图, ~4min): importance ✅ patch_labels ✅       ✅
 ```
 
-全部通过后再批量跑, 避免浪费 GPU 时间在 debug 上。
+### 瓶颈实际遭遇
+
+| 瓶颈 | 实际情况 | 解法 |
+|------|---------|------|
+| ViT flash attn 不输出 weights | transformers 5.3.0 签名也变了 | 更新 monkey-patch，支持两个 API 版本 |
+| nuScenes bbox → patch label | DriveLM 已有 `<cx,x,y>` 坐标，不需要 nuScenes devkit | 直接用 text 中的对象坐标，更简单 |
+| 7B/3B heads 不匹配 | 7B: 28heads, 3B: 16heads | GQA expand + head mean → (C,C) relation |
 
 ---
 
