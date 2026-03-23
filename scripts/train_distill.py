@@ -45,7 +45,12 @@ def get_base_model(model):
 def get_llm_layers(model):
     """Get LLM decoder layers from a (possibly PEFT-wrapped) model."""
     base = get_base_model(model)
-    return base.model.layers
+    # transformers 5.x: model.language_model.layers
+    # transformers 4.x: model.layers
+    m = base.model
+    if hasattr(m, "language_model"):
+        return m.language_model.layers
+    return m.layers
 
 
 def kl_div_loss(student_logits, teacher_logits, temperature=2.0, labels=None):
@@ -141,7 +146,7 @@ def main():
     for p in teacher.parameters():
         p.requires_grad = False
 
-    t_cfg = teacher.config
+    t_cfg = getattr(teacher.config, "text_config", teacher.config)
     teacher_attn_cfg = {
         "num_attention_heads": t_cfg.num_attention_heads,
         "num_key_value_heads": t_cfg.num_key_value_heads,
@@ -174,7 +179,7 @@ def main():
     student = get_peft_model(student, lora_config)
     student.print_trainable_parameters()
 
-    s_cfg = get_base_model(student).config
+    s_cfg = getattr(get_base_model(student).config, "text_config", get_base_model(student).config)
     student_attn_cfg = {
         "num_attention_heads": s_cfg.num_attention_heads,
         "num_key_value_heads": s_cfg.num_key_value_heads,
@@ -290,9 +295,11 @@ def main():
                 epoch_losses["total"] += batch_total
                 epoch_count += 1
 
-                # Clear hook stores
+                # Explicit cleanup to prevent gradual memory accumulation
+                del t_out, s_out, L_ce, L_kd, L_rrd, loss
                 teacher_store.clear()
                 student_store.clear()
+                torch.cuda.empty_cache()
 
             except RuntimeError as e:
                 if "out of memory" in str(e):
