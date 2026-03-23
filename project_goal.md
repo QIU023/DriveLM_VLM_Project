@@ -28,111 +28,56 @@
 
 ---
 
-## Layer 3: 4070Ti 本地量化部署全链路 — 当前任务
+## Layer 3: 4070Ti 本地量化部署全链路 — ✅ 完成
 
-> **原则：本地不跑 raw torch 推理，所有推理/评测通过推理框架完成。**
-> 目标：4 个 LoRA (baseline / fastervlm / prumerge / pyramiddrop) 合并 → GGUF Q4_K_M 量化 → llama.cpp 部署 → throughput 测试。
-> 精度评测在 GH200 上完成，4070Ti 只测性能。后续有更好的 ckpt 只需替换路径重跑。
+> 4 个 LoRA → merge → GGUF Q4_K_M 量化 → llama.cpp 部署 → throughput benchmark，全链路跑通。
 
-### Step 3.1: LoRA 合并 & 模型导出 — 脚本就绪
+### Step 3.1: LoRA 合并 — ✅ Done
 
-三个 LoRA → 三个完整模型：
+```bash
+python scripts/batch_merge.py \
+    baseline=checkpoints/baseline/checkpoint-46000 \
+    fastervlm=checkpoints/fastervlm/final \
+    prumerge=checkpoints/prumerge/final \
+    pyramiddrop=checkpoints/pyramiddrop/final
+```
 
-| LoRA | 来源 | 合并后目录 | 状态 |
+| LoRA | 来源 | 合并后目录 | 大小 |
 |------|------|-----------|------|
-| baseline | `checkpoints_qwen25/checkpoint-46000` | `models/qwen25vl-3b-drivelm-baseline-merged/` | ✅ 已合并 (已有 `models/qwen25vl-3b-drivelm-merged/`) |
-| fastervlm_c4 | `checkpoints_qwen25/fastervlm_c4/checkpoint-XXX` | `models/qwen25vl-3b-drivelm-fastervlm_c4-merged/` | 待合并 |
-| prumerge_c4 | `checkpoints_qwen25/prumerge_c4/checkpoint-XXX` | `models/qwen25vl-3b-drivelm-prumerge_c4-merged/` | 待合并 |
+| baseline | `checkpoints/baseline/checkpoint-46000` | `models/qwen25vl-3b-drivelm-baseline-merged/` | 6.99 GB |
+| fastervlm | `checkpoints/fastervlm/final` | `models/qwen25vl-3b-drivelm-fastervlm-merged/` | 6.99 GB |
+| prumerge | `checkpoints/prumerge/final` | `models/qwen25vl-3b-drivelm-prumerge-merged/` | 6.99 GB |
+| pyramiddrop | `checkpoints/pyramiddrop/final` | `models/qwen25vl-3b-drivelm-pyramiddrop-merged/` | 6.99 GB |
+
+### Step 3.2: GGUF Q4_K_M 量化 — ✅ Done
 
 ```bash
-# 方案 A: 在 GH200 上合并（ckpt 在那边），再 SCP merged 模型到本地
-python scripts/batch_merge.py \
-    baseline=checkpoints_qwen25/checkpoint-46000 \
-    fastervlm_c4=checkpoints_qwen25/fastervlm_c4/checkpoint-XXX \
-    prumerge_c4=checkpoints_qwen25/prumerge_c4/checkpoint-XXX
-
-# 方案 B: 只 SCP LoRA ckpt (~50MB each) 到本地，本地 CPU 合并
-scp -r ubuntu@gh200:~/DriveLM/checkpoints_qwen25/fastervlm_c4/checkpoint-XXX checkpoints_qwen25/fastervlm_c4/
-scp -r ubuntu@gh200:~/DriveLM/checkpoints_qwen25/prumerge_c4/checkpoint-XXX checkpoints_qwen25/prumerge_c4/
-python scripts/batch_merge.py \
-    fastervlm_c4=checkpoints_qwen25/fastervlm_c4/checkpoint-XXX \
-    prumerge_c4=checkpoints_qwen25/prumerge_c4/checkpoint-XXX
-# baseline 已有，会自动跳过
+# HF → GGUF F16 → Q4_K_M (llama.cpp convert + quantize)
+python llama.cpp/convert_hf_to_gguf.py models/qwen25vl-3b-drivelm-baseline-merged --outtype f16 --outfile ...
+llama.cpp/bin/llama-quantize.exe ...-f16.gguf ...-q4km.gguf Q4_K_M
 ```
 
-### Step 3.2: 量化导出（AWQ / GPTQ / GGUF）— 脚本就绪
+| 模型 | GGUF 文件 | 大小 | BPW |
+|------|----------|------|:---:|
+| baseline | `models/qwen25vl-3b-drivelm-baseline-gguf/baseline-q4km.gguf` | 1.8 GB | 4.99 |
+| fastervlm | `models/qwen25vl-3b-drivelm-fastervlm-gguf/fastervlm-q4km.gguf` | 1.8 GB | 4.99 |
+| prumerge | `models/qwen25vl-3b-drivelm-prumerge-gguf/prumerge-q4km.gguf` | 1.8 GB | 4.99 |
+| pyramiddrop | `models/qwen25vl-3b-drivelm-pyramiddrop-gguf/pyramiddrop-q4km.gguf` | 1.8 GB | 4.99 |
+
+> AWQ/GPTQ 跳过 — autoawq 已 deprecated，auto-gptq 不兼容 transformers 5.x。GGUF 是 Windows 原生最优路线。
+
+### Step 3.3: llama.cpp 部署 + Benchmark — ✅ Done
 
 ```bash
-# 单个模型量化
-python scripts/quantize_model.py awq  --input models/qwen25vl-3b-drivelm-baseline-merged
-python scripts/quantize_model.py gptq --input models/qwen25vl-3b-drivelm-baseline-merged
-python scripts/quantize_model.py gguf --input models/qwen25vl-3b-drivelm-baseline-merged
+# 启动 server (CUDA, 全部 offload 到 GPU)
+llama.cpp/bin/llama-server.exe -m models/.../baseline-q4km.gguf --port 8080 -ngl 99 -c 2048
 
-# 批量量化: 3 模型 × 3 格式 = 9 个量化模型
-bash scripts/batch_quantize.sh          # 全部
-bash scripts/batch_quantize.sh awq      # 只做 AWQ
-bash scripts/batch_quantize.sh baseline # 只做 baseline 的 3 种格式
+# 跑 benchmark
+python scripts/benchmark_throughput.py --api-base http://localhost:8080/v1 \
+    --model baseline-q4km --concurrency 1,2,4 --num-requests 20 --no-image --max-tokens 128
 ```
 
-依赖安装:
-```bash
-pip install autoawq       # AWQ
-pip install auto-gptq     # GPTQ
-pip install gguf           # GGUF (还需 llama.cpp 源码)
-```
-
-输出目录: `models/qwen25vl-3b-drivelm-{name}-{awq,gptq,gguf}/`
-
-### Step 3.3: 推理框架部署
-
-```bash
-# vLLM (需 WSL2/Linux, Windows 不支持)
-python -m vllm.entrypoints.openai.api_server \
-    --model models/qwen25vl-3b-drivelm-baseline-awq --port 8000
-
-# llama.cpp (Windows 原生支持)
-llama-server -m models/qwen25vl-3b-drivelm-baseline-gguf/model-q4_k_m.gguf \
-    --port 8000
-
-# Ollama (Windows 原生, 最简单)
-ollama serve   # port 11434
-```
-
-| 框架 | 平台 | 模型格式 | 多模态 | 备注 |
-|------|------|---------|--------|------|
-| vLLM | WSL2/Linux | AWQ/GPTQ | ✅ 原生支持 | PagedAttention, continuous batching |
-| llama.cpp | Windows | GGUF | ✅ 需 mmproj | 轻量, CPU offload 可选 |
-| Ollama | Windows | GGUF | ✅ | 一键部署, 最简单 |
-
-### Step 3.4: Throughput Benchmark — 脚本就绪
-
-```bash
-# 启动 server 后运行 benchmark
-python scripts/benchmark_throughput.py \
-    --api-base http://localhost:8000/v1 \
-    --model qwen25vl-3b-drivelm-baseline-awq \
-    --concurrency 1,2,4 \
-    --num-requests 20 \
-    --image-dir data/nuscenes/samples/CAM_FRONT
-
-# Text-only 模式 (无图片)
-python scripts/benchmark_throughput.py \
-    --api-base http://localhost:8000/v1 \
-    --model MODEL --no-image
-
-# Ollama
-python scripts/benchmark_throughput.py \
-    --api-base http://localhost:11434/v1 \
-    --model MODEL
-```
-
-测量指标: TTFT (ms), Tokens/s, 端到端延迟, GPU 显存, 并发 throughput (P50/P95)
-
-### Step 3.5: TensorRT-LLM（时间允许）
-
-- [ ] 导出量化模型到 TensorRT-LLM engine
-- [ ] kernel fusion + INT4/FP8 进一步优化
-- [ ] 对比 vLLM vs TRT-LLM vs llama.cpp 全维度 benchmark
+结果见 Layer 4 Benchmark 报告。
 
 ---
 
@@ -195,31 +140,33 @@ bash configs/run_all.sh                                           # 顺序跑全
 - 显存占用: ~4.9-5.3GB (模型 1.8GB + KV cache + compute buffer)，12GB 卡还剩 ~7GB
 - **Token 压缩的加速效果不体现在此测试中** — GGUF 只包含 LLM backbone，text-only benchmark 不经过 vision encoder。真正的压缩收益需在 GH200 上用 `benchmark_visual_compression.py` 带图片测 prefill 时间
 
-### 待完成: Visual Token 压缩 Latency 对比 (GH200, bf16, 带图片)
+### ✅ Visual Token 压缩 TTFT 对比 (GH200, bf16, 30 image samples)
 
-> 此 benchmark 测量 token 压缩的真正收益：fewer visual tokens → faster prefill → lower TTFT
-> 脚本: `scripts/benchmark_visual_compression.py`
+> 测量 token 压缩的真正收益：fewer visual tokens → faster prefill → lower TTFT
 
-```bash
-# 在 GH200 上运行
-python scripts/benchmark_visual_compression.py \
-    --config configs/gh200.yaml \
-    --experiments \
-        baseline=checkpoints/baseline/checkpoint-46000 \
-        fastervlm=checkpoints/fastervlm/final:fastervlm:4 \
-        prumerge=checkpoints/prumerge/final:prumerge:4 \
-        pyramiddrop=checkpoints/pyramiddrop/final:pyramiddrop:4 \
-    --n 30 --max-tokens 128
-```
+| 模型 | Visual Tokens | Vision P50 (ms) | Compress (ms) | Prefill P50 (ms) | **TTFT P50 (ms)** | GPU (GB) |
+|------|:------------:|:---------------:|:-------------:|:----------------:|:-----------------:|:--------:|
+| baseline | 480→480 | 107 | 0 | 98 | **205** | 7.28 |
+| **FasterVLM** | 480→120 | 106 | 1 | 98 | **205** | 7.28 |
+| PruMerge | 480→120 | 107 | **125** | 99 | **327** | 7.28 |
+| PyramidDrop | 480→120 | 110 | 1 | 101 | **211** | 7.28 |
 
-| 模型 | Visual Tokens | Compression | Input Tokens | Vision (ms) | Compress (ms) | Generate (ms) | Total (ms) | Speedup | GPU (GB) |
-|------|:------------:|:-----------:|:------------:|:-----------:|:-------------:|:-------------:|:----------:|:-------:|:--------:|
-| baseline | N→N | 1x | — | — | 0 | — | — | 1.00x | — |
-| fastervlm | N→N/4 | 4x | — | — | — | — | — | —x | — |
-| prumerge | N→N/4 | 4x | — | — | — | — | — | —x | — |
-| pyramiddrop | N→N/4 | 4x | — | — | — | — | — | —x | — |
+### ✅ 精度评测 (GH200, full val set N=18,898)
 
-> 跑完后填入数据。预期：4x compression → Generate 时间下降 40-60%（prefill 占比），Total 延迟下降 30-50%
+| 方法 | 压缩比 | Visual Tokens | **Accuracy** | behavior | perception | planning | prediction |
+|------|:------:|:------------:|:------------:|:--------:|:----------:|:--------:|:----------:|
+| Baseline | 1x | 480 | 56.7% | 44.9% | 47.3% | 48.7% | 74.6% |
+| **FasterVLM** | 4x | 120 | 56.9% | 44.4% | 48.0% | 48.7% | 74.4% |
+| **PruMerge** | 4x | 120 | **57.4%** | **51.9%** | 48.4% | **49.3%** | **74.8%** |
+| **PyramidDrop** | 4x | 120 | 57.3% | 48.1% | **48.5%** | 49.1% | 74.6% |
+
+**关键发现:**
+
+- **4x 压缩精度不降反升** — 三种方法均超过 baseline，PruMerge 最优 (+0.7%)
+- **FasterVLM / PyramidDrop 压缩开销极低** (~1ms)，TTFT 与 baseline 持平
+- **PruMerge 精度最高但压缩开销大** (125ms)，TTFT 反而增加 60%，存在 accuracy-latency tradeoff
+- 当前分辨率下 visual tokens 仅 480 个，prefill 已经很快 (~98ms)。**更高分辨率 (1000+ tokens) 下压缩收益会更显著**
+- FasterVLM 极端压缩 16x (480→30 tokens) 只掉 2.4% 精度，说明 DriveLM 视觉信息高度冗余
 
 ---
 
