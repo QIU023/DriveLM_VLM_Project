@@ -4,9 +4,9 @@ import os
 import random
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(BASE_DIR, "data")
-QA_JSON = os.path.join(DATA_DIR, "QA_dataset_nus/v1_1_train_nus.json")
-IMAGE_ROOT = os.path.join(DATA_DIR, "nuscenes/samples")
+DATASET_ROOT = "/root/datasets/DriveLM"
+QA_JSON = os.path.join(DATASET_ROOT, "v1_1_train_nus.json")
+IMAGE_ROOT = os.path.join(DATASET_ROOT, "nuscenes/samples")
 OUTPUT_DIR = os.path.join(BASE_DIR, "data_processed")
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -29,18 +29,13 @@ for scene_token, scene in data.items():
 
         # Convert relative path to absolute
         # Relative path looks like: ../nuscenes/samples/CAM_FRONT/xxx.jpg
-        cam_front_abs = os.path.normpath(
-            os.path.join(DATA_DIR, "QA_dataset_nus", cam_front_rel)
-        )
-        # Verify it exists
+        parts = cam_front_rel.replace("\\", "/").split("/")
+        cam_dir = parts[-2] if len(parts) >= 2 else "CAM_FRONT"
+        filename = parts[-1]
+        cam_front_abs = os.path.join(IMAGE_ROOT, cam_dir, filename)
         if not os.path.exists(cam_front_abs):
-            # Try alternative path resolution
-            filename = os.path.basename(cam_front_rel)
-            cam_dir = cam_front_rel.split("/")[-2] if "/" in cam_front_rel else "CAM_FRONT"
-            cam_front_abs = os.path.join(IMAGE_ROOT, cam_dir, filename)
-            if not os.path.exists(cam_front_abs):
-                skipped += 1
-                continue
+            skipped += 1
+            continue
 
         qa_data = frame.get("QA", {})
         for category in ["perception", "prediction", "planning", "behavior"]:

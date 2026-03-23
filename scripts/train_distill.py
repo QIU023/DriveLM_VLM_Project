@@ -191,14 +191,16 @@ def main():
     t_hooks = register_qk_hooks(teacher, teacher_layers, teacher_store, detach=True)
     s_hooks = register_qk_hooks(student, student_layers, student_store, detach=False)
 
-    # ============ Load CRP patch labels (optional) ============
-    crp_data = None
+    # ============ Load CRP patch labels (for region-aware distillation) ============
+    crp_patch_labels = None
     crp_path = cfg.get("crp_importance_path")
     if crp_path:
-        full_path = crp_path if os.path.isabs(crp_path) else os.path.join(_BASE_DIR, crp_path)
-        if os.path.exists(full_path):
-            crp_data = torch.load(full_path, weights_only=True)
-            print(f"Loaded CRP data for {len(crp_data)} images")
+        # Derive patch_labels path from importance path
+        base_dir = crp_path if os.path.isabs(crp_path) else os.path.join(_BASE_DIR, crp_path)
+        labels_path = os.path.join(os.path.dirname(base_dir), "crp_patch_labels.pt")
+        if os.path.exists(labels_path):
+            crp_patch_labels = torch.load(labels_path, weights_only=True)
+            print(f"Loaded CRP patch labels for {len(crp_patch_labels)} images")
 
     # ============ Data ============
     data_dir = os.path.join(_BASE_DIR, "data_processed")
@@ -244,6 +246,7 @@ def main():
             device = next(student.parameters()).device
             batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v
                      for k, v in batch.items()}
+            image_names_step = batch.pop("image_names", [])
 
             try:
                 # Teacher forward (no grad)
@@ -260,8 +263,15 @@ def main():
                 L_kd = kl_div_loss(s_out.logits, t_out.logits, kd_temp, batch.get("labels"))
 
                 # L_rrd: region relation distillation
-                # Build patch_labels_batch from image_names (if available)
-                patch_labels_batch = [None] * batch["input_ids"].shape[0]
+                # Build patch_labels_batch from precomputed labels
+                image_names = image_names_step
+                if crp_patch_labels is not None and image_names:
+                    patch_labels_batch = [
+                        crp_patch_labels.get(n).to(device) if crp_patch_labels.get(n) is not None else None
+                        for n in image_names
+                    ]
+                else:
+                    patch_labels_batch = [None] * batch["input_ids"].shape[0]
 
                 L_rrd = region_relation_distill_loss(
                     teacher_store, student_store,
