@@ -18,7 +18,7 @@ dtype: "bfloat16"
 
 # Training
 learning_rate: 2e-4
-batch_size: 16
+batch_size: 8
 grad_accum_steps: 1
 num_epochs: 1
 max_length: 2048
@@ -30,8 +30,8 @@ min_pixels: 200704        # 256 * 28 * 28
 max_pixels: 401408        # 512 * 28 * 28
 
 # Distillation losses
-lambda_kd: 1.0
-lambda_rrd: 0.5
+lambda_kd: 0.5
+lambda_rrd: 12.5
 kd_temperature: 2.0
 
 # Layer mapping: uniform 25/50/75/100%

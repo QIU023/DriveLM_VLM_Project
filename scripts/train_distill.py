@@ -307,10 +307,13 @@ def main():
                 loss = (L_ce + lambda_kd * L_kd + lambda_rrd * L_rrd) / grad_accum
                 loss.backward()
 
-                batch_total = L_ce.item() + lambda_kd * L_kd.item() + lambda_rrd * L_rrd.item()
-                epoch_losses["ce"] += L_ce.item()
-                epoch_losses["kd"] += L_kd.item()
-                epoch_losses["rrd"] += L_rrd.item()
+                batch_ce = L_ce.item()
+                batch_kd = lambda_kd * L_kd.item()
+                batch_rrd = lambda_rrd * L_rrd.item()
+                batch_total = batch_ce + batch_kd + batch_rrd
+                epoch_losses["ce"] += batch_ce
+                epoch_losses["kd"] += batch_kd
+                epoch_losses["rrd"] += batch_rrd
                 epoch_losses["total"] += batch_total
                 epoch_count += 1
 
@@ -333,8 +336,11 @@ def main():
             avg = {k: v / epoch_count for k, v in epoch_losses.items()}
             gpu_mem = torch.cuda.memory_allocated() / 1024**3
             pbar.set_postfix_str(
-                f"ce={avg['ce']:.3f} kd={avg['kd']:.3f} rrd={avg['rrd']:.6f} "
-                f"total={avg['total']:.3f} GPU={gpu_mem:.1f}GB"
+                f"ce={batch_ce:.3f}/{avg['ce']:.3f} "
+                f"kd={batch_kd:.3f}/{avg['kd']:.3f} "
+                f"rrd={batch_rrd:.3f}/{avg['rrd']:.3f} "
+                f"total={batch_total:.3f}/{avg['total']:.3f} "
+                f"GPU={gpu_mem:.1f}GB"
             )
 
             if (step + 1) % grad_accum == 0:
