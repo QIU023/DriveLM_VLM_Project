@@ -16,8 +16,8 @@ teacher_quantize: true    # 4-bit teacher to save VRAM (~18GB vs 64GB)
 dtype: "bfloat16"
 
 learning_rate: 2e-4
-batch_size: 4
-grad_accum_steps: 2
+batch_size: 16
+grad_accum_steps: 1
 num_epochs: 1
 max_length: 2048
 num_workers: 8
