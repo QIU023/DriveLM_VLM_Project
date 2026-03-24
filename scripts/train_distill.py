@@ -23,6 +23,7 @@ from transformers import (
     AutoProcessor,
     get_cosine_schedule_with_warmup,
 )
+from transformers import BitsAndBytesConfig
 from peft import LoraConfig, get_peft_model, PeftModel
 from tqdm import tqdm
 
@@ -141,9 +142,21 @@ def main():
     print(f"Layer map: {layer_map}")
 
     # ============ Load teacher ============
-    print("\nLoading teacher (7B)...")
+    teacher_quant = cfg.get("teacher_quantize", False)
+    teacher_load_kwargs = {"device_map": "auto"}
+    if teacher_quant:
+        print(f"\nLoading teacher with 4-bit quantization...")
+        teacher_load_kwargs["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=compute_dtype,
+        )
+    else:
+        print(f"\nLoading teacher in {dtype_str}...")
+        teacher_load_kwargs["torch_dtype"] = compute_dtype
     teacher = AutoModelForImageTextToText.from_pretrained(
-        teacher_model_id, torch_dtype=compute_dtype, device_map="auto"
+        teacher_model_id, **teacher_load_kwargs
     )
     if teacher_lora:
         print(f"  Loading teacher LoRA: {teacher_lora}")
