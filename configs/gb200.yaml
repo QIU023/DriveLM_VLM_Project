@@ -22,8 +22,8 @@ quantize: false
 # Training
 dtype: "bfloat16"
 learning_rate: 1e-4
-batch_size: 8
-grad_accum_steps: 1       # effective batch = 16
+batch_size: 4
+grad_accum_steps: 2       # effective batch = 16
 num_epochs: 1
 max_length: 2048
 num_workers: 8

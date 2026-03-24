@@ -1,0 +1,41 @@
+# Baseline: LLaVA-KD style RDist (full O(N²) token relation distillation)
+# 7B→3B, logit KD + full visual attention KL (no region pooling)
+# Run: python scripts/train_distill.py --config configs/distill_rdist.yaml
+
+teacher_model_id: "/root/models/Qwen2.5-VL-32B-Instruct"
+student_model_id: "/root/models/Qwen2.5-VL-3B-Instruct"
+teacher_lora: null
+
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+lora_target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+
+quantize: false
+dtype: "bfloat16"
+
+learning_rate: 2e-4
+batch_size: 4
+grad_accum_steps: 2
+num_epochs: 1
+max_length: 2048
+num_workers: 8
+save_every: 2000
+
+min_pixels: 200704
+max_pixels: 401408
+
+# KD + full RDist (no patch labels → O(N²) fallback)
+lambda_kd: 1.0
+lambda_rrd: 0.5
+kd_temperature: 2.0
+
+teacher_layers: [15, 31, 47, 63]
+student_layers: [8, 17, 26, 35]
+
+# No CRP labels → forces full token-pair relation distillation
+crp_importance_path: null
+
+experiment: distill_rdist
+val_every: 200
+val_batches: 50

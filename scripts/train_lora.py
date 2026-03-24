@@ -356,6 +356,7 @@ def main():
     parser.add_argument("--experiment", type=str, default=None, help="Override experiment name")
     parser.add_argument("--val-every", type=int, default=None, help="Validate every N opt steps")
     parser.add_argument("--val-batches", type=int, default=None, help="Number of val batches")
+    parser.add_argument("--resume", type=str, default=None, help="Resume from checkpoint dir (e.g. checkpoints_qwen25/crp_c8/checkpoint-66000)")
     args = parser.parse_args()
 
     # ============ Load config ============
@@ -440,7 +441,14 @@ def main():
         bias="none",
         task_type="CAUSAL_LM",
     )
-    model = get_peft_model(model, lora_config)
+    if args.resume:
+        # Resume: load LoRA weights from checkpoint instead of init new
+        resume_path = args.resume if os.path.isabs(args.resume) else os.path.join(_BASE_DIR, args.resume)
+        from peft import PeftModel
+        model = PeftModel.from_pretrained(model, resume_path, is_trainable=True)
+        print(f"Resumed LoRA from {resume_path}")
+    else:
+        model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
 
     # Image token id for compression
@@ -503,6 +511,24 @@ def main():
         num_training_steps=total_steps,
     )
 
+    # ============ Resume training state ============
+    resume_step = 0
+    resume_epoch = 0
+    if args.resume:
+        state_path = os.path.join(
+            args.resume if os.path.isabs(args.resume) else os.path.join(_BASE_DIR, args.resume),
+            "training_state.pt"
+        )
+        if os.path.exists(state_path):
+            state = torch.load(state_path, weights_only=True)
+            optimizer.load_state_dict(state["optimizer"])
+            scheduler.load_state_dict(state["scheduler"])
+            resume_step = state["global_step"]
+            resume_epoch = state.get("epoch", 0)
+            print(f"Resumed optimizer/scheduler from step {resume_step}, epoch {resume_epoch}")
+        else:
+            print(f"[WARN] No training_state.pt found, resuming LoRA weights only (optimizer reset)")
+
     # ============ Optional wandb ============
     if args.wandb:
         import wandb
@@ -517,10 +543,11 @@ def main():
     print(f"  Compression: {compress_method} ratio={compress_ratio}")
     print(f"{'='*60}\n")
     model.train()
-    global_step = 0
+    global_step = resume_step
     accum_loss = 0.0
+    skip_batches = resume_step * grad_accum if resume_step > 0 else 0
 
-    for epoch in range(num_epochs):
+    for epoch in range(resume_epoch, num_epochs):
         epoch_loss_sum = 0.0
         epoch_loss_count = 0
 
@@ -533,6 +560,13 @@ def main():
         )
 
         for step, batch in pbar:
+            # Skip already-trained batches on resume
+            if skip_batches > 0:
+                skip_batches -= 1
+                if skip_batches % 1000 == 0:
+                    pbar.set_postfix_str(f"skipping... {skip_batches} left")
+                continue
+
             batch = {k: v.to(model.device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
 
             try:
@@ -583,6 +617,14 @@ def main():
                 if global_step % save_every == 0:
                     save_path = os.path.join(output_dir, f"checkpoint-{global_step}")
                     model.save_pretrained(save_path)
+                    # Save training state for resume
+                    torch.save({
+                        "optimizer": optimizer.state_dict(),
+                        "scheduler": scheduler.state_dict(),
+                        "global_step": global_step,
+                        "epoch": epoch,
+                        "batch_idx": step,
+                    }, os.path.join(save_path, "training_state.pt"))
                     tqdm.write(f"  [SAVE] checkpoint-{global_step}")
 
                 # Validation
