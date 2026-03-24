@@ -320,7 +320,7 @@ def main():
             avg = {k: v / epoch_count for k, v in epoch_losses.items()}
             gpu_mem = torch.cuda.memory_allocated() / 1024**3
             pbar.set_postfix_str(
-                f"ce={avg['ce']:.3f} kd={avg['kd']:.3f} rrd={avg['rrd']:.3f} "
+                f"ce={avg['ce']:.3f} kd={avg['kd']:.3f} rrd={avg['rrd']:.6f} "
                 f"total={avg['total']:.3f} GPU={gpu_mem:.1f}GB"
             )
 
