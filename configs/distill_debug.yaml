@@ -21,6 +21,7 @@ lora_target_modules:
   - down_proj
 
 quantize: false
+teacher_quantize: true
 dtype: "bfloat16"
 
 # Minimal for debug

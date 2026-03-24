@@ -12,6 +12,7 @@ lora_dropout: 0.05
 lora_target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
 
 quantize: false
+teacher_quantize: true    # 4-bit teacher to save VRAM (~18GB vs 64GB)
 dtype: "bfloat16"
 
 learning_rate: 2e-4
