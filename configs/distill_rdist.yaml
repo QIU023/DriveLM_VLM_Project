@@ -21,13 +21,13 @@ grad_accum_steps: 1
 num_epochs: 1
 max_length: 2048
 num_workers: 8
-save_every: 2000
+save_every: 1000
 
 min_pixels: 200704
 max_pixels: 401408
 
-lambda_kd: 0.5
-lambda_rrd: 1.0
+lambda_kd: 1.0
+lambda_rrd: 0.5
 kd_temperature: 2.0
 
 teacher_layers: [15, 31, 47, 63]
