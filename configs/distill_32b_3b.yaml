@@ -18,20 +18,20 @@ dtype: "bfloat16"
 
 # Training
 learning_rate: 2e-4
-batch_size: 8
-grad_accum_steps: 1
+batch_size: 6
+grad_accum_steps: 2
 num_epochs: 1
 max_length: 2048
 num_workers: 8
-save_every: 2000
+save_every: 1000
 
 # Image resolution
 min_pixels: 200704        # 256 * 28 * 28
 max_pixels: 401408        # 512 * 28 * 28
 
 # Distillation losses
-lambda_kd: 0.5
-lambda_rrd: 12.5
+lambda_kd: 1.0
+lambda_rrd: 5.0           # 0.5 * ~10x to compensate C² vs N² dimensionality
 kd_temperature: 2.0
 
 # Layer mapping: uniform 25/50/75/100%

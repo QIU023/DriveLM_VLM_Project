@@ -1,7 +1,8 @@
 """Region-Aware Relation Distillation (RRD) loss for VLM knowledge distillation.
 
-Distills inter-region attention relationships from teacher to student using
-class-region pooling: compresses O(N^2) token relations to O(C^2) region relations.
+Distills inter-region attention relationships from teacher to student.
+- LLaVA-KD baseline (no labels): cosine similarity on O(N²) token self-correlation
+- SATS RRD (with labels): cosine similarity on O(C²) region relation matrix
 
 Used by train_distill.py.
 """
@@ -21,7 +22,7 @@ def compute_visual_attention(Q, K, vis_idx, num_heads, num_kv_heads, head_dim):
         num_heads, num_kv_heads, head_dim: attention config
 
     Returns:
-        attn: (B, N_vis, N_vis) head-averaged attention matrix
+        attn: (B, N_vis, N_vis) head-averaged attention matrix (softmax probs)
     """
     B = Q.shape[0]
     Q_vis = Q[:, vis_idx, :]  # (B, N_vis, H * D)
@@ -36,9 +37,8 @@ def compute_visual_attention(Q, K, vis_idx, num_heads, num_kv_heads, head_dim):
         K_vis = K_vis.repeat_interleave(num_heads // num_kv_heads, dim=1)
 
     logits = torch.matmul(Q_vis, K_vis.transpose(-1, -2)) / math.sqrt(head_dim)
-    # Return both logits and probs for flexible loss computation
     attn = logits.softmax(dim=-1)  # (B, H, N_vis, N_vis)
-    return attn.mean(dim=1), logits.mean(dim=1)  # (B, N_vis, N_vis) each
+    return attn.mean(dim=1)        # (B, N_vis, N_vis)
 
 
 def region_pooled_attention(vis_attn, patch_labels, num_classes):
@@ -68,16 +68,14 @@ def region_pooled_attention(vis_attn, patch_labels, num_classes):
     return R
 
 
-def _row_kl(s_mat, t_mat):
-    """Row-wise KL divergence: treat each row as a distribution.
+def _cosine_loss(R_s, R_t):
+    """Cosine similarity loss: 1 - cos(R_s, R_t). Range [0, 2].
 
-    Works for both (N_vis, N_vis) attention logits and (C, C) region matrices.
-    Adds small eps before log to avoid log(0) on sparse region matrices.
+    Following LLaVA-KD Eq.5: L_rel = 1 - Cos(R_v^s, R_v^t)
+    Flatten matrices to vectors for cosine similarity.
     """
-    eps = 1e-8
-    t_prob = F.softmax(t_mat, dim=-1)
-    s_log_prob = F.log_softmax(s_mat + eps, dim=-1)
-    return F.kl_div(s_log_prob, t_prob, reduction="batchmean")
+    return 1 - F.cosine_similarity(R_s.flatten().unsqueeze(0),
+                                    R_t.flatten().unsqueeze(0)).squeeze()
 
 
 def region_relation_distill_loss(teacher_store, student_store,
@@ -85,6 +83,10 @@ def region_relation_distill_loss(teacher_store, student_store,
                                   teacher_cfg, student_cfg,
                                   patch_labels_batch=None):
     """Compute RRD loss between teacher and student.
+
+    Both paths use cosine similarity (following LLaVA-KD):
+    - With patch_labels: O(C²) region-pooled relation matrix (SATS RRD)
+    - Without patch_labels: O(N²) full token attention matrix (LLaVA-KD RDist)
 
     Args:
         teacher_store: dict with keys 'q_{layer}', 'k_{layer}' (detached)
@@ -123,39 +125,29 @@ def region_relation_distill_loss(teacher_store, student_store,
                 continue
 
             # Compute visual attention per sample
-            t_attn, t_logits = compute_visual_attention(
+            t_attn = compute_visual_attention(
                 t_Q[b:b+1], t_K[b:b+1], vis_idx, t_heads, t_kv, t_dim
-            )
-            t_attn, t_logits = t_attn.squeeze(0), t_logits.squeeze(0)
+            ).squeeze(0)  # (N_vis, N_vis)
 
-            s_attn, s_logits = compute_visual_attention(
+            s_attn = compute_visual_attention(
                 s_Q[b:b+1], s_K[b:b+1], vis_idx, s_heads, s_kv, s_dim
-            )
-            s_attn, s_logits = s_attn.squeeze(0), s_logits.squeeze(0)
+            ).squeeze(0)
 
             if patch_labels_batch is not None and patch_labels_batch[b] is not None:
                 labels = patch_labels_batch[b]
                 labels = labels[:len(vis_idx)]
                 n_cls = int(labels.max().item())
                 if n_cls > 0:
-                    # SATS core: O(C²) region relation KL divergence
+                    # SATS: O(C²) region relation cosine similarity
                     R_t = region_pooled_attention(t_attn.detach(), labels, n_cls)
                     R_s = region_pooled_attention(s_attn, labels, n_cls)
-                    # R is already positive (avg of softmax probs),
-                    # normalize rows to distributions then KL
-                    eps = 1e-8
-                    R_t_norm = R_t / (R_t.sum(dim=-1, keepdim=True) + eps)
-                    R_s_norm = R_s / (R_s.sum(dim=-1, keepdim=True) + eps)
-                    loss += F.kl_div(
-                        (R_s_norm + eps).log(), R_t_norm,
-                        reduction="batchmean"
-                    )
+                    loss += _cosine_loss(R_s, R_t)
                 else:
-                    # No foreground regions: fallback to full O(N²) token KL
-                    loss += _row_kl(s_logits, t_logits.detach())
+                    # No foreground: fallback to O(N²) full cosine
+                    loss += _cosine_loss(s_attn, t_attn.detach())
             else:
-                # No labels available: fallback to full O(N²) token KL
-                loss += _row_kl(s_logits, t_logits.detach())
+                # LLaVA-KD RDist: O(N²) full token cosine similarity
+                loss += _cosine_loss(s_attn, t_attn.detach())
 
             count += 1
 
