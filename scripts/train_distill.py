@@ -95,6 +95,30 @@ def register_qk_hooks(model, layer_indices, store, detach=True):
     return hooks
 
 
+def validate_distill(student, val_loader, val_batches, device):
+    """Run validation and return avg CE loss on student."""
+    student.eval()
+    total_loss, count = 0.0, 0
+    with torch.no_grad():
+        for i, batch in enumerate(val_loader):
+            if i >= val_batches:
+                break
+            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v
+                     for k, v in batch.items()}
+            _ = batch.pop("image_names", [])
+            try:
+                out = student(**batch)
+                total_loss += out.loss.item()
+                count += 1
+            except RuntimeError as e:
+                if "out of memory" in str(e):
+                    torch.cuda.empty_cache()
+                    continue
+                raise
+    student.train()
+    return total_loss / max(count, 1)
+
+
 # ===================== Main =====================
 
 def main():
@@ -102,6 +126,11 @@ def main():
     parser.add_argument("--config", type=str, required=True)
     parser.add_argument("--mini", action="store_true")
     parser.add_argument("--wandb", action="store_true")
+    parser.add_argument("--resume", type=str, default=None,
+                        help="Resume from checkpoint dir (e.g. checkpoints_qwen25/distill_32b_3b/checkpoint-5000)")
+    parser.add_argument("--bs", type=int, default=None, help="Override batch_size")
+    parser.add_argument("--val-every", type=int, default=None, help="Override val_every")
+    parser.add_argument("--val-batches", type=int, default=None, help="Override val_batches")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -114,7 +143,7 @@ def main():
     compute_dtype = getattr(torch, dtype_str)
 
     lr = float(cfg.get("learning_rate", 2e-4))
-    batch_size = cfg["batch_size"]
+    batch_size = args.bs or cfg["batch_size"]
     grad_accum = cfg.get("grad_accum_steps", 1)
     num_epochs = cfg.get("num_epochs", 1)
     max_length = cfg.get("max_length", 2048)
@@ -131,8 +160,8 @@ def main():
     layer_map = dict(zip(teacher_layers, student_layers))
 
     experiment = cfg.get("experiment", "distill")
-    val_every = cfg.get("val_every", 0)
-    val_batches = cfg.get("val_batches", 50)
+    val_every = args.val_every if args.val_every is not None else cfg.get("val_every", 0)
+    val_batches = args.val_batches if args.val_batches is not None else cfg.get("val_batches", 50)
 
     output_dir = os.path.join(_BASE_DIR, "checkpoints_qwen25", experiment)
     os.makedirs(output_dir, exist_ok=True)
@@ -195,7 +224,12 @@ def main():
         bias="none",
         task_type="CAUSAL_LM",
     )
-    student = get_peft_model(student, lora_config)
+    if args.resume:
+        resume_path = args.resume if os.path.isabs(args.resume) else os.path.join(_BASE_DIR, args.resume)
+        student = PeftModel.from_pretrained(student, resume_path, is_trainable=True)
+        print(f"Resumed LoRA from {resume_path}")
+    else:
+        student = get_peft_model(student, lora_config)
     student.print_trainable_parameters()
 
     s_cfg = getattr(get_base_model(student).config, "text_config", get_base_model(student).config)
@@ -237,6 +271,15 @@ def main():
         num_workers=num_workers, collate_fn=collate_fn, pin_memory=True,
     )
 
+    val_loader = None
+    if val_every > 0 and os.path.exists(val_file):
+        val_dataset = DriveLMDataset(val_file, processor, max_length=max_length)
+        val_loader = DataLoader(
+            val_dataset, batch_size=batch_size, shuffle=False,
+            num_workers=num_workers, collate_fn=collate_fn, pin_memory=True,
+        )
+        print(f"Validation: every {val_every} opt steps, {val_batches} batches, {len(val_dataset)} samples")
+
     num_batches = len(train_loader)
     total_steps = num_batches * num_epochs // grad_accum
     print(f"\nTraining: {len(train_dataset)} samples, {total_steps} opt steps")
@@ -246,6 +289,26 @@ def main():
     scheduler = get_cosine_schedule_with_warmup(
         optimizer, num_warmup_steps=int(total_steps * 0.05), num_training_steps=total_steps
     )
+
+    # Resume optimizer/scheduler state
+    resume_step = 0
+    if args.resume:
+        state_path = os.path.join(
+            args.resume if os.path.isabs(args.resume) else os.path.join(_BASE_DIR, args.resume),
+            "training_state.pt"
+        )
+        if os.path.exists(state_path):
+            state = torch.load(state_path, weights_only=True)
+            optimizer.load_state_dict(state["optimizer"])
+            scheduler.load_state_dict(state["scheduler"])
+            resume_step = state["global_step"]
+            print(f"Resumed optimizer/scheduler from step {resume_step}")
+        else:
+            # Try to infer step from checkpoint name
+            ckpt_name = os.path.basename(args.resume.rstrip("/"))
+            if ckpt_name.startswith("checkpoint-"):
+                resume_step = int(ckpt_name.split("-")[1])
+            print(f"[WARN] No training_state.pt, resuming LoRA only from step {resume_step}")
 
     if args.wandb:
         import wandb
@@ -257,7 +320,8 @@ def main():
     print(f"{'='*60}\n")
 
     student.train()
-    global_step = 0
+    global_step = resume_step
+    skip_batches = resume_step * grad_accum if resume_step > 0 else 0
 
     for epoch in range(num_epochs):
         epoch_losses = {"ce": 0, "kd": 0, "rrd": 0, "total": 0}
@@ -267,6 +331,10 @@ def main():
                      desc=f"Epoch {epoch+1}/{num_epochs}", dynamic_ncols=True)
 
         for step, batch in pbar:
+            # Skip already-trained batches on resume
+            if skip_batches > 0:
+                skip_batches -= 1
+                continue
             device = next(student.parameters()).device
             batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v
                      for k, v in batch.items()}
@@ -361,7 +429,20 @@ def main():
                 if global_step % save_every == 0:
                     save_path = os.path.join(output_dir, f"checkpoint-{global_step}")
                     student.save_pretrained(save_path)
+                    torch.save({
+                        "optimizer": optimizer.state_dict(),
+                        "scheduler": scheduler.state_dict(),
+                        "global_step": global_step,
+                        "epoch": epoch,
+                    }, os.path.join(save_path, "training_state.pt"))
                     tqdm.write(f"  [SAVE] checkpoint-{global_step}")
+
+                if val_every > 0 and val_loader is not None and global_step % val_every == 0:
+                    val_loss = validate_distill(student, val_loader, val_batches, device)
+                    tqdm.write(f"  [VAL] step={global_step} val_loss={val_loss:.4f}")
+                    if args.wandb:
+                        import wandb
+                        wandb.log({"val_loss": val_loss}, step=global_step)
 
         pbar.close()
         avg = {k: v / max(epoch_count, 1) for k, v in epoch_losses.items()}
