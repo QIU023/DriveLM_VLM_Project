@@ -20,6 +20,7 @@ lora_target_modules:
 quantize: true
 
 # Training
+train_file: "train_1_5.json"
 dtype: "bfloat16"
 learning_rate: 1e-4
 batch_size: 8

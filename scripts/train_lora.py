@@ -323,24 +323,35 @@ def forward_with_compression(model, batch, compress_method, compress_ratio, imag
 
 @torch.no_grad()
 def validate(model, val_loader, compress_method, compress_ratio, image_token_id, val_batches, device):
-    """Run validation for val_batches batches and return avg loss."""
+    """Run validation for val_batches batches and return avg loss + token accuracy."""
     model.eval()
     total_loss, count = 0.0, 0
-    for i, batch in enumerate(val_loader):
-        if i >= val_batches:
-            break
-        batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
-        try:
-            outputs = forward_with_compression(model, batch, compress_method, compress_ratio, image_token_id)
-            total_loss += outputs.loss.item()
-            count += 1
-        except RuntimeError as e:
-            if "out of memory" in str(e):
-                torch.cuda.empty_cache()
-                continue
-            raise
+    correct_tokens, total_tokens = 0, 0
+    with torch.no_grad():
+        for i, batch in enumerate(val_loader):
+            if i >= val_batches:
+                break
+            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+            try:
+                outputs = forward_with_compression(model, batch, compress_method, compress_ratio, image_token_id)
+                total_loss += outputs.loss.item()
+                count += 1
+                logits = outputs.logits[:, :-1, :]
+                labels = batch["labels"][:, 1:]
+                mask = labels != -100
+                if mask.any():
+                    preds = logits.argmax(dim=-1)
+                    correct_tokens += (preds[mask] == labels[mask]).sum().item()
+                    total_tokens += mask.sum().item()
+            except RuntimeError as e:
+                if "out of memory" in str(e):
+                    torch.cuda.empty_cache()
+                    continue
+                raise
     model.train()
-    return total_loss / max(count, 1)
+    val_loss = total_loss / max(count, 1)
+    val_acc = correct_tokens / max(total_tokens, 1)
+    return val_loss, val_acc
 
 
 def main():
@@ -357,6 +368,7 @@ def main():
     parser.add_argument("--val-every", type=int, default=None, help="Validate every N opt steps")
     parser.add_argument("--val-batches", type=int, default=None, help="Number of val batches")
     parser.add_argument("--resume", type=str, default=None, help="Resume from checkpoint dir (e.g. checkpoints_qwen25/crp_c8/checkpoint-66000)")
+    parser.add_argument("--max-steps", type=int, default=None, help="Stop training after N optimizer steps")
     args = parser.parse_args()
 
     # ============ Load config ============
@@ -471,7 +483,8 @@ def main():
             print(f"[WARN] CRP importance not found at {crp_path}, falling back to L2 norm")
 
     # ============ Data setup ============
-    train_file = os.path.join(data_dir, "train_mini.json" if args.mini else "train.json")
+    default_train = "train_mini.json" if args.mini else "train.json"
+    train_file = os.path.join(data_dir, cfg.get("train_file", default_train))
     val_file = os.path.join(data_dir, "val.json")
     print(f"Loading dataset: {train_file}")
 
@@ -629,14 +642,19 @@ def main():
 
                 # Validation
                 if val_every > 0 and val_loader is not None and global_step % val_every == 0:
-                    val_loss = validate(
+                    val_loss, val_acc = validate(
                         model, val_loader, compress_method, compress_ratio,
                         image_token_id, val_batches, model.device,
                     )
-                    tqdm.write(f"  [VAL] step={global_step} val_loss={val_loss:.4f}")
+                    tqdm.write(f"  [VAL] step={global_step} val_loss={val_loss:.4f} val_acc={val_acc:.4f}")
                     if args.wandb:
                         import wandb
-                        wandb.log({"val_loss": val_loss}, step=global_step)
+                        wandb.log({"val_loss": val_loss, "val_acc": val_acc}, step=global_step)
+
+                if args.max_steps and global_step >= args.max_steps:
+                    tqdm.write(f"  [STOP] Reached max_steps={args.max_steps}")
+                    pbar.close()
+                    break
 
         pbar.close()
         avg_loss = epoch_loss_sum / max(epoch_loss_count, 1)
@@ -646,6 +664,8 @@ def main():
             f"avg_loss={avg_loss:.4f} | LR={cur_lr:.2e} | "
             f"opt_steps={global_step}/{total_steps}\n"
         )
+        if args.max_steps and global_step >= args.max_steps:
+            break
 
     # ============ Save final model ============
     final_path = os.path.join(output_dir, "final")
