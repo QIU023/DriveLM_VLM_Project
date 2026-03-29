@@ -1,0 +1,1832 @@
+{
+  "tag": "LoRA(final)",
+  "config": "gb200.yaml",
+  "compress_method": "none",
+  "compress_ratio": 1,
+  "summary": {
+    "behavior": {
+      "n": 187,
+      "exact_match": 37,
+      "accuracy": 19.8,
+      "avg_tokens": 37.4,
+      "avg_time_s": 2.05
+    },
+    "perception": {
+      "n": 13,
+      "exact_match": 0,
+      "accuracy": 0.0,
+      "avg_tokens": 61.5,
+      "avg_time_s": 4.42
+    },
+    "overall": {
+      "n": 200,
+      "exact_match": 37,
+      "accuracy": 18.5,
+      "avg_tokens": 38.9,
+      "avg_time_s": 2.2,
+      "total_time_min": 7.3
+    }
+  },
+  "results": [
+    {
+      "sample_id": 622,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The image is a nighttime scene with a blurred and reflective road. The ego vehicle (the ego vehicle) is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 33,
+      "elapsed": 4.08
+    },
+    {
+      "sample_id": 641,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.963
+    },
+    {
+      "sample_id": 705,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The image is a street scene with several elements to analyze. Here are the key elements and their behaviors:\n\n1. **Traffic Light**: The ego vehicle is at the intersection, and the traffic light is red. This indicates that the ego vehicle should remain stationary until the light changes to allow it to proceed. The ego vehicle is not moving.",
+      "num_tokens": 69,
+      "elapsed": 5.237
+    },
+    {
+      "sample_id": 714,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.836
+    },
+    {
+      "sample_id": 869,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The image is a photograph taken from a moving car in the left lane. The road is wet, and there are several cars ahead. The ego vehicle is going straight.",
+      "num_tokens": 35,
+      "elapsed": 1.926
+    },
+    {
+      "sample_id": 877,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.859
+    },
+    {
+      "sample_id": 887,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The image is a scene captured from a vehicle's perspective, likely in a parking lot or a parking area. The road is wet and slippery, indicating that it has recently rained. Here is a detailed analysis of the ego vehicle's behavior:\n\n1. **Context of the Scene:**\n   - The scene appears to be empty.",
+      "num_tokens": 68,
+      "elapsed": 3.566
+    },
+    {
+      "sample_id": 1010,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going to remain stationary. The ego vehicle is not moving.",
+      "num_tokens": 17,
+      "elapsed": 0.941
+    },
+    {
+      "sample_id": 1020,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The image is a nighttime scene with a road that appears to be relatively empty. The ego vehicle is going straight. Here is the reasoning:\n\n1. **Road Conditions**: The road in the image is relatively clear, and there are no visible obstacles. The road is likely to be empty.",
+      "num_tokens": 59,
+      "elapsed": 3.048
+    },
+    {
+      "sample_id": 1070,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight ahead. The ego vehicle is driving fast.",
+      "num_tokens": 16,
+      "elapsed": 0.952
+    },
+    {
+      "sample_id": 1215,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.877
+    },
+    {
+      "sample_id": 1258,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The image is a scene captured from a moving car, likely in an urban or suburban setting. The road is wet and slippery, indicating recent rain. Here is a detailed analysis of the ego vehicle's behavior:\n\n1. **Context and Environment**: The scene appears to be empty.",
+      "num_tokens": 57,
+      "elapsed": 2.976
+    },
+    {
+      "sample_id": 1355,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The image depicts a scene with several pedestrians and one car. The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 27,
+      "elapsed": 1.434
+    },
+    {
+      "sample_id": 1368,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.832
+    },
+    {
+      "sample_id": 1451,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.832
+    },
+    {
+      "sample_id": 1539,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.839
+    },
+    {
+      "sample_id": 1723,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "prediction": "The image depicts a straight and left turn lane marking, which is likely to be used for the ego vehicle. The ego vehicle is driving on the right lane. The ego vehicle is driving fast.",
+      "num_tokens": 40,
+      "elapsed": 2.09
+    },
+    {
+      "sample_id": 2135,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is steering to the left. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.831
+    },
+    {
+      "sample_id": 2300,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving very fast.",
+      "prediction": "The image is a street scene with several pedestrians and one car. The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 28,
+      "elapsed": 1.48
+    },
+    {
+      "sample_id": 2425,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.846
+    },
+    {
+      "sample_id": 2503,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.835
+    },
+    {
+      "sample_id": 2841,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.83
+    },
+    {
+      "sample_id": 2902,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The image is a nighttime scene captured from the perspective of a moving vehicle. The road is relatively empty, and there are no visible vehicles in front of the ego vehicle.",
+      "num_tokens": 35,
+      "elapsed": 1.849
+    },
+    {
+      "sample_id": 2903,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving slowly.",
+      "prediction": "The image is a scene with a pedestrian wearing a white shirt. The ego vehicle is going straight.",
+      "num_tokens": 21,
+      "elapsed": 1.132
+    },
+    {
+      "sample_id": 3008,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.845
+    },
+    {
+      "sample_id": 3115,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The image is a street scene with several cars and one pedestrian. The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 28,
+      "elapsed": 1.49
+    },
+    {
+      "sample_id": 3116,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.882
+    },
+    {
+      "sample_id": 3206,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.833
+    },
+    {
+      "sample_id": 3313,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The image is a rainy scene, so the ego vehicle (the ego vehicle) is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 28,
+      "elapsed": 1.489
+    },
+    {
+      "sample_id": 3437,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The image is a rainy scene with several cars and one truck parked. The road is wet, and there are visible water droplets on the glass. Here is a detailed analysis of the ego vehicle's behavior:\n\n1. **Context of the Scene**: The image depicts a rainy day. The road is slippery due to rain, so the ego vehicle should slow down.",
+      "num_tokens": 74,
+      "elapsed": 4.015
+    },
+    {
+      "sample_id": 3489,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.842
+    },
+    {
+      "sample_id": 3628,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving fast.",
+      "prediction": "The image depicts a road with a slight curve to the right. The ego vehicle is likely driving along this road. Here are the key elements and observations:\n\n1. **Road Conditions**: The road is relatively empty, which is typical for a quiet area.",
+      "num_tokens": 52,
+      "elapsed": 2.747
+    },
+    {
+      "sample_id": 3714,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The image is a nighttime scene with a street view. The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 26,
+      "elapsed": 1.434
+    },
+    {
+      "sample_id": 3733,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.848
+    },
+    {
+      "sample_id": 3798,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle in the image is a blue van. The ego vehicle is not moving. The ego vehicle is not moving.",
+      "num_tokens": 26,
+      "elapsed": 1.413
+    },
+    {
+      "sample_id": 3899,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.835
+    },
+    {
+      "sample_id": 4190,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The image is a nighttime scene with two cars moving in front of the ego vehicle. The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 32,
+      "elapsed": 1.779
+    },
+    {
+      "sample_id": 4205,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The image depicts a scene with several elements that can help predict the behavior of the ego vehicle. Here is a detailed analysis:\n\n1. **Road Conditions and Traffic Signs:**\n   - The road is relatively empty, which is typical for urban areas. There are no visible vehicles or traffic signs indicating the presence of other vehicles.",
+      "num_tokens": 66,
+      "elapsed": 3.409
+    },
+    {
+      "sample_id": 4251,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The image is a scene of a parking lot with several cars parked. The ego vehicle is going straight ahead. The ego vehicle is driving slowly.",
+      "num_tokens": 30,
+      "elapsed": 1.616
+    },
+    {
+      "sample_id": 4555,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The image is a nighttime scene with several cars in front of the ego vehicle. The ego vehicle is positioned behind the car in front of it, and the ego vehicle is stopped. The ego vehicle is not moving.",
+      "num_tokens": 44,
+      "elapsed": 2.409
+    },
+    {
+      "sample_id": 4737,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "prediction": "The image is a nighttime scene captured from a moving car. The road is relatively empty, and there are two cars in front of the ego vehicle. Here is a detailed analysis of the ego vehicle's behavior:\n\n1. **Road Conditions**: The road is relatively empty, with no visible vehicles. The ego vehicle is driving very fast.",
+      "num_tokens": 68,
+      "elapsed": 3.827
+    },
+    {
+      "sample_id": 4762,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The image is a foggy scene, so the ego vehicle (the white sedan) is likely moving forward. The ego vehicle is driving fast.",
+      "num_tokens": 30,
+      "elapsed": 1.606
+    },
+    {
+      "sample_id": 4799,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The image depicts a wide, empty road with two lanes. The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 27,
+      "elapsed": 1.473
+    },
+    {
+      "sample_id": 4817,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The image depicts a scene with several notable elements, including a white truck, a white sedan, and a black car. The ego vehicle is going straight.",
+      "num_tokens": 32,
+      "elapsed": 1.703
+    },
+    {
+      "sample_id": 4860,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The image is a scene of a parking lot with several cars parked. The ego vehicle is going to cross the road. The ego vehicle is driving slowly.",
+      "num_tokens": 32,
+      "elapsed": 1.707
+    },
+    {
+      "sample_id": 4910,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.838
+    },
+    {
+      "sample_id": 4974,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "num_tokens": 16,
+      "elapsed": 0.945
+    },
+    {
+      "sample_id": 4978,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going to be stopped at the intersection. The ego vehicle is not moving.",
+      "num_tokens": 20,
+      "elapsed": 1.111
+    },
+    {
+      "sample_id": 4992,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving slowly.",
+      "prediction": "The image depicts a scene with several pedestrians, one car, and one bicycle. The ego vehicle is going straight.",
+      "num_tokens": 24,
+      "elapsed": 1.307
+    },
+    {
+      "sample_id": 5006,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The image is a street scene captured on a rainy day. The road is slippery, and there are many parked cars along both sides of the road. The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 45,
+      "elapsed": 2.37
+    },
+    {
+      "sample_id": 5024,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is steering to the left. The ego vehicle is driving with normal speed.",
+      "prediction": "The image shows a scene with two trucks parked on the side of a road. The ego vehicle is not moving. Here is the prediction of the ego vehicle's behavior:\n\nThe ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 49,
+      "elapsed": 2.577
+    },
+    {
+      "sample_id": 5047,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "prediction": "The image is a nighttime scene captured from a moving car. The road is illuminated by the headlights, and there are visible lane markings. Here is a detailed analysis of the ego vehicle's behavior:\n\n1. **Lane Marking Analysis**: The ego vehicle is likely in the left lane. This is inferred from the visible lane markings on the road.",
+      "num_tokens": 70,
+      "elapsed": 3.642
+    },
+    {
+      "sample_id": 5142,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving very fast.",
+      "prediction": "The image is a scene of a street with several cars parked along the roadside. The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 31,
+      "elapsed": 1.656
+    },
+    {
+      "sample_id": 5328,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.84
+    },
+    {
+      "sample_id": 5363,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.841
+    },
+    {
+      "sample_id": 5396,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.836
+    },
+    {
+      "sample_id": 5571,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The image is a rainy urban scene with several notable elements. Here are the key observations and predictions:\n\n1. The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 37,
+      "elapsed": 1.967
+    },
+    {
+      "sample_id": 5668,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The image depicts a rainy scene with a wet road. The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 26,
+      "elapsed": 1.397
+    },
+    {
+      "sample_id": 5702,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.835
+    },
+    {
+      "sample_id": 5739,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "prediction": "The image is a nighttime scene captured from a moving car. The ego vehicle (the ego vehicle) is going straight. The ego vehicle is driving very fast.",
+      "num_tokens": 33,
+      "elapsed": 1.743
+    },
+    {
+      "sample_id": 5741,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The image is a nighttime scene with several cars moving in front of the ego vehicle. The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 32,
+      "elapsed": 1.696
+    },
+    {
+      "sample_id": 5747,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The image is a road scene with several notable elements. Here is a detailed description of the scene and the predicted behavior of the ego vehicle:\n\n### Description of the Scene:\nThere is one moving car behind the ego vehicle, one parked car to the back right of the ego vehicle, and one moving pedestrian behind the ego vehicle. The ego vehicle is driving slowly.",
+      "num_tokens": 73,
+      "elapsed": 3.771
+    },
+    {
+      "sample_id": 5872,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving with normal speed.",
+      "prediction": "The image depicts a scene with several notable elements, including a road with a pedestrian crossing, a white truck, and a black car. The road is relatively empty, and there are no visible vehicles.",
+      "num_tokens": 41,
+      "elapsed": 2.161
+    },
+    {
+      "sample_id": 5978,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The image is a scene of a city street with several pedestrians, one bicycle, and two cars. The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 35,
+      "elapsed": 1.849
+    },
+    {
+      "sample_id": 6131,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.836
+    },
+    {
+      "sample_id": 6217,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight ahead. The ego vehicle is driving fast.",
+      "num_tokens": 16,
+      "elapsed": 0.885
+    },
+    {
+      "sample_id": 6311,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "prediction": "The image depicts a straight and relatively empty road. The ego vehicle is going to be driving forward. Here is the reasoning:\n\n1. The ego vehicle is driving on a straight path. The ego vehicle is driving fast.",
+      "num_tokens": 45,
+      "elapsed": 2.457
+    },
+    {
+      "sample_id": 6321,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is steering to the left. The ego vehicle is driving with normal speed.",
+      "prediction": "The image is a scene captured from the perspective of a moving car. The road is relatively empty, and there are several cars visible in front of the ego vehicle.",
+      "num_tokens": 34,
+      "elapsed": 1.955
+    },
+    {
+      "sample_id": 6331,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is steering to the left. The ego vehicle is driving slowly.",
+      "prediction": "The image is a rainy scene, so the ego vehicle (the ego vehicle) should slow down and proceed with caution.",
+      "num_tokens": 25,
+      "elapsed": 1.412
+    },
+    {
+      "sample_id": 6409,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving fast.",
+      "prediction": "The image is a scene of an urban street. The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 25,
+      "elapsed": 1.488
+    },
+    {
+      "sample_id": 6419,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.878
+    },
+    {
+      "sample_id": 6439,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving fast.",
+      "prediction": "The image depicts a scene with several cars and one bus. The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 27,
+      "elapsed": 1.473
+    },
+    {
+      "sample_id": 6628,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is steering to the right. The ego vehicle is driving with normal speed.",
+      "prediction": "The image depicts a scene with several barriers, one car, and one truck. The ego vehicle is steering to the right. Here is a detailed analysis of the ego vehicle's behavior:\n\n1. **Observation of the Scene:**\n   - There are several barriers in front of the ego vehicle. These barriers are likely used to control the path of the ego vehicle.\n   - One car is parked. It appears to be stationary.\n   - One truck is moving. It is driving slowly.",
+      "num_tokens": 100,
+      "elapsed": 6.239
+    },
+    {
+      "sample_id": 6639,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.84
+    },
+    {
+      "sample_id": 6762,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The image depicts a scene with several pedestrians on a bridge. The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 27,
+      "elapsed": 1.449
+    },
+    {
+      "sample_id": 6875,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The image is a scene captured from a vehicle's perspective, likely in a parking lot or a road intersection. The ego vehicle is going straight. Here is the analysis of the ego vehicle's behavior:\n\n1. **Context and Environment**: The image shows a rainy day with wet roads. There are several cars and one truck visible in the scene. The road is relatively empty.",
+      "num_tokens": 76,
+      "elapsed": 3.901
+    },
+    {
+      "sample_id": 6984,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is going straight ahead. The ego vehicle is driving fast.",
+      "num_tokens": 16,
+      "elapsed": 0.879
+    },
+    {
+      "sample_id": 7269,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.848
+    },
+    {
+      "sample_id": 7353,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The image is a nighttime scene with several elements to consider. Here are the key elements and their potential behaviors:\n\n1. **Streetlight**: The image shows a streetlight on the left side of the road. It is likely that the ego vehicle will continue straight ahead, as there is no safety issue.",
+      "num_tokens": 62,
+      "elapsed": 3.256
+    },
+    {
+      "sample_id": 7731,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.868
+    },
+    {
+      "sample_id": 7803,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.829
+    },
+    {
+      "sample_id": 8066,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The image depicts a rainy urban scene with several cars and one truck moving through a crosswalk. The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 34,
+      "elapsed": 1.832
+    },
+    {
+      "sample_id": 8108,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.874
+    },
+    {
+      "sample_id": 8260,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "prediction": "The ego vehicle is going straight ahead. The ego vehicle is driving fast.",
+      "num_tokens": 16,
+      "elapsed": 0.904
+    },
+    {
+      "sample_id": 8545,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The image is a street scene with several cars and one bus. The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 28,
+      "elapsed": 1.519
+    },
+    {
+      "sample_id": 8714,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The image depicts a scene with several pedestrians and one truck. The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 27,
+      "elapsed": 1.463
+    },
+    {
+      "sample_id": 8736,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The image depicts a scene with several pedestrians and a zebra crossing. The ego vehicle is going to cross the road. Here is the analysis of the ego vehicle's behavior:\n\n1. **Observation of the Zebra Crossing**: The ego vehicle is approaching a zebra crossing, which is a pedestrian crossing. The ego vehicle should slow down and proceed with caution.\n\n2. **Pedestrian Behavior**: There are several pedestrians in the scene. The ego vehicle should be aware of their presence and adjust its speed accordingly.",
+      "num_tokens": 105,
+      "elapsed": 5.877
+    },
+    {
+      "sample_id": 8754,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The image is a scene captured from the perspective of a moving car. The road is relatively empty, and there are several traffic-related elements visible in the scene. Here is a detailed analysis of the ego vehicle's behavior:\n\n1. **Traffic Light:**\n   - There are multiple traffic lights visible in the scene. Based on the traffic light signals, the ego vehicle should proceed with caution. Here is a breakdown of the traffic light signals:\n     - Green light: Proceed straight.\n     - Red light: Stop.\n\n2. **Road Marking:**\n   - The road is marked with white lines. These markings are crucial for the ego vehicle to navigate safely. Here is a breakdown of the road marking:\n     - Straight ahead: The ego vehicle should continue at the same speed.\n     - Left turn: The ego vehicle should prepare to make a left turn.\n     - Right turn: The ego vehicle should prepare to make a right turn.\n\n3. **Speed Limit Sign:**\n   - The speed limit sign is not visible in this scene. However, it is important to note that the ego vehicle should maintain a safe speed based on the traffic rules.",
+      "num_tokens": 233,
+      "elapsed": 16.62
+    },
+    {
+      "sample_id": 8779,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "prediction": "The image is a scene of a road with several elements to analyze. Here are the key elements and their behaviors:\n\n1. **Road Conditions**: The road is relatively empty, with no visible traffic.",
+      "num_tokens": 41,
+      "elapsed": 2.123
+    },
+    {
+      "sample_id": 8856,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.837
+    },
+    {
+      "sample_id": 8953,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.828
+    },
+    {
+      "sample_id": 8968,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The image depicts a scene with several elements that can help predict the behavior of the ego vehicle. Here is a detailed analysis:\n\n1. **Road and Lane Marking:**\n   The road is relatively empty, with visible lane markings. Key elements include:\n   - **White arrow:** This indicates the direction of the road ahead.\n   - **Yellow stripes:** These are typical road markings for pedestrian crossing areas.\n\n2. **Traffic Light:**\n   There are no visible traffic lights in this scene. The road is clear of vehicles.",
+      "num_tokens": 108,
+      "elapsed": 5.494
+    },
+    {
+      "sample_id": 9077,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.831
+    },
+    {
+      "sample_id": 9217,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "prediction": "The image is a nighttime scene captured from a moving car. The ego vehicle is going straight. Here is the reasoning:\n\n1. **Street and Road Conditions**: The road is relatively empty, with no visible vehicles. The ego vehicle is driving on the right lane. There is no safety issue.",
+      "num_tokens": 60,
+      "elapsed": 3.096
+    },
+    {
+      "sample_id": 9298,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.834
+    },
+    {
+      "sample_id": 9376,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The image is a street scene captured from a moving car. The ego vehicle (the ego vehicle) is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 32,
+      "elapsed": 1.686
+    },
+    {
+      "sample_id": 9408,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The image is a street scene with several cars, one truck, and one bus. The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 32,
+      "elapsed": 1.688
+    },
+    {
+      "sample_id": 9639,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The image depicts a scene with several pedestrians and one car. The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 27,
+      "elapsed": 1.44
+    },
+    {
+      "sample_id": 9791,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is steering to the right. The ego vehicle is driving with normal speed.",
+      "prediction": "The image is a scene with several cars and one pedestrian. The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 27,
+      "elapsed": 1.431
+    },
+    {
+      "sample_id": 9888,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.83
+    },
+    {
+      "sample_id": 9930,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The image is a scene with several elements, including a yellow bus, a white sedan, and a pedestrian crossing sign. The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 39,
+      "elapsed": 2.034
+    },
+    {
+      "sample_id": 9957,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The image depicts a scene with several elements, including a pedestrian crossing the road, a white arrow on the road, and a red car. The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 43,
+      "elapsed": 2.241
+    },
+    {
+      "sample_id": 10044,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.851
+    },
+    {
+      "sample_id": 10105,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The image is a rainy scene with several parked cars in front of what appears to be a warehouse or industrial area. The road is slippery, and there are yellow traffic cones. Based on this information, the ego vehicle (the ego vehicle) is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 60,
+      "elapsed": 3.098
+    },
+    {
+      "sample_id": 10268,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.842
+    },
+    {
+      "sample_id": 10271,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The image is a street scene with several elements to consider. Here is a detailed analysis of the ego vehicle's behavior:\n\n1. **Street and Road Conditions:**\n   The road is relatively empty, with no visible traffic. The ego vehicle is likely driving on the right lane. There are no safety issues.",
+      "num_tokens": 63,
+      "elapsed": 3.334
+    },
+    {
+      "sample_id": 10519,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The image depicts a scene with several pedestrians and one construction vehicle. The road is relatively empty, and the ego vehicle is likely to be moving forward. Here is a detailed analysis of the ego vehicle's behavior:\n\n1. **Context Analysis**: The image shows a wide road with two lanes. There are no visible obstacles or vehicles in the immediate vicinity. The road is clear, and the ego vehicle is likely to continue straight ahead.\n\n2. **Pedestrian Behavior**: Two pedestrians are visible on the left side of the road. They appear to be standing. The ego vehicle should continue forward at the same speed.",
+      "num_tokens": 124,
+      "elapsed": 6.415
+    },
+    {
+      "sample_id": 10578,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving fast.",
+      "prediction": "The image is a nighttime scene with a road and two pedestrians. The ego vehicle is going straight. Here is the reasoning:\n\n1. **Road Conditions**: The road is relatively empty, which is typical for night-time urban roads. There are no visible obstacles or vehicles ahead. The road is well-lit by street lamps, indicating that there is no safety issue.",
+      "num_tokens": 74,
+      "elapsed": 3.89
+    },
+    {
+      "sample_id": 10674,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.849
+    },
+    {
+      "sample_id": 10827,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The image is a street scene with several cars and one bus. The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 28,
+      "elapsed": 1.544
+    },
+    {
+      "sample_id": 10880,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.846
+    },
+    {
+      "sample_id": 10898,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving with normal speed.",
+      "prediction": "The image is a scene with several elements, including a person walking on the road, a pedestrian crossing, and a street view. The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 41,
+      "elapsed": 2.196
+    },
+    {
+      "sample_id": 10911,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.843
+    },
+    {
+      "sample_id": 11026,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.847
+    },
+    {
+      "sample_id": 11261,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.845
+    },
+    {
+      "sample_id": 11381,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The image depicts a rainy urban scene with several elements to consider. Here is a detailed analysis of the ego vehicle's behavior:\n\n1. **Context and Environment:**\n   The image shows a wet road, likely due to recent rain. The road is slippery, so the ego vehicle should slow down. There is no safety issue.",
+      "num_tokens": 67,
+      "elapsed": 3.513
+    },
+    {
+      "sample_id": 11517,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The image is a nighttime scene with a car in front of the ego vehicle. The ego vehicle is likely moving. The ego vehicle is not moving.",
+      "num_tokens": 31,
+      "elapsed": 1.655
+    },
+    {
+      "sample_id": 11705,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving fast.",
+      "prediction": "The image depicts a scene with several cars and one pedestrian. The road is relatively empty, and there is no visible traffic.",
+      "num_tokens": 26,
+      "elapsed": 1.421
+    },
+    {
+      "sample_id": 11768,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.842
+    },
+    {
+      "sample_id": 11780,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.841
+    },
+    {
+      "sample_id": 11851,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is a black sedan. The ego vehicle is driving slowly.",
+      "num_tokens": 16,
+      "elapsed": 0.894
+    },
+    {
+      "sample_id": 12092,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving fast.",
+      "prediction": "The image is a nighttime scene captured from a moving car. The road is relatively empty, and there are a few pedestrians visible. Here is a detailed analysis of the ego vehicle's behavior:\n\n1. **Road Conditions**: The road is relatively empty, with no traffic lights or vehicles. The ego vehicle is driving on the right lane. There is one pedestrian visible in front of the ego vehicle.",
+      "num_tokens": 80,
+      "elapsed": 4.288
+    },
+    {
+      "sample_id": 12217,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The image depicts a rainy scene with a wet road, so the ego vehicle is likely to be driving at a steady speed. The ego vehicle is driving fast.",
+      "num_tokens": 33,
+      "elapsed": 1.765
+    },
+    {
+      "sample_id": 12261,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The image is a rainy scene with several elements to consider. Here are the key elements and their potential behaviors:\n\n1. **Traffic Light**: The ego vehicle (the ego vehicle) is likely to follow the traffic rules. The ego vehicle is driving slowly. The ego vehicle is not moving.",
+      "num_tokens": 59,
+      "elapsed": 3.132
+    },
+    {
+      "sample_id": 12284,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.838
+    },
+    {
+      "sample_id": 12290,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The image is a scene of a city street, with several elements to analyze. Here are the key elements and their behaviors:\n\n1. **Traffic Light**: The ego vehicle is positioned in front of a traffic light. The ego vehicle is not moving. The ego vehicle is not moving.",
+      "num_tokens": 58,
+      "elapsed": 3.086
+    },
+    {
+      "sample_id": 12316,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving fast.",
+      "prediction": "The image is a nighttime scene with a street view. The road is relatively empty, and there are no visible vehicles. The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 39,
+      "elapsed": 2.331
+    },
+    {
+      "sample_id": 12348,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is steering to the right. The ego vehicle is driving fast.",
+      "prediction": "The image is a street scene with several cars and one pedestrian. The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 28,
+      "elapsed": 1.703
+    },
+    {
+      "sample_id": 12407,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.832
+    },
+    {
+      "sample_id": 12613,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The image depicts a scene with several notable elements, including a green bus, a pedestrian, and a road sign. Here is a detailed analysis of the ego vehicle's behavior:\n\n1. **Road Conditions:**\n   The road in the image appears to be relatively empty. There are no visible vehicles or pedestrians.",
+      "num_tokens": 63,
+      "elapsed": 3.258
+    },
+    {
+      "sample_id": 12757,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The image depicts a straight and wide road with no visible vehicles. The ego vehicle is likely to be driving forward along the center lane. Here is the analysis of the ego vehicle's behavior:\n\n1. **Road Conditions**: The road is relatively empty, with clear lanes. There are no visible vehicles in the immediate view. The road is wide, which suggests that there is no safety issue.",
+      "num_tokens": 79,
+      "elapsed": 4.069
+    },
+    {
+      "sample_id": 12915,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is going straight ahead. The ego vehicle is driving fast.",
+      "num_tokens": 16,
+      "elapsed": 0.955
+    },
+    {
+      "sample_id": 13004,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The image is a rainy scene with several elements that can be analyzed to predict the behavior of the ego vehicle. Here are the key elements and their implications:\n\n1. **Traffic Light:**\n   The traffic light in the image is green, indicating that the ego vehicle should proceed ahead. The ego vehicle is likely to continue at the same speed.",
+      "num_tokens": 70,
+      "elapsed": 3.608
+    },
+    {
+      "sample_id": 13033,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The image is a street scene with several cars and one construction vehicle. The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 29,
+      "elapsed": 1.533
+    },
+    {
+      "sample_id": 13112,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.834
+    },
+    {
+      "sample_id": 13304,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving very fast.",
+      "prediction": "The image depicts a scene with several pedestrians, one truck, and one car. The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 31,
+      "elapsed": 1.642
+    },
+    {
+      "sample_id": 13568,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.832
+    },
+    {
+      "sample_id": 13671,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The image is a street scene captured from a moving car. The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 27,
+      "elapsed": 1.435
+    },
+    {
+      "sample_id": 13727,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.851
+    },
+    {
+      "sample_id": 13733,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.973
+    },
+    {
+      "sample_id": 13802,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving fast.",
+      "prediction": "The image depicts a scene with several elements, including a road, buildings, and pedestrians. Here is a detailed analysis of the ego vehicle's behavior based on the provided information:\n\n1. **Road Conditions:**\n   The road in the image appears to be relatively empty. There are no visible vehicles or obstacles. The road is clear, which suggests that the ego vehicle can proceed safely without any immediate safety issues.",
+      "num_tokens": 83,
+      "elapsed": 4.266
+    },
+    {
+      "sample_id": 13822,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.836
+    },
+    {
+      "sample_id": 13824,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving fast.",
+      "prediction": "The image depicts a scene with several trucks parked in front of a large warehouse. The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 31,
+      "elapsed": 1.652
+    },
+    {
+      "sample_id": 14235,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "num_tokens": 17,
+      "elapsed": 0.939
+    },
+    {
+      "sample_id": 14275,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.838
+    },
+    {
+      "sample_id": 14300,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The image is a rainy scene, so the ego vehicle (the ego vehicle) should slow down and proceed with caution. The ego vehicle should also turn left.",
+      "num_tokens": 33,
+      "elapsed": 1.747
+    },
+    {
+      "sample_id": 14696,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.859
+    },
+    {
+      "sample_id": 14734,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is steering to the right. The ego vehicle is driving slowly.",
+      "prediction": "The image is a scene of a parking lot with several cars parked. The ego vehicle is going to cross the road. The ego vehicle is driving slowly.",
+      "num_tokens": 32,
+      "elapsed": 1.699
+    },
+    {
+      "sample_id": 14962,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The image depicts a scene with several notable elements, including a pedestrian crossing, a road sign, and a white arrow. Here is a detailed analysis of the ego vehicle's behavior based on these elements:\n\n1. **Pedestrian Crossing:**\n   The image shows a pedestrian crossing ahead. The ego vehicle should slow down and proceed cautiously to avoid a collision. The presence of pedestrians indicates that there is no safety issue.",
+      "num_tokens": 85,
+      "elapsed": 4.38
+    },
+    {
+      "sample_id": 15360,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.87
+    },
+    {
+      "sample_id": 15383,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is steering to the right. The ego vehicle is driving with normal speed.",
+      "prediction": "The image depicts a scene with several cars parked along the roadside. The ego vehicle is slightly steering to the right. Here is a detailed analysis of the ego vehicle's behavior:\n\n1. **Context and Environment:**\n   - The scene appears to be empty.",
+      "num_tokens": 53,
+      "elapsed": 2.772
+    },
+    {
+      "sample_id": 15504,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.839
+    },
+    {
+      "sample_id": 15600,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The image depicts a rainy urban scene with several notable elements. Here is a detailed analysis of the ego vehicle's behavior:\n\n1. **Traffic and Road Conditions:**\n   The road is wet, indicating recent rain. There are several traffic cones placed along the roadside, likely to guide or block the vehicle. The road appears to be empty.",
+      "num_tokens": 69,
+      "elapsed": 3.577
+    },
+    {
+      "sample_id": 15680,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.848
+    },
+    {
+      "sample_id": 15726,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The image depicts a scene with several elements, including traffic cones, barriers, and construction vehicles. The road is relatively empty, and there are no visible signs or vehicles.",
+      "num_tokens": 35,
+      "elapsed": 1.875
+    },
+    {
+      "sample_id": 15764,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is steering to the left. The ego vehicle is driving slowly.",
+      "prediction": "The image is a scene of a road intersection, with several pedestrians and one car. The ego vehicle is going straight.",
+      "num_tokens": 25,
+      "elapsed": 1.366
+    },
+    {
+      "sample_id": 16007,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The image depicts a scene with several cars and one pedestrian. The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 27,
+      "elapsed": 1.448
+    },
+    {
+      "sample_id": 16008,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.848
+    },
+    {
+      "sample_id": 16095,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "num_tokens": 17,
+      "elapsed": 0.955
+    },
+    {
+      "sample_id": 16126,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The image depicts a scene with several barriers, one construction vehicle, two workers, and traffic cones. The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 35,
+      "elapsed": 1.856
+    },
+    {
+      "sample_id": 16163,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is steering to the right. The ego vehicle is driving slowly.",
+      "prediction": "The image depicts a scene with several notable elements, including a road sign, a pedestrian crossing, and a hump ahead. Here is a detailed analysis of the ego vehicle's behavior based on these elements:\n\n1. **Road Sign:**\n   The image shows a white road sign with the word \"HUMP\" in bold, black letters. This indicates that there is a hump ahead, which is a common feature in urban areas. The ego vehicle should slow down and proceed with caution.\n\n2. **Pedestrian Crossing:**\n   There is no visible pedestrian crossing in this scene. However, the presence of a pedestrian crossing can be inferred from the context. The ego vehicle should slow down and proceed with caution.\n\n3. **Traffic Control:**\n   The image does not show any traffic control elements. The road is relatively empty, so the ego vehicle should maintain its current speed and continue forward.\n\n4. **Speed and Lane Changes:**\n   The road is relatively empty, so the ego vehicle should maintain its current speed and continue forward.",
+      "num_tokens": 212,
+      "elapsed": 10.862
+    },
+    {
+      "sample_id": 16251,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.835
+    },
+    {
+      "sample_id": 16358,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.838
+    },
+    {
+      "sample_id": 16439,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.843
+    },
+    {
+      "sample_id": 16469,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.911
+    },
+    {
+      "sample_id": 16511,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.844
+    },
+    {
+      "sample_id": 16569,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The image depicts a rainy scene with multiple parked cars along the road. The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 29,
+      "elapsed": 1.554
+    },
+    {
+      "sample_id": 16603,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going to follow the traffic rules and maintain a speed of 25 km/h. The ego vehicle is driving fast.",
+      "num_tokens": 29,
+      "elapsed": 1.789
+    },
+    {
+      "sample_id": 16669,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The image depicts a scene with several elements, including a white van, bicycles, and a road sign. Here is a detailed analysis of the ego vehicle's behavior:\n\n1. **Context of the Scene:**\n   The image shows a street scene with several notable elements. Here is a detailed description of the scene:\n\n2. **Road Conditions:**\n   There are no visible vehicles in the immediate area.",
+      "num_tokens": 82,
+      "elapsed": 4.247
+    },
+    {
+      "sample_id": 16774,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving slowly.",
+      "prediction": "The image is a scene of a city street with several pedestrians, one car, and one truck. The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 35,
+      "elapsed": 1.85
+    },
+    {
+      "sample_id": 16934,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving very fast.",
+      "prediction": "The image depicts a scene with several notable elements, including a road, a bicycle, and a motorcycle. Here is a detailed analysis of the ego vehicle's behavior:\n\n1. **Road Conditions**: The road in the image appears to be relatively empty. There are no visible vehicles or obstacles on the road. The road is wide, and there is no indication of any specific traffic conditions.",
+      "num_tokens": 78,
+      "elapsed": 4.044
+    },
+    {
+      "sample_id": 17061,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The image is a rainy scene, and the ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 23,
+      "elapsed": 1.27
+    },
+    {
+      "sample_id": 17109,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is going to be driving straight ahead. The ego vehicle is driving with normal speed.",
+      "num_tokens": 21,
+      "elapsed": 1.161
+    },
+    {
+      "sample_id": 17126,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.839
+    },
+    {
+      "sample_id": 17791,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The image is a street scene with several elements to consider. Here are the key elements and their potential behaviors:\n\n1. **Traffic Light**: The image shows a yellow light, indicating that the ego vehicle should proceed with caution. The traffic light is likely to be a stop or wait signal. The ego vehicle should decelerate gradually until it comes to a complete stop.\n\n2. **Crosswalk: The image shows a crosswalk ahead. The ego vehicle should slow down and proceed with caution. The ego vehicle should come to a stop before entering the crosswalk.",
+      "num_tokens": 114,
+      "elapsed": 5.856
+    },
+    {
+      "sample_id": 17851,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving slowly.",
+      "prediction": "The image depicts a scene with several notable elements, including a road sign, a pedestrian crossing, and a green bus. The ego vehicle is likely to be driving on the left side of the road. Here is a detailed analysis of the ego vehicle's behavior:\n\n1. **Road Sign:**\n   The image shows a blue and white road sign. The text on the sign indicates that there is no parking allowed. This is a traffic sign indicating that the area is not allowed for parking. The ego vehicle should slow down and proceed cautiously.\n\n2. **Pedestrian Crossing:**\n   There is no visible pedestrian crossing in the image. The road is relatively empty. The ego vehicle should continue ahead at the same speed.\n\n3. **Green Bus:**\n   The image does not show any specific details about the green bus. However, it is worth noting that the ego vehicle should continue ahead at the same speed.",
+      "num_tokens": 185,
+      "elapsed": 9.488
+    },
+    {
+      "sample_id": 18095,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The image is a nighttime scene with several pedestrians, one motorcycle, and two cars. The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 32,
+      "elapsed": 1.712
+    },
+    {
+      "sample_id": 18257,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The image is a street scene with several pedestrians, one truck, and two cars. The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 32,
+      "elapsed": 1.699
+    },
+    {
+      "sample_id": 18281,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is steering to the right. The ego vehicle is driving fast.",
+      "prediction": "The image depicts a straight and left turn lane marking on the road. The ego vehicle is likely to follow the lane markings. Here is the analysis:\n\n1. **Road Conditions**: The road is relatively empty, with no visible vehicles. The road is wide, and there are no safety issues. The ego vehicle is driving fast.",
+      "num_tokens": 67,
+      "elapsed": 3.509
+    },
+    {
+      "sample_id": 18306,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is steering to the right. The ego vehicle is driving with normal speed.",
+      "prediction": "The image depicts a scene with several barriers, one construction vehicle, and two pedestrians. The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 32,
+      "elapsed": 1.708
+    },
+    {
+      "sample_id": 18392,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "prediction": "The image is a nighttime scene captured from the perspective of an ego vehicle. The road is relatively empty, and the surrounding environment appears to be dark. Here is a detailed analysis of the ego vehicle's behavior:\n\n1. **Road Conditions**: The road is relatively clear, with no visible obstacles. The ego vehicle is driving on the right lane. There is one car in front of the ego vehicle.",
+      "num_tokens": 81,
+      "elapsed": 4.18
+    },
+    {
+      "sample_id": 18452,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving on the left lane.",
+      "num_tokens": 18,
+      "elapsed": 1.003
+    },
+    {
+      "sample_id": 18492,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving very fast.",
+      "prediction": "The image is a road scene with several elements to consider. Here are the key elements and their potential behaviors:\n\n1. **Road Conditions**: The road is relatively empty, which is typical for urban or suburban areas. The road is wide, and there are no visible vehicles. The ego vehicle is likely to be driving at a constant speed.",
+      "num_tokens": 69,
+      "elapsed": 3.598
+    },
+    {
+      "sample_id": 18508,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving fast.",
+      "prediction": "The image is a street scene captured from the perspective of an ego vehicle. The road is wet, and there are several cars and one pedestrian in front of the ego vehicle. Here is a detailed analysis of the ego vehicle's behavior:\n\n1. **Traffic Conditions**: The road is slippery, indicating that it is likely to rain. The ego vehicle should slow down and proceed with caution.",
+      "num_tokens": 78,
+      "elapsed": 4.074
+    },
+    {
+      "sample_id": 18757,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "prediction": "The image is a scene of a road intersection, with several elements visible. Here is a detailed description of the scene and the predicted behavior of the ego vehicle:\n\n### Description of the Scene:\nThere is one moving car to the back left of the ego vehicle, one moving car to the back of the ego vehicle, one parked car to the front of the ego vehicle, one parked truck to the front of the ego vehicle, one moving truck to the front of the ego vehicle, and one traffic cone to the front of the ego vehicle. The ego vehicle is driving slowly.",
+      "num_tokens": 116,
+      "elapsed": 5.999
+    },
+    {
+      "sample_id": 18852,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving very fast.",
+      "prediction": "The image is a street scene with several elements to consider. Here are the key elements and their potential behaviors:\n\n1. **Traffic Light**: The image shows multiple traffic lights. Based on the traffic light, the ego vehicle should continue at the same speed. The ego vehicle is driving slowly.",
+      "num_tokens": 59,
+      "elapsed": 3.083
+    },
+    {
+      "sample_id": 18860,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving with normal speed.",
+      "prediction": "The image depicts a straight and relatively empty road. The ego vehicle is going to be driving forward. Here is the reasoning:\n\n1. The ego vehicle is driving on a straight path. The ego vehicle is driving fast.",
+      "num_tokens": 45,
+      "elapsed": 2.371
+    },
+    {
+      "sample_id": 7,
+      "category": "perception",
+      "question": "What is the status of the cars that are to the front of the ego car?",
+      "ground_truth": "Two of the cars are parked, and three are moving.",
+      "prediction": "Three cars are moving.",
+      "num_tokens": 6,
+      "elapsed": 0.43
+    },
+    {
+      "sample_id": 109,
+      "category": "perception",
+      "question": "Are there barriers to the front left of the ego car?",
+      "ground_truth": "Yes.",
+      "prediction": "Yes, there are several barriers visible in the front left of the ego car. These barriers appear to be part of the road or pedestrian crossing.",
+      "num_tokens": 30,
+      "elapsed": 1.618
+    },
+    {
+      "sample_id": 194,
+      "category": "perception",
+      "question": "Identify all the traffic elements in the front view, categorize them, determine their status, and predict the bounding box around each one. The output should be a list formatted as (c, s, x1, y1, x2, y2), where c represents the category, s denotes the status, and x1, y1, x2, y2 are the offsets of the top-left and bottom-right corners of the box relative to the center point.",
+      "ground_truth": "There are many traffic elements in the front view. The information of these traffic elements is [(traffic light, green, 1502.83, 247.35, 1547.55, 362.06), (traffic light, unknown, 1548.2, 266.21, 1598.96, 357.87), (traffic light, green, 1311.7, 309.55, 1348.11, 333.53), (traffic light, green, 1311.52, 309.62, 1348.19, 333.07), (traffic light, red, 983.92, 389.2, 995.5, 412.55), (traffic light, unknown, 916.36, 136.1, 953.47, 169.45), (traffic light, unknown, 876.76, 315.89, 903.82, 376.03), (traffic light, unknown, 847.23, 316.52, 870.84, 371.52), (traffic light, unknown, 1453.78, 321.87, 1490.6, 358.12), (traffic light, unknown, 1153.81, 406.32, 1170.27, 431.43)].",
+      "prediction": "There are several traffic elements visible in the image. Below is a categorized and detailed analysis of these elements:\n\n1. **Traffic Light**:\n   - **Category**: Traffic light\n   - **Status**: Green light\n   - **Bounding Box**: (1475, 230.8, 1536.9, 320.0)\n\n2. **Traffic Sign**:\n   - **Category**: Traffic sign\n   - **Status**: No entry\n   - **Bounding Box**: (720.8, 325.8, 755.8, 360.8)\n\n3. **Traffic Sign**:\n   - **Category**: Traffic sign\n   - **Status**: No entry\n   - **Bounding Box**: (1425.8, 305.8, 1460.8, 340.8)\n\n4. **Traffic Sign**:\n   - **Category**: Traffic sign\n   - **Status**: No entry\n   - **Bounding Box**: (1335.8, 305.8, 1370.8, 340.8)\n\n5. **Traffic Sign**:\n   - **Category**: Traffic sign\n   - **Status**: No entry\n   - **Bounding Box**: (1245.8, 305.8, 1280.8, 340.8)\n\n6. **Traffic Sign**:\n   - **Category**: Traffic sign\n   - **Status**: No entry\n   - **Bounding Box**: (1155.8, 305.8, 1188.8, 340.8)\n\n7. **Traffic Sign**:\n   - **Category**: Traffic sign\n   - **Status**: No entry\n   - **Bounding Box**: (1065.8, 305.8, 1098.8, 340.8)\n\n8. **Traffic Sign**:\n   - **Category**: Traffic sign\n   - **Status**: No entry\n   - **Bounding Box**: (1015.8, 305.8, 1048.8, 340.8)\n\n9. **Traffic Sign**:\n   - **Category**: Traffic sign\n   - **Status**: No entry",
+      "num_tokens": 512,
+      "elapsed": 41.984
+    },
+    {
+      "sample_id": 285,
+      "category": "perception",
+      "question": "Are there moving trailers to the front left of the ego car?",
+      "ground_truth": "Yes.",
+      "prediction": "No, there is no visible moving trailer to the front left of the ego car in the image. The road is relatively empty, and the vehicle appears to be stationary.",
+      "num_tokens": 35,
+      "elapsed": 1.841
+    },
+    {
+      "sample_id": 385,
+      "category": "perception",
+      "question": "Are there bicycles without riders to the front right of the ego car?",
+      "ground_truth": "No.",
+      "prediction": "No, there is no bicycle without a rider to the front right of the ego car in this image. The road is relatively empty, and the vehicle appears to be moving.",
+      "num_tokens": 36,
+      "elapsed": 1.887
+    },
+    {
+      "sample_id": 470,
+      "category": "perception",
+      "question": "What is the status of the cars that are to the front left of the ego car?",
+      "ground_truth": "Two cars are parked.",
+      "prediction": "Many cars are parked, and one is moving.",
+      "num_tokens": 11,
+      "elapsed": 0.665
+    },
+    {
+      "sample_id": 568,
+      "category": "perception",
+      "question": "What are the important objects in the current scene? Those objects will be considered for the future reasoning and driving decision.",
+      "ground_truth": "There is a silver sedan to the back of the ego vehicle, a pedestrian crossing sign to the front of the ego vehicle, and a white micro truck to the back left of the ego vehicle. The IDs of these objects are <c1,CAM_BACK,651.7,535.0>, <c2,CAM_FRONT,660.8,532.5>, and <c3,CAM_BACK_LEFT,1294.6,651.7>.",
+      "prediction": "There is a black car to the back of the ego vehicle, a white sedan to the front of the ego vehicle, and a white sedan to the back of the ego vehicle. The IDs of these objects are <c1,CAM_BACK,805.0,523.3>, <c2,CAM_FRONT,867.5,479.2>, and <c3,CAM_BACK,805.0,523.3>.",
+      "num_tokens": 101,
+      "elapsed": 5.115
+    },
+    {
+      "sample_id": 668,
+      "category": "perception",
+      "question": "What are objects to the front left of the ego car?",
+      "ground_truth": "There are many cars and one pedestrian to the front left of the ego car.",
+      "prediction": "There are several cars and one truck to the front left of the ego car.",
+      "num_tokens": 17,
+      "elapsed": 0.93
+    },
+    {
+      "sample_id": 791,
+      "category": "perception",
+      "question": "What is the status of the truck that is to the back of the ego car?",
+      "ground_truth": "The truck to the back of the ego car is parked.",
+      "prediction": "One truck is moving.",
+      "num_tokens": 6,
+      "elapsed": 0.365
+    },
+    {
+      "sample_id": 889,
+      "category": "perception",
+      "question": "What is the status of the trucks that are to the front right of the ego car?",
+      "ground_truth": "Two trucks are parked.",
+      "prediction": "Two trucks are visible in the front right of the ego car.",
+      "num_tokens": 14,
+      "elapsed": 0.775
+    },
+    {
+      "sample_id": 981,
+      "category": "perception",
+      "question": "What is the status of the car that is to the front of the ego car?",
+      "ground_truth": "One car is parked.",
+      "prediction": "One car is moving.",
+      "num_tokens": 6,
+      "elapsed": 0.37
+    },
+    {
+      "sample_id": 1078,
+      "category": "perception",
+      "question": "What is the visual description of <c2,CAM_FRONT,1295.0,540.0>?",
+      "ground_truth": "Blue SUV.",
+      "prediction": "Black SUV.",
+      "num_tokens": 4,
+      "elapsed": 0.318
+    },
+    {
+      "sample_id": 1173,
+      "category": "perception",
+      "question": "Are there parked cars to the front right of the ego car?",
+      "ground_truth": "Yes.",
+      "prediction": "Yes, there are several parked cars visible in front of and to the right of the ego car.",
+      "num_tokens": 21,
+      "elapsed": 1.109
+    }
+  ]
+}

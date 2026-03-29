@@ -78,10 +78,24 @@ def _cosine_loss(R_s, R_t):
                                     R_t.flatten().unsqueeze(0)).squeeze()
 
 
+def _kl_loss(R_s, R_t, temperature=1.0):
+    """KL divergence loss on row-wise softmax attention distributions.
+
+    Each row of C×C matrix is a distribution over regions.
+    KL(teacher || student) per row, averaged over rows.
+    """
+    t_prob = F.softmax(R_t / temperature, dim=-1)
+    s_log_prob = F.log_softmax(R_s / temperature, dim=-1)
+    # sum over columns, mean over rows; clamp to avoid float precision negatives
+    kl_per_row = F.kl_div(s_log_prob, t_prob, reduction='none').sum(dim=-1)
+    return kl_per_row.clamp(min=0).mean() * (temperature ** 2)
+
+
 def region_relation_distill_loss(teacher_store, student_store,
                                   layer_map, input_ids, image_token_id,
                                   teacher_cfg, student_cfg,
-                                  patch_labels_batch=None):
+                                  patch_labels_batch=None,
+                                  rrd_loss_type="cosine"):
     """Compute RRD loss between teacher and student.
 
     Both paths use cosine similarity (following LLaVA-KD):
@@ -138,10 +152,13 @@ def region_relation_distill_loss(teacher_store, student_store,
                 labels = labels[:len(vis_idx)]
                 n_cls = int(labels.max().item())
                 if n_cls > 0:
-                    # SATS: O(C²) region relation cosine similarity
+                    # SATS: O(C²) region relation matrix
                     R_t = region_pooled_attention(t_attn.detach(), labels, n_cls)
                     R_s = region_pooled_attention(s_attn, labels, n_cls)
-                    loss += _cosine_loss(R_s, R_t)
+                    if rrd_loss_type == "kl":
+                        loss += _kl_loss(R_s, R_t)
+                    else:
+                        loss += _cosine_loss(R_s, R_t)
                 else:
                     # No foreground: fallback to O(N²) full cosine
                     loss += _cosine_loss(s_attn, t_attn.detach())

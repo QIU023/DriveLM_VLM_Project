@@ -96,9 +96,10 @@ def register_qk_hooks(model, layer_indices, store, detach=True):
 
 
 def validate_distill(student, val_loader, val_batches, device):
-    """Run validation and return avg CE loss on student."""
+    """Run validation and return avg CE loss and token accuracy on student."""
     student.eval()
     total_loss, count = 0.0, 0
+    correct_tokens, total_tokens = 0, 0
     with torch.no_grad():
         for i, batch in enumerate(val_loader):
             if i >= val_batches:
@@ -110,13 +111,23 @@ def validate_distill(student, val_loader, val_batches, device):
                 out = student(**batch)
                 total_loss += out.loss.item()
                 count += 1
+                # Token-level accuracy: compare argmax predictions with labels
+                logits = out.logits[:, :-1, :]  # shift: predict next token
+                labels = batch["labels"][:, 1:]
+                mask = labels != -100
+                if mask.any():
+                    preds = logits.argmax(dim=-1)
+                    correct_tokens += (preds[mask] == labels[mask]).sum().item()
+                    total_tokens += mask.sum().item()
             except RuntimeError as e:
                 if "out of memory" in str(e):
                     torch.cuda.empty_cache()
                     continue
                 raise
     student.train()
-    return total_loss / max(count, 1)
+    val_loss = total_loss / max(count, 1)
+    val_acc = correct_tokens / max(total_tokens, 1)
+    return val_loss, val_acc
 
 
 # ===================== Main =====================
@@ -154,6 +165,9 @@ def main():
 
     lambda_kd = cfg.get("lambda_kd", 1.0)
     lambda_rrd = cfg.get("lambda_rrd", 0.5)
+    lambda_adaptive = cfg.get("lambda_adaptive", False)
+    adaptive_target = cfg.get("adaptive_target", 0.15)  # rrd_weighted / kd_weighted target ratio
+    rrd_loss_type = cfg.get("rrd_loss_type", "cosine")  # "cosine" or "kl"
     kd_temp = cfg.get("kd_temperature", 2.0)
     teacher_layers = cfg.get("teacher_layers", [6, 13, 20, 27])
     student_layers = cfg.get("student_layers", [8, 17, 26, 35])
@@ -167,7 +181,7 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
 
     print(f"Teacher: {teacher_model_id} | Student: {student_model_id}")
-    print(f"λ_kd={lambda_kd} λ_rrd={lambda_rrd} T={kd_temp}")
+    print(f"λ_kd={lambda_kd} λ_rrd={lambda_rrd} adaptive={lambda_adaptive} target_ratio={adaptive_target} T={kd_temp}")
     print(f"Layer map: {layer_map}")
 
     # ============ Load teacher ============
@@ -370,14 +384,21 @@ def main():
                     layer_map, batch["input_ids"], image_token_id,
                     teacher_attn_cfg, student_attn_cfg,
                     patch_labels_batch,
+                    rrd_loss_type=rrd_loss_type,
                 )
 
-                loss = (L_ce + lambda_kd * L_kd + lambda_rrd * L_rrd) / grad_accum
+                if lambda_adaptive and L_rrd.item() > 0:
+                    # adaptive: scale lambda_rrd so that rrd_weighted = adaptive_target * kd_weighted
+                    effective_rrd = adaptive_target * (lambda_kd * L_kd.item()) / L_rrd.item()
+                else:
+                    effective_rrd = lambda_rrd
+
+                loss = (L_ce + lambda_kd * L_kd + effective_rrd * L_rrd) / grad_accum
                 loss.backward()
 
                 batch_ce = L_ce.item()
                 batch_kd = lambda_kd * L_kd.item()
-                batch_rrd = lambda_rrd * L_rrd.item()
+                batch_rrd = effective_rrd * L_rrd.item()
                 batch_total = batch_ce + batch_kd + batch_rrd
                 epoch_losses["ce"] += batch_ce
                 epoch_losses["kd"] += batch_kd
@@ -438,11 +459,11 @@ def main():
                     tqdm.write(f"  [SAVE] checkpoint-{global_step}")
 
                 if val_every > 0 and val_loader is not None and global_step % val_every == 0:
-                    val_loss = validate_distill(student, val_loader, val_batches, device)
-                    tqdm.write(f"  [VAL] step={global_step} val_loss={val_loss:.4f}")
+                    val_loss, val_acc = validate_distill(student, val_loader, val_batches, device)
+                    tqdm.write(f"  [VAL] step={global_step} val_loss={val_loss:.4f} val_acc={val_acc:.4f}")
                     if args.wandb:
                         import wandb
-                        wandb.log({"val_loss": val_loss}, step=global_step)
+                        wandb.log({"val_loss": val_loss, "val_acc": val_acc}, step=global_step)
 
         pbar.close()
         avg = {k: v / max(epoch_count, 1) for k, v in epoch_losses.items()}
