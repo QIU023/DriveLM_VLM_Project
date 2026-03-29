@@ -276,7 +276,8 @@ def main():
 
     # ============ Data ============
     data_dir = os.path.join(_BASE_DIR, "data_processed")
-    train_file = os.path.join(data_dir, "train_mini.json" if args.mini else "train.json")
+    default_train = "train_mini.json" if args.mini else "train.json"
+    train_file = os.path.join(data_dir, cfg.get("train_file", default_train))
     val_file = os.path.join(data_dir, "val.json")
 
     train_dataset = DriveLMDataset(train_file, processor, max_length=max_length)
