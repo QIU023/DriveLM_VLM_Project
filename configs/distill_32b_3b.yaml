@@ -31,7 +31,10 @@ max_pixels: 401408        # 512 * 28 * 28
 
 # Distillation losses
 lambda_kd: 1.0
-lambda_rrd: 10.0          # 0.5 * ~20x to compensate C² vs N² dimensionality
+lambda_rrd: 0.5            # base value (overridden by adaptive scaling)
+lambda_adaptive: true
+adaptive_target: 0.1       # rrd_weighted = 10% of kd_weighted
+rrd_loss_type: cosine
 kd_temperature: 2.0
 
 # Layer mapping: uniform 25/50/75/100%

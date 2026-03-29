@@ -419,7 +419,7 @@ def main():
         print(f"Loading in {dtype_str} (no quantization)...")
         load_kwargs["torch_dtype"] = compute_dtype
 
-    load_kwargs["attn_implementation"] = "eager"
+    load_kwargs["attn_implementation"] = "sdpa"
     model = AutoModelForImageTextToText.from_pretrained(model_id, **load_kwargs)
     processor = AutoProcessor.from_pretrained(model_id)
 

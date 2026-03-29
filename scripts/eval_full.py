@@ -306,9 +306,21 @@ def main():
     if args.output:
         out_path = args.output
     else:
-        lora_name = os.path.basename(args.lora) if args.lora else "base"
+        # Use experiment name from lora path: checkpoints_qwen25/<experiment>/final → <experiment>
+        if args.lora:
+            lora_parts = os.path.normpath(args.lora).split(os.sep)
+            # Find the part after checkpoints_qwen25
+            if "checkpoints_qwen25" in lora_parts:
+                idx = lora_parts.index("checkpoints_qwen25")
+                exp_name = lora_parts[idx + 1] if idx + 1 < len(lora_parts) else os.path.basename(args.lora)
+            else:
+                exp_name = os.path.basename(os.path.dirname(args.lora))
+        else:
+            exp_name = "base"
         suffix = f"_max{args.max_per_cat}" if args.max_per_cat else "_full"
-        out_path = os.path.join(BASE_DIR, f"eval_results_{lora_name}{suffix}.json")
+        eval_dir = os.path.join(BASE_DIR, "eval_results")
+        os.makedirs(eval_dir, exist_ok=True)
+        out_path = os.path.join(eval_dir, f"{exp_name}{suffix}.json")
 
     # Load existing results if resuming
     completed_ids = set()
