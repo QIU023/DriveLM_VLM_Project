@@ -19,8 +19,8 @@ dtype: "bfloat16"
 # Training
 train_file: "train_1_5.json"
 learning_rate: 2e-4
-batch_size: 8
-grad_accum_steps: 1
+batch_size: 4
+grad_accum_steps: 2
 num_epochs: 1
 max_length: 2048
 num_workers: 8
@@ -34,7 +34,7 @@ max_pixels: 401408        # 512 * 28 * 28
 lambda_kd: 1.0
 lambda_rrd: 0.5            # base value (overridden by adaptive scaling)
 lambda_adaptive: true
-adaptive_target: 0.1       # rrd_weighted = 10% of kd_weighted
+adaptive_target: 0.2       # rrd_weighted = 20% of kd_weighted
 rrd_loss_type: cosine
 kd_temperature: 2.0
 
