@@ -1,6 +1,6 @@
-# Knowledge distillation: 32B teacher → 3B student (SATS RRD)
-# B200 online distillation, ~71GB for both models
-# Run: python scripts/train_distill.py --config configs/distill_32b_3b.yaml
+# Combined distillation: LLaVA-KD RDist + SATS CRP RRD
+# L_rrd = L_rdist_full (O(N²)) + L_rdist_crp (O(C²))
+# Run: python scripts/train_distill.py --config configs/distill_combined.yaml
 
 teacher_model_id: "/root/models/Qwen2.5-VL-32B-Instruct"
 student_model_id: "/root/models/Qwen2.5-VL-3B-Instruct"
@@ -13,7 +13,7 @@ lora_dropout: 0.05
 lora_target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
 
 quantize: false
-teacher_quantize: true    # 4-bit teacher to save VRAM (~18GB vs 64GB)
+teacher_quantize: true
 dtype: "bfloat16"
 
 # Training
@@ -27,25 +27,25 @@ num_workers: 8
 save_every: 1000
 
 # Image resolution
-min_pixels: 200704        # 256 * 28 * 28
-max_pixels: 401408        # 512 * 28 * 28
+min_pixels: 200704
+max_pixels: 401408
 
 # Distillation losses
 lambda_kd: 1.0
-lambda_crp: 0.5            # base value (overridden by adaptive scaling)
+lambda_crp: 0.5              # base value for CRP (overridden by adaptive)
+lambda_rdist: 0.5            # fixed O(N²) RDist loss
 crp_adaptive: true
-crp_adaptive_target: 0.2  # crp_weighted = 20% of kd_weighted
+crp_adaptive_target: 0.2    # crp_weighted = 20% of kd_weighted
+rrd_combined: true
 rrd_loss_type: cosine
 kd_temperature: 2.0
 
-# Layer mapping: uniform 25/50/75/100%
-# 32B: 64 LLM layers → [15, 31, 47, 63]
-# 3B:  36 LLM layers → [8, 17, 26, 35]
+# Layer mapping
 teacher_layers: [15, 31, 47, 63]
 student_layers: [8, 17, 26, 35]
 
 crp_importance_path: precomputed/crp_importance.pt
 
-experiment: distill_32b_3b
+experiment: distill_combined
 val_every: 200
 val_batches: 50
