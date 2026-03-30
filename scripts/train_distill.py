@@ -164,10 +164,12 @@ def main():
     max_pixels = cfg.get("max_pixels", 512 * 28 * 28)
 
     lambda_kd = cfg.get("lambda_kd", 1.0)
-    lambda_rrd = cfg.get("lambda_rrd", 0.5)
-    lambda_adaptive = cfg.get("lambda_adaptive", False)
-    adaptive_target = cfg.get("adaptive_target", 0.15)  # rrd_weighted / kd_weighted target ratio
-    rrd_loss_type = cfg.get("rrd_loss_type", "cosine")  # "cosine" or "kl"
+    lambda_crp = cfg.get("lambda_crp", cfg.get("lambda_rrd", 0.5))   # CRP O(C²)
+    lambda_rdist = cfg.get("lambda_rdist", 0.0)                     # full O(N²)
+    crp_adaptive = cfg.get("crp_adaptive", cfg.get("lambda_adaptive", False))
+    crp_adaptive_target = cfg.get("crp_adaptive_target", cfg.get("adaptive_target", 0.15))
+    rrd_loss_type = cfg.get("rrd_loss_type", "cosine")
+    rrd_combined = cfg.get("rrd_combined", False)
     kd_temp = cfg.get("kd_temperature", 2.0)
     teacher_layers = cfg.get("teacher_layers", [6, 13, 20, 27])
     student_layers = cfg.get("student_layers", [8, 17, 26, 35])
@@ -181,7 +183,7 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
 
     print(f"Teacher: {teacher_model_id} | Student: {student_model_id}")
-    print(f"λ_kd={lambda_kd} λ_rrd={lambda_rrd} adaptive={lambda_adaptive} target_ratio={adaptive_target} T={kd_temp}")
+    print(f"λ_kd={lambda_kd} λ_crp={lambda_crp} λ_rdist={lambda_rdist} crp_adaptive={crp_adaptive} crp_target={crp_adaptive_target} T={kd_temp}")
     print(f"Layer map: {layer_map}")
 
     # ============ Load teacher ============
@@ -339,7 +341,7 @@ def main():
     skip_batches = resume_step * grad_accum if resume_step > 0 else 0
 
     for epoch in range(num_epochs):
-        epoch_losses = {"ce": 0, "kd": 0, "rrd": 0, "total": 0}
+        epoch_losses = {"ce": 0, "kd": 0, "crp": 0, "rdist": 0, "total": 0}
         epoch_count = 0
 
         pbar = tqdm(enumerate(train_loader), total=num_batches,
@@ -380,35 +382,37 @@ def main():
                 else:
                     patch_labels_batch = [None] * batch["input_ids"].shape[0]
 
-                L_rrd = region_relation_distill_loss(
+                L_crp, L_rdist_full = region_relation_distill_loss(
                     teacher_store, student_store,
                     layer_map, batch["input_ids"], image_token_id,
                     teacher_attn_cfg, student_attn_cfg,
                     patch_labels_batch,
                     rrd_loss_type=rrd_loss_type,
+                    combined=rrd_combined,
                 )
 
-                if lambda_adaptive and L_rrd.item() > 0:
-                    # adaptive: scale lambda_rrd so that rrd_weighted = adaptive_target * kd_weighted
-                    effective_rrd = adaptive_target * (lambda_kd * L_kd.item()) / L_rrd.item()
+                if crp_adaptive and L_crp.item() > 0:
+                    effective_crp = crp_adaptive_target * (lambda_kd * L_kd.item()) / L_crp.item()
                 else:
-                    effective_rrd = lambda_rrd
+                    effective_crp = lambda_crp
 
-                loss = (L_ce + lambda_kd * L_kd + effective_rrd * L_rrd) / grad_accum
+                loss = (L_ce + lambda_kd * L_kd + effective_crp * L_crp + lambda_rdist * L_rdist_full) / grad_accum
                 loss.backward()
 
                 batch_ce = L_ce.item()
                 batch_kd = lambda_kd * L_kd.item()
-                batch_rrd = effective_rrd * L_rrd.item()
-                batch_total = batch_ce + batch_kd + batch_rrd
+                batch_crp = effective_crp * L_crp.item()
+                batch_rdist = lambda_rdist * L_rdist_full.item()
+                batch_total = batch_ce + batch_kd + batch_crp + batch_rdist
                 epoch_losses["ce"] += batch_ce
                 epoch_losses["kd"] += batch_kd
-                epoch_losses["rrd"] += batch_rrd
+                epoch_losses["crp"] += batch_crp
+                epoch_losses["rdist"] += batch_rdist
                 epoch_losses["total"] += batch_total
                 epoch_count += 1
 
                 # Explicit cleanup to prevent gradual memory accumulation
-                del t_out, s_out, L_ce, L_kd, L_rrd, loss
+                del t_out, s_out, L_ce, L_kd, L_crp, L_rdist_full, loss
                 teacher_store.clear()
                 student_store.clear()
                 torch.cuda.empty_cache()
@@ -428,7 +432,8 @@ def main():
             pbar.set_postfix_str(
                 f"ce={batch_ce:.3f}/{avg['ce']:.3f} "
                 f"kd={batch_kd:.3f}/{avg['kd']:.3f} "
-                f"rrd={batch_rrd:.3f}/{avg['rrd']:.3f} "
+                f"crp={batch_crp:.3f}/{avg['crp']:.3f} "
+                f"rdist={batch_rdist:.3f}/{avg['rdist']:.3f} "
                 f"total={batch_total:.3f}/{avg['total']:.3f} "
                 f"GPU={gpu_mem:.1f}GB"
             )
@@ -444,7 +449,8 @@ def main():
                     import wandb
                     wandb.log({
                         "loss_ce": avg["ce"], "loss_kd": avg["kd"],
-                        "loss_rrd": avg["rrd"], "loss_total": avg["total"],
+                        "loss_crp": avg["crp"], "loss_rdist": avg["rdist"],
+                        "loss_total": avg["total"],
                         "lr": scheduler.get_last_lr()[0], "gpu_mem": gpu_mem,
                     }, step=global_step)
 
@@ -469,7 +475,7 @@ def main():
         pbar.close()
         avg = {k: v / max(epoch_count, 1) for k, v in epoch_losses.items()}
         print(f"\n  Epoch {epoch+1} | ce={avg['ce']:.4f} kd={avg['kd']:.4f} "
-              f"rrd={avg['rrd']:.4f} total={avg['total']:.4f}\n")
+              f"crp={avg['crp']:.4f} rdist={avg['rdist']:.4f} total={avg['total']:.4f}\n")
 
     # Save final
     final_path = os.path.join(output_dir, "final")

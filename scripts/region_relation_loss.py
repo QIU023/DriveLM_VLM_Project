@@ -95,7 +95,8 @@ def region_relation_distill_loss(teacher_store, student_store,
                                   layer_map, input_ids, image_token_id,
                                   teacher_cfg, student_cfg,
                                   patch_labels_batch=None,
-                                  rrd_loss_type="cosine"):
+                                  rrd_loss_type="cosine",
+                                  combined=False):
     """Compute RRD loss between teacher and student.
 
     Both paths use cosine similarity (following LLaVA-KD):
@@ -124,7 +125,8 @@ def region_relation_distill_loss(teacher_store, student_store,
     s_dim = student_cfg["hidden_size"] // s_heads
 
     B = input_ids.shape[0]
-    loss = 0.0
+    loss_crp = 0.0
+    loss_rdist = 0.0
     count = 0
 
     for t_layer, s_layer in layer_map.items():
@@ -156,16 +158,20 @@ def region_relation_distill_loss(teacher_store, student_store,
                     R_t = region_pooled_attention(t_attn.detach(), labels, n_cls)
                     R_s = region_pooled_attention(s_attn, labels, n_cls)
                     if rrd_loss_type == "kl":
-                        loss += _kl_loss(R_s, R_t)
+                        loss_crp += _kl_loss(R_s, R_t)
                     else:
-                        loss += _cosine_loss(R_s, R_t)
+                        loss_crp += _cosine_loss(R_s, R_t)
+                    # Combined: also add O(N²) full token cosine
+                    if combined:
+                        loss_rdist += _cosine_loss(s_attn, t_attn.detach())
                 else:
                     # No foreground: fallback to O(N²) full cosine
-                    loss += _cosine_loss(s_attn, t_attn.detach())
+                    loss_rdist += _cosine_loss(s_attn, t_attn.detach())
             else:
                 # LLaVA-KD RDist: O(N²) full token cosine similarity
-                loss += _cosine_loss(s_attn, t_attn.detach())
+                loss_rdist += _cosine_loss(s_attn, t_attn.detach())
 
             count += 1
 
-    return loss / max(count, 1)
+    n = max(count, 1)
+    return loss_crp / n, loss_rdist / n
