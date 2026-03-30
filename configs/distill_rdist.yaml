@@ -17,8 +17,8 @@ dtype: "bfloat16"
 
 train_file: "train_1_5.json"
 learning_rate: 2e-4
-batch_size: 8
-grad_accum_steps: 1
+batch_size: 4
+grad_accum_steps: 2
 num_epochs: 1
 max_length: 2048
 num_workers: 8
