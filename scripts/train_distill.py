@@ -391,18 +391,30 @@ def main():
                     combined=rrd_combined,
                 )
 
-                if crp_adaptive and L_crp.item() > 0:
-                    effective_crp = crp_adaptive_target * (lambda_kd * L_kd.item()) / L_crp.item()
+                _crp_val = L_crp.item() if torch.is_tensor(L_crp) else L_crp
+                if crp_adaptive and _crp_val > 0:
+                    effective_crp = crp_adaptive_target * (lambda_kd * L_kd.item()) / _crp_val
                 else:
                     effective_crp = lambda_crp
 
                 loss = (L_ce + lambda_kd * L_kd + effective_crp * L_crp + lambda_rdist * L_rdist_full) / grad_accum
+                batch_total_raw = loss.item() * grad_accum
+
+                # NaN guard: skip bad batches before they poison the model
+                if not math.isfinite(batch_total_raw):
+                    tqdm.write(f"[NaN] batch {step+1}, loss={batch_total_raw}, skipping")
+                    del t_out, s_out, L_ce, L_kd, L_crp, L_rdist_full, loss
+                    teacher_store.clear()
+                    student_store.clear()
+                    optimizer.zero_grad()
+                    continue
+
                 loss.backward()
 
                 batch_ce = L_ce.item()
                 batch_kd = lambda_kd * L_kd.item()
-                batch_crp = effective_crp * L_crp.item()
-                batch_rdist = lambda_rdist * L_rdist_full.item()
+                batch_crp = effective_crp * (L_crp.item() if torch.is_tensor(L_crp) else L_crp)
+                batch_rdist = lambda_rdist * (L_rdist_full.item() if torch.is_tensor(L_rdist_full) else L_rdist_full)
                 batch_total = batch_ce + batch_kd + batch_crp + batch_rdist
                 epoch_losses["ce"] += batch_ce
                 epoch_losses["kd"] += batch_kd
@@ -439,7 +451,12 @@ def main():
             )
 
             if (step + 1) % grad_accum == 0:
-                torch.nn.utils.clip_grad_norm_(student.parameters(), 1.0)
+                grad_norm = torch.nn.utils.clip_grad_norm_(student.parameters(), 1.0)
+                # Skip optimizer step if gradients are NaN/Inf
+                if not math.isfinite(grad_norm.item()):
+                    tqdm.write(f"[NaN grad] step {global_step}, grad_norm={grad_norm.item()}, skipping update")
+                    optimizer.zero_grad()
+                    continue
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()

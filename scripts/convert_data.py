@@ -4,9 +4,9 @@ import os
 import random
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATASET_ROOT = "/root/datasets/DriveLM"
-QA_JSON = os.path.join(DATASET_ROOT, "v1_1_train_nus.json")
-IMAGE_ROOT = os.path.join(DATASET_ROOT, "nuscenes/samples")
+DATASET_ROOT = os.path.join(BASE_DIR, "data")
+QA_JSON = os.path.join(DATASET_ROOT, "QA_dataset_nus", "v1_1_train_nus.json")
+IMAGE_ROOT = os.path.join(DATASET_ROOT, "nuscenes", "samples")
 OUTPUT_DIR = os.path.join(BASE_DIR, "data_processed")
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
