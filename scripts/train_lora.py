@@ -11,6 +11,7 @@ Usage:
 """
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -445,6 +446,11 @@ def main():
     else:
         model.enable_input_require_grads()
 
+    # Gradient checkpointing: trade compute for memory (critical for large models)
+    if cfg.get("gradient_checkpointing", False):
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        print("Gradient checkpointing enabled")
+
     lora_config = LoraConfig(
         r=lora_r,
         lora_alpha=lora_alpha,
@@ -587,8 +593,16 @@ def main():
                     model, batch, compress_method, compress_ratio, image_token_id
                 )
                 loss = outputs.loss / grad_accum
-                loss.backward()
                 batch_loss = outputs.loss.item()
+
+                # NaN guard: skip bad batches before they poison the model
+                if not math.isfinite(batch_loss):
+                    tqdm.write(f"[NaN] batch {step+1}/{num_batches}, loss={batch_loss}, skipping")
+                    optimizer.zero_grad()
+                    accum_loss = 0.0
+                    continue
+
+                loss.backward()
                 accum_loss += loss.item()
                 epoch_loss_sum += batch_loss
                 epoch_loss_count += 1
@@ -612,7 +626,13 @@ def main():
             )
 
             if (step + 1) % grad_accum == 0:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                # Skip optimizer step if gradients are NaN/Inf
+                if not math.isfinite(grad_norm.item()):
+                    tqdm.write(f"[NaN grad] step {global_step}, grad_norm={grad_norm.item()}, skipping update")
+                    optimizer.zero_grad()
+                    accum_loss = 0.0
+                    continue
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()

@@ -1,0 +1,43 @@
+# LLaVA-KD RDist baseline: 7B → 3B, full O(N²) token-pair KL
+# CE + KD (output KL) + RDist (full token-pair relation distillation)
+# No CRP → RRD falls back to O(N²) full token KL (LLaVA-KD style)
+# Run: python scripts/train_distill.py --config configs/distill_7b_3b_llavakd.yaml
+
+teacher_model_id: "/root/models/Qwen2.5-VL-7B-Instruct"
+student_model_id: "/root/models/Qwen2.5-VL-3B-Instruct"
+teacher_lora: "checkpoints_qwen25/teacher_7b/final"
+
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+lora_target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+
+quantize: false
+teacher_quantize: false
+dtype: "bfloat16"
+
+learning_rate: 2e-4
+batch_size: 2
+grad_accum_steps: 4
+num_epochs: 1
+max_length: 2048
+num_workers: 8
+save_every: 1000
+
+min_pixels: 200704
+max_pixels: 401408
+
+lambda_kd: 1.0
+lambda_rdist: 0.5
+kd_temperature: 2.0
+
+# 7B: 28 layers → [6, 13, 20, 27]
+# 3B: 36 layers → [8, 17, 26, 35]
+teacher_layers: [6, 13, 20, 27]
+student_layers: [8, 17, 26, 35]
+
+# No crp_importance_path → RRD falls back to O(N²) full token KL (LLaVA-KD RDist)
+
+experiment: distill_7b_3b_llavakd
+val_every: 200
+val_batches: 50
