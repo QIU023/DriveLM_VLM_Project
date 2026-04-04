@@ -338,20 +338,25 @@ def main():
 
     student.train()
     global_step = resume_step
-    skip_batches = resume_step * grad_accum if resume_step > 0 else 0
+    # With shuffle=True, skipping exact batches is not reproducible anyway.
+    # Instead, compute remaining batches and train from the start of a fresh shuffle.
+    batches_done = resume_step * grad_accum if resume_step > 0 else 0
+    remaining_batches = num_batches - batches_done
+    if resume_step > 0:
+        print(f"Resuming from step {resume_step}, skipping first {batches_done} batches (fresh shuffle, no slow iteration)")
 
     for epoch in range(num_epochs):
         epoch_losses = {"ce": 0, "kd": 0, "crp": 0, "rdist": 0, "total": 0}
         epoch_count = 0
 
-        pbar = tqdm(enumerate(train_loader), total=num_batches,
+        effective_total = remaining_batches if (epoch == 0 and resume_step > 0) else num_batches
+        pbar = tqdm(enumerate(train_loader), total=effective_total,
                      desc=f"Epoch {epoch+1}/{num_epochs}", dynamic_ncols=True)
 
         for step, batch in pbar:
-            # Skip already-trained batches on resume
-            if skip_batches > 0:
-                skip_batches -= 1
-                continue
+            # Stop after remaining batches for resumed epoch
+            if epoch == 0 and resume_step > 0 and step >= remaining_batches:
+                break
             device = next(student.parameters()).device
             batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v
                      for k, v in batch.items()}
