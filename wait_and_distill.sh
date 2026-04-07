@@ -6,7 +6,7 @@ echo "=========================================="
 echo "  启动蒸馏实验 7B→3B RRD"
 echo "  $(date)"
 echo "=========================================="
-nohup /venv/main/bin/python -u scripts/train_distill.py --config configs/distill_7b_3b.yaml 2>&1 | tee logs/distill_7b_3b.log
+nohup /venv/main/bin/python -u scripts/train_distill.py --config configs/distill_7b_3b_rrd.yaml 2>&1 | tee logs/distill_7b_3b_rrd.log
 
 echo ""
 echo "=========================================="
