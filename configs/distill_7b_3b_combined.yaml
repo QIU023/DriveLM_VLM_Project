@@ -1,6 +1,7 @@
-# Knowledge distillation: 7B teacher → 3B student (LLaVA KD style)
-# Both models bf16, ~21GB total on 96GB H100
-# Run: python scripts/train_distill.py --config configs/distill_7b_3b.yaml
+# Combined distillation: 7B → 3B, LLaVA-KD RDist + SATS CRP RRD
+# 50% SATS RRD (CRP-based O(C²)) + 50% LLaVA-KD RDist (full O(N²))
+# Both models bf16, ~21GB total
+# Run: python scripts/train_distill.py --config configs/distill_7b_3b_combined.yaml
 
 teacher_model_id: "/root/models/Qwen2.5-VL-7B-Instruct"
 student_model_id: "/root/models/Qwen2.5-VL-3B-Instruct"
@@ -17,6 +18,7 @@ teacher_quantize: false
 dtype: "bfloat16"
 
 # Training
+train_file: "train.json"
 learning_rate: 2e-4
 batch_size: 4
 grad_accum_steps: 2
@@ -26,14 +28,16 @@ num_workers: 8
 save_every: 1000
 
 # Image resolution
-min_pixels: 200704        # 256 * 28 * 28
-max_pixels: 401408        # 512 * 28 * 28
+min_pixels: 200704
+max_pixels: 401408
 
 # Distillation losses
 lambda_kd: 1.0
-lambda_crp: 0.5
+lambda_crp: 0.5              # base value for CRP (overridden by adaptive)
+lambda_rdist: 0.5            # fixed O(N²) RDist loss
 crp_adaptive: true
-crp_adaptive_target: 0.2
+crp_adaptive_target: 0.2    # crp_weighted = 20% of kd_weighted
+rrd_combined: true
 rrd_loss_type: cosine
 kd_temperature: 2.0
 
@@ -45,6 +49,6 @@ student_layers: [8, 17, 26, 35]
 
 crp_importance_path: precomputed/crp_importance.pt
 
-experiment: distill_7b_3b
+experiment: distill_7b_3b_combined
 val_every: 200
 val_batches: 50

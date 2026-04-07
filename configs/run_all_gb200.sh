@@ -35,7 +35,7 @@ python scripts/train_lora.py --config configs/crp_merge_c4.yaml
 # Direction 2.5: Region-Aware Relation Distillation (7B → 3B)
 echo ""
 echo "========== 4/4 Distillation 7B→3B (RRD) =========="
-python scripts/train_distill.py --config configs/distill_7b_3b.yaml
+python scripts/train_distill.py --config configs/distill_7b_3b_rrd.yaml
 
 echo ""
 echo "=========================================="
