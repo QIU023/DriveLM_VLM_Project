@@ -248,6 +248,10 @@ def main():
         student = get_peft_model(student, lora_config)
     student.print_trainable_parameters()
 
+    if cfg.get("gradient_checkpointing", False):
+        student.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        print("Student gradient checkpointing enabled")
+
     s_cfg = getattr(get_base_model(student).config, "text_config", get_base_model(student).config)
     student_attn_cfg = {
         "num_attention_heads": s_cfg.num_attention_heads,

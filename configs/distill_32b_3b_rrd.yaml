@@ -4,7 +4,7 @@
 
 teacher_model_id: "/root/models/Qwen2.5-VL-32B-Instruct"
 student_model_id: "/root/models/Qwen2.5-VL-3B-Instruct"
-teacher_lora: "checkpoints_qwen25/teacher_32b/final"
+teacher_lora: "checkpoints_qwen25/teacher_32b_1_5/final"
 
 # Student LoRA
 lora_r: 16
