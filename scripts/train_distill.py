@@ -416,6 +416,7 @@ def main():
                     teacher_store.clear()
                     student_store.clear()
                     optimizer.zero_grad()
+                    torch.cuda.empty_cache()
                     continue
 
                 loss.backward()
@@ -432,19 +433,29 @@ def main():
                 epoch_losses["total"] += batch_total
                 epoch_count += 1
 
-                # Explicit cleanup to prevent gradual memory accumulation
+                # Drop refs so activations / forward graph / hook stores get
+                # freed immediately. NOTE: do NOT call empty_cache() on the
+                # normal path — it returns cached blocks to the driver and
+                # forces re-allocation next step, defeating the caching
+                # allocator and costing ~50% throughput. empty_cache() is only
+                # worth it in OOM/NaN recovery paths.
+                # teacher_store / student_store MUST be cleared so hook-captured
+                # QK tensors from this step don't accumulate across steps.
                 del t_out, s_out, L_ce, L_kd, L_crp, L_rdist_full, loss
                 teacher_store.clear()
                 student_store.clear()
-                torch.cuda.empty_cache()
 
             except RuntimeError as e:
                 if "out of memory" in str(e):
-                    torch.cuda.empty_cache()
+                    tqdm.write(f"[OOM] batch {step+1}, skipping")
+                    try:
+                        del t_out, s_out, L_ce, L_kd, L_crp, L_rdist_full, loss
+                    except NameError:
+                        pass
                     teacher_store.clear()
                     student_store.clear()
-                    optimizer.zero_grad()
-                    tqdm.write(f"[OOM] batch {step+1}, skipping")
+                    optimizer.zero_grad(set_to_none=True)
+                    torch.cuda.empty_cache()
                     continue
                 raise
 

@@ -598,20 +598,42 @@ def main():
                 # NaN guard: skip bad batches before they poison the model
                 if not math.isfinite(batch_loss):
                     tqdm.write(f"[NaN] batch {step+1}/{num_batches}, loss={batch_loss}, skipping")
+                    del outputs, loss
                     optimizer.zero_grad()
                     accum_loss = 0.0
+                    torch.cuda.empty_cache()
                     continue
 
                 loss.backward()
                 accum_loss += loss.item()
                 epoch_loss_sum += batch_loss
                 epoch_loss_count += 1
+
+                # Drop refs so activations / forward graph get freed immediately.
+                # NOTE: do NOT call empty_cache() on the normal path — it returns
+                # cached blocks to the driver and forces re-allocation next step,
+                # defeating the caching allocator and costing ~50% throughput.
+                # empty_cache() is only worth it in OOM/NaN recovery paths.
+                del outputs, loss
             except RuntimeError as e:
                 if "out of memory" in str(e):
-                    torch.cuda.empty_cache()
                     tqdm.write(f"[OOM] batch {step+1}/{num_batches}, skipping")
-                    optimizer.zero_grad()
+                    # Drop any references before clearing cache
+                    try:
+                        del outputs
+                    except NameError:
+                        pass
+                    try:
+                        del loss
+                    except NameError:
+                        pass
+                    try:
+                        del batch
+                    except NameError:
+                        pass
+                    optimizer.zero_grad(set_to_none=True)
                     accum_loss = 0.0
+                    torch.cuda.empty_cache()
                     continue
                 raise
 
