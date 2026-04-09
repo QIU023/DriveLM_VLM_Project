@@ -1,0 +1,1375 @@
+{
+  "tag": "LoRA(final)",
+  "config": "baseline.yaml",
+  "compress_method": "none",
+  "compress_ratio": 1,
+  "summary": {
+    "behavior": {
+      "n": 150,
+      "exact_match": 84,
+      "accuracy": 56.0,
+      "avg_tokens": 15.3,
+      "avg_time_s": 0.76
+    },
+    "overall": {
+      "n": 150,
+      "exact_match": 84,
+      "accuracy": 56.0,
+      "avg_tokens": 15.3,
+      "avg_time_s": 0.76,
+      "total_time_min": 1.9
+    }
+  },
+  "results": [
+    {
+      "sample_id": 622,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 1.969
+    },
+    {
+      "sample_id": 641,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.728
+    },
+    {
+      "sample_id": 705,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.729
+    },
+    {
+      "sample_id": 714,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.727
+    },
+    {
+      "sample_id": 869,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.731
+    },
+    {
+      "sample_id": 877,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.727
+    },
+    {
+      "sample_id": 887,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.933
+    },
+    {
+      "sample_id": 1010,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.732
+    },
+    {
+      "sample_id": 1020,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 1070,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.735
+    },
+    {
+      "sample_id": 1215,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 1258,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.731
+    },
+    {
+      "sample_id": 1355,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 1368,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.73
+    },
+    {
+      "sample_id": 1451,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.733
+    },
+    {
+      "sample_id": 1539,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.737
+    },
+    {
+      "sample_id": 1723,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "num_tokens": 16,
+      "elapsed": 0.809
+    },
+    {
+      "sample_id": 2135,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is steering to the left. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.732
+    },
+    {
+      "sample_id": 2300,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving very fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.733
+    },
+    {
+      "sample_id": 2425,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 2503,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.735
+    },
+    {
+      "sample_id": 2841,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "num_tokens": 17,
+      "elapsed": 0.848
+    },
+    {
+      "sample_id": 2902,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.785
+    },
+    {
+      "sample_id": 2903,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is steering to the right. The ego vehicle is driving slowly.",
+      "num_tokens": 17,
+      "elapsed": 0.821
+    },
+    {
+      "sample_id": 3008,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.735
+    },
+    {
+      "sample_id": 3115,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.735
+    },
+    {
+      "sample_id": 3116,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.735
+    },
+    {
+      "sample_id": 3206,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 3313,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.735
+    },
+    {
+      "sample_id": 3437,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.733
+    },
+    {
+      "sample_id": 3489,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 3628,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is steering to the right. The ego vehicle is driving fast.",
+      "num_tokens": 17,
+      "elapsed": 0.822
+    },
+    {
+      "sample_id": 3714,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.735
+    },
+    {
+      "sample_id": 3733,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 3798,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 3899,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.732
+    },
+    {
+      "sample_id": 4190,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.735
+    },
+    {
+      "sample_id": 4205,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.733
+    },
+    {
+      "sample_id": 4251,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 4555,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.733
+    },
+    {
+      "sample_id": 4737,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "num_tokens": 16,
+      "elapsed": 0.777
+    },
+    {
+      "sample_id": 4762,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 4799,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.736
+    },
+    {
+      "sample_id": 4817,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.735
+    },
+    {
+      "sample_id": 4860,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.735
+    },
+    {
+      "sample_id": 4910,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 4974,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 4978,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.787
+    },
+    {
+      "sample_id": 4992,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.737
+    },
+    {
+      "sample_id": 5006,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.736
+    },
+    {
+      "sample_id": 5024,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is steering to the left. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is steering to the left. The ego vehicle is driving with normal speed.",
+      "num_tokens": 19,
+      "elapsed": 0.97
+    },
+    {
+      "sample_id": 5047,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.732
+    },
+    {
+      "sample_id": 5142,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving very fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.737
+    },
+    {
+      "sample_id": 5328,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.733
+    },
+    {
+      "sample_id": 5363,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 5396,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 5571,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 5668,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.733
+    },
+    {
+      "sample_id": 5702,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 5739,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "num_tokens": 16,
+      "elapsed": 0.776
+    },
+    {
+      "sample_id": 5741,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.736
+    },
+    {
+      "sample_id": 5747,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.733
+    },
+    {
+      "sample_id": 5872,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.735
+    },
+    {
+      "sample_id": 5978,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.731
+    },
+    {
+      "sample_id": 6131,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.733
+    },
+    {
+      "sample_id": 6217,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.735
+    },
+    {
+      "sample_id": 6311,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 6321,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is steering to the left. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 6331,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is steering to the left. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.733
+    },
+    {
+      "sample_id": 6409,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.732
+    },
+    {
+      "sample_id": 6419,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "num_tokens": 16,
+      "elapsed": 0.778
+    },
+    {
+      "sample_id": 6439,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.733
+    },
+    {
+      "sample_id": 6628,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is steering to the right. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is steering to the right. The ego vehicle is driving with normal speed.",
+      "num_tokens": 19,
+      "elapsed": 0.912
+    },
+    {
+      "sample_id": 6639,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.733
+    },
+    {
+      "sample_id": 6762,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 6875,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.733
+    },
+    {
+      "sample_id": 6984,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "num_tokens": 17,
+      "elapsed": 0.823
+    },
+    {
+      "sample_id": 7269,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.732
+    },
+    {
+      "sample_id": 7353,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.733
+    },
+    {
+      "sample_id": 7731,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.732
+    },
+    {
+      "sample_id": 7803,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.737
+    },
+    {
+      "sample_id": 8066,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 8108,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.733
+    },
+    {
+      "sample_id": 8260,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "num_tokens": 16,
+      "elapsed": 0.775
+    },
+    {
+      "sample_id": 8545,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.732
+    },
+    {
+      "sample_id": 8714,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 8736,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.736
+    },
+    {
+      "sample_id": 8754,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 8779,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.735
+    },
+    {
+      "sample_id": 8856,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.782
+    },
+    {
+      "sample_id": 8953,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 8968,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.736
+    },
+    {
+      "sample_id": 9077,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.735
+    },
+    {
+      "sample_id": 9217,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "num_tokens": 16,
+      "elapsed": 0.779
+    },
+    {
+      "sample_id": 9298,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.737
+    },
+    {
+      "sample_id": 9376,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.733
+    },
+    {
+      "sample_id": 9408,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "num_tokens": 17,
+      "elapsed": 0.824
+    },
+    {
+      "sample_id": 9639,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 9791,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is steering to the right. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is steering to the right. The ego vehicle is driving slowly.",
+      "num_tokens": 17,
+      "elapsed": 0.823
+    },
+    {
+      "sample_id": 9888,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.732
+    },
+    {
+      "sample_id": 9930,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 9957,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 10044,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 10105,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.735
+    },
+    {
+      "sample_id": 10268,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 10271,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.733
+    },
+    {
+      "sample_id": 10519,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 10578,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.733
+    },
+    {
+      "sample_id": 10674,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving very fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 10827,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.732
+    },
+    {
+      "sample_id": 10880,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 10898,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is steering to the right. The ego vehicle is driving with normal speed.",
+      "num_tokens": 19,
+      "elapsed": 0.91
+    },
+    {
+      "sample_id": 10911,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 11026,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.733
+    },
+    {
+      "sample_id": 11261,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "num_tokens": 17,
+      "elapsed": 0.824
+    },
+    {
+      "sample_id": 11381,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.733
+    },
+    {
+      "sample_id": 11517,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.735
+    },
+    {
+      "sample_id": 11705,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.733
+    },
+    {
+      "sample_id": 11768,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.736
+    },
+    {
+      "sample_id": 11780,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.732
+    },
+    {
+      "sample_id": 11851,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.733
+    },
+    {
+      "sample_id": 12092,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the right. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.735
+    },
+    {
+      "sample_id": 12217,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.735
+    },
+    {
+      "sample_id": 12261,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 12284,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.733
+    },
+    {
+      "sample_id": 12290,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.735
+    },
+    {
+      "sample_id": 12316,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 12348,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is steering to the right. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 12407,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.735
+    },
+    {
+      "sample_id": 12613,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "num_tokens": 17,
+      "elapsed": 0.821
+    },
+    {
+      "sample_id": 12757,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.735
+    },
+    {
+      "sample_id": 12915,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.787
+    },
+    {
+      "sample_id": 13004,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.735
+    },
+    {
+      "sample_id": 13033,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.735
+    },
+    {
+      "sample_id": 13112,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.738
+    },
+    {
+      "sample_id": 13304,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving very fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.734
+    },
+    {
+      "sample_id": 13568,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.735
+    },
+    {
+      "sample_id": 13671,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.735
+    },
+    {
+      "sample_id": 13727,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.736
+    },
+    {
+      "sample_id": 13733,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "num_tokens": 15,
+      "elapsed": 0.733
+    },
+    {
+      "sample_id": 13802,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.982
+    },
+    {
+      "sample_id": 13822,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.736
+    },
+    {
+      "sample_id": 13824,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "num_tokens": 17,
+      "elapsed": 0.827
+    },
+    {
+      "sample_id": 14235,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving with normal speed.",
+      "num_tokens": 17,
+      "elapsed": 0.824
+    },
+    {
+      "sample_id": 14275,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is slightly steering to the left. The ego vehicle is driving fast.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is driving fast.",
+      "num_tokens": 15,
+      "elapsed": 0.736
+    },
+    {
+      "sample_id": 14300,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.736
+    },
+    {
+      "sample_id": 14696,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.738
+    },
+    {
+      "sample_id": 14734,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is steering to the right. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.741
+    },
+    {
+      "sample_id": 14962,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is driving slowly.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.738
+    },
+    {
+      "sample_id": 15360,
+      "category": "behavior",
+      "question": "Predict the behavior of the ego vehicle.",
+      "ground_truth": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "prediction": "The ego vehicle is going straight. The ego vehicle is not moving.",
+      "num_tokens": 15,
+      "elapsed": 0.737
+    }
+  ]
+}
