@@ -1,0 +1,38 @@
+# Fine-tune 32B teacher on DriveLM (1/5 subset) for distillation
+# 4-bit quantized + LoRA, ~25GB on B200
+
+model_id: "/root/models/Qwen2.5-VL-32B-Instruct"
+
+# LoRA
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+lora_target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+
+# bf16 full precision (64GB on B200, no quantization)
+quantize: false
+gradient_checkpointing: true
+
+# Training
+train_file: "train_1_5.json"
+dtype: "bfloat16"
+learning_rate: 1e-4
+batch_size: 1
+grad_accum_steps: 8       # effective batch = 8
+num_epochs: 1
+max_length: 2048
+num_workers: 8
+save_every: 1000
+
+# Image resolution
+min_pixels: 200704        # 256 * 28 * 28
+max_pixels: 401408        # 512 * 28 * 28
+
+experiment: teacher_32b_1_5

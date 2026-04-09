@@ -1,5 +1,7 @@
-# Fine-tune 32B teacher on DriveLM for distillation
-# 4-bit quantized + LoRA, ~25GB on B200
+# Fine-tune 32B teacher on DriveLM (FULL data) for distillation
+# bf16 full precision, no quantization
+# 32B bf16 weights ≈ 64GB → fits on H100 NVL (96GB) with gradient_checkpointing
+# Run: python scripts/train_lora.py --config configs/teacher_32b.yaml
 
 model_id: "/root/models/Qwen2.5-VL-32B-Instruct"
 
@@ -16,16 +18,16 @@ lora_target_modules:
   - up_proj
   - down_proj
 
-# bf16 full precision (64GB on B200, no quantization)
+# bf16 full precision, no quantization
+# 32B needs grad checkpointing — without it even bs=1 OOMs
 quantize: false
 gradient_checkpointing: true
 
-# Training
-train_file: "train.json"
+# Training (full data — default train.json; --mini overrides to train_mini.json)
 dtype: "bfloat16"
 learning_rate: 1e-4
-batch_size: 1
-grad_accum_steps: 8       # effective batch = 8
+batch_size: 8
+grad_accum_steps: 1       # effective batch = 8
 num_epochs: 1
 max_length: 2048
 num_workers: 8
