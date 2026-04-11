@@ -23,14 +23,18 @@ Usage:
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import collections
 import yaml
+import numpy as np
 import torch
 from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig
 from peft import PeftModel
 from PIL import Image
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+from rouge_score import rouge_scorer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -208,61 +212,234 @@ def run_inference_compressed(model, processor, image_path, question, system_prom
     return answer, new_tokens.shape[1], elapsed
 
 
+def infer_tag(category, question):
+    """Infer official DriveLM evaluation tag from category and question pattern.
+
+    Tag mapping (from challenge/test_eval.json):
+      0 = accuracy (exact match)  — behavior, closed-choice perception/prediction
+      1 = GPT/language eval       — planning (open reasoning)
+      2 = language (BLEU/ROUGE)   — perception open-ended descriptions
+      3 = match (coordinate F1)   — prediction with <cX,CAM,...> coordinates
+    """
+    q = question.strip().lower() if question else ""
+    if category == "behavior":
+        return 0
+    elif category == "planning":
+        return 1
+    elif category == "perception":
+        # Closed-choice: "Please select" or "What is the moving status"
+        if "please select" in q or "what is the moving status" in q or "what is the observed status" in q:
+            return 0
+        return 2
+    elif category == "prediction":
+        # Coordinate-heavy: "What object should the ego vehicle notice first..."
+        if "notice first" in q or "notice second" in q or "notice third" in q:
+            return 3
+        return 0
+    return 0
+
+
+def compute_bleu_rouge(pred, gt):
+    """Compute BLEU-4 and ROUGE-L for a single (prediction, ground_truth) pair."""
+    smooth = SmoothingFunction().method1
+    pred_tokens = pred.lower().split()
+    gt_tokens = gt.lower().split()
+    bleu = sentence_bleu([gt_tokens], pred_tokens, smoothing_function=smooth)
+    scorer = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
+    rouge = scorer.score(gt, pred)["rougeL"].fmeasure
+    return bleu, rouge
+
+
+def compute_match_f1(pred, gt, threshold=16.0):
+    """Compute coordinate-based F1 (official DriveLM match metric).
+
+    Extracts all float-pairs from pred/GT, matches by L1 distance < threshold.
+    """
+    pred_nums = re.findall(r'\d+\.\d+', pred)
+    gt_nums = re.findall(r'\d+\.\d+', gt)
+    if len(pred_nums) % 2 != 0:
+        pred_nums = pred_nums[:-1]
+    if len(gt_nums) % 2 != 0:
+        gt_nums = gt_nums[:-1]
+    if not gt_nums:
+        return 1.0 if not pred_nums else 0.0
+
+    pred_pts = np.array([float(x) for x in pred_nums]).reshape(-1, 2)
+    gt_pts = np.array([float(x) for x in gt_nums]).reshape(-1, 2)
+    n_gt = len(gt_pts)
+    gt_remaining = list(range(n_gt))
+
+    tp = 0
+    for p in pred_pts:
+        best_dist = float("inf")
+        best_idx = -1
+        for i in gt_remaining:
+            d = np.sum(np.abs(p - gt_pts[i]))
+            if d < best_dist:
+                best_dist = d
+                best_idx = i
+        if best_dist < threshold and best_idx >= 0:
+            tp += 1
+            gt_remaining.remove(best_idx)
+
+    fp = len(pred_pts) - tp
+    fn = n_gt - tp
+    precision = tp / (tp + fp + 1e-8)
+    recall = tp / (tp + fn + 1e-8)
+    f1 = 2 * precision * recall / (precision + recall + 1e-8)
+    return f1
+
+
 def compute_metrics(results):
-    """Compute per-category and overall metrics."""
-    by_cat = collections.defaultdict(lambda: {"total": 0, "exact": 0, "tokens": 0, "time": 0.0})
+    """Compute per-category and overall metrics using official DriveLM multi-metric eval.
+
+    Metric assignment by tag (inferred from category + question):
+      Tag 0 (accuracy):  exact string match          — behavior, closed-choice
+      Tag 1 (language):  BLEU + ROUGE_L average       — planning (open reasoning)
+      Tag 2 (language):  BLEU + ROUGE_L average       — perception open descriptions
+      Tag 3 (match):     coordinate F1                — prediction with coordinates
+
+    Final score = weighted average across all metrics.
+    """
+    by_cat = collections.defaultdict(lambda: {
+        "total": 0, "tokens": 0, "time": 0.0,
+        # Tag-specific accumulators
+        "exact_n": 0, "exact_correct": 0,       # tag 0
+        "lang_n": 0, "bleu_sum": 0.0, "rouge_sum": 0.0,  # tag 1, 2
+        "match_n": 0, "f1_sum": 0.0,            # tag 3
+    })
 
     for r in results:
         cat = r["category"]
         by_cat[cat]["total"] += 1
         by_cat[cat]["tokens"] += r["num_tokens"]
         by_cat[cat]["time"] += r["elapsed"]
-        if r["prediction"].strip().lower() == r["ground_truth"].strip().lower():
-            by_cat[cat]["exact"] += 1
+
+        tag = infer_tag(cat, r.get("question", ""))
+        pred = r["prediction"].strip()
+        gt = r["ground_truth"].strip()
+
+        if tag == 0:
+            by_cat[cat]["exact_n"] += 1
+            if pred.lower() == gt.lower():
+                by_cat[cat]["exact_correct"] += 1
+        elif tag in (1, 2):
+            by_cat[cat]["lang_n"] += 1
+            bleu, rouge = compute_bleu_rouge(pred, gt)
+            by_cat[cat]["bleu_sum"] += bleu
+            by_cat[cat]["rouge_sum"] += rouge
+        elif tag == 3:
+            by_cat[cat]["match_n"] += 1
+            f1 = compute_match_f1(pred, gt)
+            by_cat[cat]["f1_sum"] += f1
 
     # Build summary
     summary = {}
-    total_exact = total_count = total_tokens = total_time = 0
+    totals = {"n": 0, "exact_n": 0, "exact_correct": 0,
+              "lang_n": 0, "bleu_sum": 0.0, "rouge_sum": 0.0,
+              "match_n": 0, "f1_sum": 0.0, "tokens": 0, "time": 0.0}
+
     for cat in sorted(by_cat.keys()):
         s = by_cat[cat]
-        acc = s["exact"] / s["total"] * 100
-        avg_tok = s["tokens"] / s["total"]
-        avg_time = s["time"] / s["total"]
-        summary[cat] = {
-            "n": s["total"], "exact_match": s["exact"], "accuracy": round(acc, 1),
-            "avg_tokens": round(avg_tok, 1), "avg_time_s": round(avg_time, 2),
-        }
-        total_exact += s["exact"]
-        total_count += s["total"]
-        total_tokens += s["tokens"]
-        total_time += s["time"]
+        n = s["total"]
+        cat_summary = {"n": n}
+
+        # Exact match score (tag 0)
+        if s["exact_n"] > 0:
+            cat_summary["exact_match"] = s["exact_correct"]
+            cat_summary["exact_match_n"] = s["exact_n"]
+            cat_summary["accuracy"] = round(s["exact_correct"] / s["exact_n"] * 100, 1)
+
+        # Language score (tag 1, 2)
+        if s["lang_n"] > 0:
+            cat_summary["lang_n"] = s["lang_n"]
+            cat_summary["bleu"] = round(s["bleu_sum"] / s["lang_n"] * 100, 1)
+            cat_summary["rouge_l"] = round(s["rouge_sum"] / s["lang_n"] * 100, 1)
+            cat_summary["language_score"] = round(
+                (s["bleu_sum"] + s["rouge_sum"]) / (2 * s["lang_n"]) * 100, 1)
+
+        # Match F1 score (tag 3)
+        if s["match_n"] > 0:
+            cat_summary["match_n"] = s["match_n"]
+            cat_summary["match_f1"] = round(s["f1_sum"] / s["match_n"] * 100, 1)
+
+        # Combined category score: weighted avg of available metrics
+        scores, weights = [], []
+        if s["exact_n"] > 0:
+            scores.append(s["exact_correct"] / s["exact_n"])
+            weights.append(s["exact_n"])
+        if s["lang_n"] > 0:
+            scores.append((s["bleu_sum"] + s["rouge_sum"]) / (2 * s["lang_n"]))
+            weights.append(s["lang_n"])
+        if s["match_n"] > 0:
+            scores.append(s["f1_sum"] / s["match_n"])
+            weights.append(s["match_n"])
+        cat_summary["combined_score"] = round(
+            sum(sc * w for sc, w in zip(scores, weights)) / max(sum(weights), 1) * 100, 1)
+
+        cat_summary["avg_tokens"] = round(s["tokens"] / n, 1)
+        cat_summary["avg_time_s"] = round(s["time"] / n, 2)
+        summary[cat] = cat_summary
+
+        for k in totals:
+            if k in s:
+                totals[k] += s[k]
+        totals["n"] += n
+
+    # Overall
+    overall_scores, overall_weights = [], []
+    if totals["exact_n"] > 0:
+        overall_scores.append(totals["exact_correct"] / totals["exact_n"])
+        overall_weights.append(totals["exact_n"])
+    if totals["lang_n"] > 0:
+        overall_scores.append(
+            (totals["bleu_sum"] + totals["rouge_sum"]) / (2 * totals["lang_n"]))
+        overall_weights.append(totals["lang_n"])
+    if totals["match_n"] > 0:
+        overall_scores.append(totals["f1_sum"] / totals["match_n"])
+        overall_weights.append(totals["match_n"])
+
+    combined = sum(sc * w for sc, w in zip(overall_scores, overall_weights)) / max(sum(overall_weights), 1) * 100
 
     summary["overall"] = {
-        "n": total_count, "exact_match": total_exact,
-        "accuracy": round(total_exact / max(total_count, 1) * 100, 1),
-        "avg_tokens": round(total_tokens / max(total_count, 1), 1),
-        "avg_time_s": round(total_time / max(total_count, 1), 2),
-        "total_time_min": round(total_time / 60, 1),
+        "n": totals["n"],
+        "combined_score": round(combined, 1),
+        "exact_match_accuracy": round(totals["exact_correct"] / max(totals["exact_n"], 1) * 100, 1),
+        "language_score": round(
+            (totals["bleu_sum"] + totals["rouge_sum"]) / max(2 * totals["lang_n"], 1) * 100, 1) if totals["lang_n"] else None,
+        "match_f1": round(totals["f1_sum"] / max(totals["match_n"], 1) * 100, 1) if totals["match_n"] else None,
+        "avg_tokens": round(totals["tokens"] / max(totals["n"], 1), 1),
+        "avg_time_s": round(totals["time"] / max(totals["n"], 1), 2),
+        "total_time_min": round(totals["time"] / 60, 1),
     }
     return summary
 
 
 def print_summary(summary, tag):
-    """Pretty-print evaluation summary."""
-    print("\n" + "=" * 70)
+    """Pretty-print evaluation summary with multi-metric results."""
+    print("\n" + "=" * 85)
     print(f"EVALUATION SUMMARY — {tag}")
-    print("=" * 70)
-    print(f"  {'Category':<14} {'N':>6} {'Exact':>6} {'Acc%':>7} {'AvgTok':>7} {'AvgTime':>8}")
-    print(f"  {'-'*14} {'-'*6} {'-'*6} {'-'*7} {'-'*7} {'-'*8}")
+    print("=" * 85)
+    print(f"  {'Category':<14} {'N':>5} {'ExactAcc':>9} {'BLEU':>7} {'ROUGE':>7} {'MatchF1':>8} {'Combined':>9}")
+    print(f"  {'-'*14} {'-'*5} {'-'*9} {'-'*7} {'-'*7} {'-'*8} {'-'*9}")
     for cat in sorted(k for k in summary if k != "overall"):
         s = summary[cat]
-        print(f"  {cat:<14} {s['n']:>6} {s['exact_match']:>6} {s['accuracy']:>6.1f}% {s['avg_tokens']:>7.1f} {s['avg_time_s']:>7.2f}s")
+        acc = f"{s['accuracy']:.1f}%" if "accuracy" in s else "   —  "
+        bleu = f"{s['bleu']:.1f}%" if "bleu" in s else "   — "
+        rouge = f"{s['rouge_l']:.1f}%" if "rouge_l" in s else "   — "
+        f1 = f"{s['match_f1']:.1f}%" if "match_f1" in s else "   —  "
+        comb = f"{s['combined_score']:.1f}%"
+        print(f"  {cat:<14} {s['n']:>5} {acc:>9} {bleu:>7} {rouge:>7} {f1:>8} {comb:>9}")
     s = summary["overall"]
-    print(f"  {'-'*14} {'-'*6} {'-'*6} {'-'*7} {'-'*7} {'-'*8}")
-    print(f"  {'OVERALL':<14} {s['n']:>6} {s['exact_match']:>6} {s['accuracy']:>6.1f}% {s['avg_tokens']:>7.1f} {s['avg_time_s']:>7.2f}s")
+    print(f"  {'-'*14} {'-'*5} {'-'*9} {'-'*7} {'-'*7} {'-'*8} {'-'*9}")
+    acc = f"{s['exact_match_accuracy']:.1f}%" if s.get("exact_match_accuracy") else "   —  "
+    lang = f"{s['language_score']:.1f}%" if s.get("language_score") else "   — "
+    f1 = f"{s['match_f1']:.1f}%" if s.get("match_f1") else "   —  "
+    comb = f"{s['combined_score']:.1f}%"
+    print(f"  {'OVERALL':<14} {s['n']:>5} {acc:>9} {lang:>14} {f1:>8} {comb:>9}")
     print(f"\n  Total time: {s['total_time_min']:.1f} min")
     print(f"  GPU memory: {torch.cuda.memory_allocated()/1024**3:.1f} GB")
-    print("=" * 70)
+    print("=" * 85)
 
 
 def load_config(config_path):
@@ -419,11 +596,21 @@ def main():
         total_elapsed = time.time() - t_start
         avg_per_sample = total_elapsed / (idx + 1)
         eta_min = avg_per_sample * (len(remaining) - idx - 1) / 60
-        exact = 1 if answer.strip().lower() == ground_truth.strip().lower() else 0
+        tag = infer_tag(cat, question)
+        if tag == 0:
+            score_str = f"exact={'Y' if answer.strip().lower() == ground_truth.strip().lower() else 'N'}"
+        elif tag in (1, 2):
+            _b, _r = compute_bleu_rouge(answer.strip(), ground_truth.strip())
+            score_str = f"bleu={_b:.2f} rouge={_r:.2f}"
+        elif tag == 3:
+            _f1 = compute_match_f1(answer.strip(), ground_truth.strip())
+            score_str = f"f1={_f1:.2f}"
+        else:
+            score_str = ""
 
         # Progress line
         if done % 10 == 0 or done == 1:
-            print(f"  [{done}/{total}] cat={cat:<12s} exact={exact} tok={num_tokens:>3} "
+            print(f"  [{done}/{total}] cat={cat:<12s} {score_str} tok={num_tokens:>3} "
                   f"t={elapsed:.1f}s | ETA: {eta_min:.0f}min")
 
         # Periodic save
