@@ -1038,13 +1038,20 @@ def main():
                       f"{int(total_steps * warmup_ratio)} warmup steps / {total_steps} total")
 
     # ============ Accelerator.prepare (FSDP sharding happens here) ============
+    # NOTE: deliberately DO NOT pass `scheduler` to prepare(). accelerate's
+    # AcceleratedScheduler wrapper multiplies scheduler.step() by
+    # num_processes (world_size) per call — designed for DP semantics. With
+    # our FSDP + manual sync_gradients-gated step, that "fast-forwards" the
+    # cosine decay by 8×, causing lr → ~0 by step ~500 of 4106 (verified
+    # 2026-05-18: lr=5.26e-10 at step 510). Keep scheduler vanilla; the loop
+    # calls .step() exactly once per opt step (gated by `if accelerator.sync_gradients`).
     if val_loader is not None:
-        model, optimizer, train_loader, val_loader, scheduler = accelerator.prepare(
-            model, optimizer, train_loader, val_loader, scheduler,
+        model, optimizer, train_loader, val_loader = accelerator.prepare(
+            model, optimizer, train_loader, val_loader,
         )
     else:
-        model, optimizer, train_loader, scheduler = accelerator.prepare(
-            model, optimizer, train_loader, scheduler,
+        model, optimizer, train_loader = accelerator.prepare(
+            model, optimizer, train_loader,
         )
     if use_fsdp and freeze_vision and train_mode == "full_sft":
         # Re-apply the vision freeze AFTER FSDP wrap, because FSDP's flat-param
