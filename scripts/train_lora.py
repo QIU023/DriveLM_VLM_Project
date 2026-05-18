@@ -49,7 +49,7 @@ def load_config(config_path):
 class DriveLMDataset(Dataset):
     """Dataset for DriveLM QA fine-tuning with Qwen2.5-VL.
 
-    Supports two modes (selected via ``video_mode``):
+    Supports three input-modality modes:
       * ``video_mode=False`` (default): each sample contains ONE ``{"type": "image"}``
         message and a single CAM_FRONT PIL image is fed to ``processor(images=...)``.
       * ``video_mode=True`` (Tier-1 video): each sample contains ONE ``{"type": "video"}``
@@ -57,10 +57,22 @@ class DriveLMDataset(Dataset):
         ``[PIL.Image, ...]`` and pass to ``processor(videos=[frames], fps=video_fps, ...)``.
         Transformers >= 5.x routes that through ``Qwen2_5_VLVideoProcessor`` which
         returns ``pixel_values_videos`` + ``video_grid_thw`` + ``second_per_grid_ts``.
+
+    Tier-2 VLA add-on:
+      * If a record contains an ``action_tokens: [int...]`` field, those token ids
+        are appended (verbatim) to the assistant turn AFTER the answer text and
+        the chat template is closed. Loss masking is controlled by
+        ``vla_loss_mode``:
+            "answer_and_traj" -> compute loss on the answer text + traj tokens (OpenVLA-style)
+            "traj_only"       -> compute loss only on the traj tokens (AutoVLA-style)
     """
 
     def __init__(self, data_path, processor, max_length=512,
-                 video_mode=False, num_frames=4, video_fps=2.0):
+                 video_mode=False, num_frames=4, video_fps=2.0,
+                 vla_mode: bool = False,
+                 vla_loss_mode: str = "answer_and_traj",
+                 traj_start_id: int | None = None,
+                 traj_end_id: int | None = None):
         with open(data_path, "r") as f:
             self.data = json.load(f)
         self.processor = processor
@@ -68,6 +80,10 @@ class DriveLMDataset(Dataset):
         self.video_mode = video_mode
         self.num_frames = num_frames
         self.video_fps = video_fps
+        self.vla_mode = vla_mode
+        self.vla_loss_mode = vla_loss_mode
+        self.traj_start_id = traj_start_id
+        self.traj_end_id = traj_end_id
 
     def __len__(self):
         return len(self.data)
@@ -161,10 +177,47 @@ class DriveLMDataset(Dataset):
         video_grid_thw = inputs.get("video_grid_thw")
         second_per_grid_ts = inputs.get("second_per_grid_ts")
 
-        # Truncate if too long
+        # ============ Tier-2 VLA: append trajectory tokens to assistant turn ============
+        # We append the raw action token IDs BEFORE the <|im_end|> closer so they live
+        # inside the assistant turn. Append in-place at the end of input_ids; if the
+        # last token is <|im_end|>, insert action tokens just before it.
+        action_tokens = item.get("action_tokens", []) if self.vla_mode else []
+        action_insert_start = None
+        if action_tokens:
+            im_end_id = self.processor.tokenizer.convert_tokens_to_ids("<|im_end|>")
+            ids_list = input_ids.tolist()
+            atok = list(action_tokens)
+            # Find the last <|im_end|> (assistant turn closer)
+            insert_at = None
+            for i in range(len(ids_list) - 1, -1, -1):
+                if ids_list[i] == im_end_id:
+                    insert_at = i
+                    break
+            if insert_at is None:
+                # No assistant closer found — append at the end.
+                insert_at = len(ids_list)
+            action_insert_start = insert_at
+            new_ids = ids_list[:insert_at] + atok + ids_list[insert_at:]
+            input_ids = torch.tensor(new_ids, dtype=input_ids.dtype)
+            attention_mask = torch.ones_like(input_ids)
+
+        # Truncate if too long (DON'T cut action tokens — if the prompt is too long,
+        # we trim from the prompt side instead so the trajectory target survives).
         if input_ids.shape[0] > self.max_length:
-            input_ids = input_ids[: self.max_length]
-            attention_mask = attention_mask[: self.max_length]
+            if action_tokens:
+                # Drop tokens just before assistant action block (keep the leading
+                # system + question if possible; this is a coarse last-resort trim).
+                overflow = input_ids.shape[0] - self.max_length
+                # Trim from the start of the user turn (after position 0 system header).
+                trim_from = max(1, action_insert_start - len(action_tokens) - overflow)
+                trim_to = trim_from + overflow
+                keep = torch.cat([input_ids[:trim_from], input_ids[trim_to:]], dim=0)
+                input_ids = keep
+                attention_mask = torch.ones_like(input_ids)
+                action_insert_start -= overflow
+            else:
+                input_ids = input_ids[: self.max_length]
+                attention_mask = attention_mask[: self.max_length]
 
         # Create labels: mask everything before the assistant's response
         labels = input_ids.clone()
@@ -182,6 +235,14 @@ class DriveLMDataset(Dataset):
         if assistant_start > 0:
             labels[:assistant_start] = -100
         labels[attention_mask == 0] = -100
+
+        # Tier-2 VLA loss mode: optionally mask the answer text and only learn
+        # the trajectory tokens. The trajectory block starts where the bin tokens
+        # were inserted (action_insert_start) up to action_insert_start + len(atok).
+        if self.vla_mode and action_tokens and self.vla_loss_mode == "traj_only":
+            if action_insert_start is not None:
+                # Mask everything up to but not including the action tokens.
+                labels[:action_insert_start] = -100
 
         result = {
             "input_ids": input_ids,
@@ -449,6 +510,12 @@ def main():
     parser.add_argument("--val-batches", type=int, default=None, help="Number of val batches")
     parser.add_argument("--resume", type=str, default=None, help="Resume from checkpoint dir (e.g. checkpoints_qwen25/crp_c8/checkpoint-66000)")
     parser.add_argument("--max-steps", type=int, default=None, help="Stop training after N optimizer steps")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Tier-2 VLA: load model + processor + dataset (1 sample), print "
+                             "param counts and memory estimate, then exit. Does NOT train.")
+    parser.add_argument("--train-mode", type=str, default=None,
+                        choices=["lora", "full_sft", "qlora"],
+                        help="Override train_mode from config. Defaults to 'lora'.")
     args = parser.parse_args()
 
     # ============ Load config ============
@@ -482,6 +549,18 @@ def main():
     num_frames = cfg.get("num_frames", 4)
     video_fps = cfg.get("video_fps", 2.0)
     data_path_video = cfg.get("data_path_video", None)
+
+    # Tier-2 VLA settings
+    train_mode = (args.train_mode or cfg.get("train_mode", "lora")).lower()
+    if train_mode not in ("lora", "full_sft", "qlora"):
+        print(f"ERROR: invalid train_mode={train_mode!r}", file=sys.stderr)
+        sys.exit(2)
+    vla_mode = cfg.get("vla_mode", False)
+    vla_loss_mode = cfg.get("vla_loss_mode", "answer_and_traj")
+    freeze_vision = cfg.get("freeze_vision", True)
+    data_path_vla = cfg.get("data_path_vla", None)
+    fsdp_enabled = cfg.get("fsdp", False)  # informational; launching FSDP is done via torchrun + accelerate
+    activation_checkpointing = cfg.get("activation_checkpointing", cfg.get("gradient_checkpointing", False))
     # TODO(v2): visual token compression for video — needs a per-frame variant of
     # forward_with_compression (currently compress_visual_tokens only handles image
     # tokens via image_grid_thw). For Tier-1 we leave compress_method='none' in video
@@ -510,7 +589,28 @@ def main():
         print(f"Validation: every {val_every} opt steps, {val_batches} batches")
 
     # ============ Model setup ============
+    print(f"Training mode: {train_mode}  |  vla_mode={vla_mode}  |  freeze_vision={freeze_vision}")
+    # For dry-runs (and any time the configured path points to a non-existent
+    # local checkpoint), fall back to a smaller available Qwen2.5-VL on disk.
+    # Real training jobs that need the merged warm-init should set the correct
+    # model_id explicitly — this only protects smoke / dry-run.
+    if args.dry_run and model_id.startswith("/") and not os.path.exists(model_id):
+        _FALLBACK_LOCAL = [
+            "/workspace/models/Qwen2.5-VL-3B-drivelm-merged",
+            "/workspace/models/Qwen2.5-VL-3B-Instruct",
+            "/workspace/models/Qwen2.5-VL-7B-Instruct",
+        ]
+        for cand in _FALLBACK_LOCAL:
+            if os.path.exists(cand):
+                print(f"[dry-run] model_id {model_id!r} missing; using fall-back {cand}")
+                model_id = cand
+                break
     load_kwargs = {"device_map": "auto"}
+
+    # qlora implies quantize-on-load even if YAML didn't set quantize:true
+    if train_mode == "qlora":
+        quantize = True
+        cfg.setdefault("quant_bits", 4)
 
     if quantize:
         print(f"Loading with {cfg.get('quant_bits', 4)}-bit quantization...")
@@ -572,23 +672,50 @@ def main():
                 effective_lora_targets.append(t)
         print(f"Vision-tower LoRA targets added: {lora_target_modules_vision}")
 
-    lora_config = LoraConfig(
-        r=lora_r,
-        lora_alpha=lora_alpha,
-        target_modules=effective_lora_targets,
-        lora_dropout=lora_dropout,
-        bias="none",
-        task_type="CAUSAL_LM",
-    )
-    if args.resume:
-        # Resume: load LoRA weights from checkpoint instead of init new
-        resume_path = args.resume if os.path.isabs(args.resume) else os.path.join(_BASE_DIR, args.resume)
-        from peft import PeftModel
-        model = PeftModel.from_pretrained(model, resume_path, is_trainable=True)
-        print(f"Resumed LoRA from {resume_path}")
+    if train_mode == "full_sft":
+        # Skip LoRA entirely; train all (non-frozen) parameters.
+        if args.resume:
+            print(f"NOTE: --resume with train_mode=full_sft loads model weights from {args.resume}")
+            # Caller is responsible for pointing model_id at the resume checkpoint or
+            # using accelerate/torch.distributed checkpoint loading.
+        # Freeze vision tower if requested.
+        if freeze_vision:
+            base_for_freeze = model
+            visual = getattr(getattr(base_for_freeze, "model", base_for_freeze), "visual", None)
+            if visual is None and hasattr(base_for_freeze, "visual"):
+                visual = base_for_freeze.visual
+            if visual is not None:
+                frozen = 0
+                for p in visual.parameters():
+                    p.requires_grad = False
+                    frozen += p.numel()
+                print(f"Froze vision tower: {frozen / 1e6:.1f} M params")
+            else:
+                print("WARNING: train_mode=full_sft, freeze_vision=true but could not locate visual module")
+        # Param accounting
+        n_total = sum(p.numel() for p in model.parameters())
+        n_train = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"Full SFT: {n_train/1e9:.3f} B trainable / {n_total/1e9:.3f} B total "
+              f"({100 * n_train / n_total:.2f}%)")
     else:
-        model = get_peft_model(model, lora_config)
-    model.print_trainable_parameters()
+        # LoRA / QLoRA
+        lora_config = LoraConfig(
+            r=lora_r,
+            lora_alpha=lora_alpha,
+            target_modules=effective_lora_targets,
+            lora_dropout=lora_dropout,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+        if args.resume:
+            # Resume: load LoRA weights from checkpoint instead of init new
+            resume_path = args.resume if os.path.isabs(args.resume) else os.path.join(_BASE_DIR, args.resume)
+            from peft import PeftModel
+            model = PeftModel.from_pretrained(model, resume_path, is_trainable=True)
+            print(f"Resumed LoRA from {resume_path}")
+        else:
+            model = get_peft_model(model, lora_config)
+        model.print_trainable_parameters()
 
     # Image token id for compression
     image_token_id = processor.tokenizer.convert_tokens_to_ids("<|image_pad|>")
@@ -610,7 +737,24 @@ def main():
             print(f"[WARN] CRP importance not found at {crp_path}, falling back to L2 norm")
 
     # ============ Data setup ============
-    if video_mode:
+    # Resolve trajectory tokenizer (only if vla_mode) so we can wire boundary ids
+    # into the dataset for traj-only loss masking.
+    traj_start_id = traj_end_id = None
+    if vla_mode:
+        from trajectory_tokenizer import TrajectoryTokenizerConfig
+        traj_cfg = TrajectoryTokenizerConfig()
+        traj_start_id = traj_cfg.traj_start_id
+        traj_end_id = traj_cfg.traj_end_id
+        print(f"VLA mode: traj_start_id={traj_start_id} traj_end_id={traj_end_id} "
+              f"loss={vla_loss_mode}")
+
+    if vla_mode:
+        v_path = data_path_vla or f"data_processed/v1_1_video_n{num_frames}_with_traj.json"
+        if not os.path.isabs(v_path):
+            v_path = os.path.join(_BASE_DIR, v_path)
+        train_file = v_path
+        val_file = v_path.replace(".json", "_val.json")
+    elif video_mode:
         # Prefer explicit data_path_video; fall back to v1_1_video_n{N}.json
         v_path = data_path_video or f"data_processed/v1_1_video_n{num_frames}.json"
         if not os.path.isabs(v_path):
@@ -621,12 +765,41 @@ def main():
         default_train = "train_mini.json" if args.mini else "train.json"
         train_file = os.path.join(data_dir, cfg.get("train_file", default_train))
         val_file = os.path.join(data_dir, "val.json")
-    print(f"Loading dataset: {train_file} (video_mode={video_mode}, num_frames={num_frames})")
+    print(f"Loading dataset: {train_file} (video_mode={video_mode}, num_frames={num_frames}, vla={vla_mode})")
 
     train_dataset = DriveLMDataset(
         train_file, processor, max_length=max_length,
         video_mode=video_mode, num_frames=num_frames, video_fps=video_fps,
+        vla_mode=vla_mode, vla_loss_mode=vla_loss_mode,
+        traj_start_id=traj_start_id, traj_end_id=traj_end_id,
     )
+
+    if args.dry_run:
+        # Sanity-print one sample + memory estimate; do NOT build optimizer / train.
+        print("\n========= DRY RUN =========")
+        sample0 = train_dataset[0]
+        print(f"  dataset size      : {len(train_dataset)}")
+        print(f"  sample input_ids  : {tuple(sample0['input_ids'].shape)}")
+        if "pixel_values_videos" in sample0:
+            print(f"  pixel_values_vids : {tuple(sample0['pixel_values_videos'].shape)}")
+        if "video_grid_thw" in sample0:
+            print(f"  video_grid_thw    : {sample0['video_grid_thw'].tolist()}")
+        n_action = sum(1 for tid in sample0['input_ids'].tolist()
+                       if (traj_start_id is not None and tid >= traj_start_id - 256))
+        print(f"  ~action tokens    : {n_action}  (rough heuristic)")
+        n_total = sum(p.numel() for p in model.parameters())
+        n_train = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        # Memory estimate: bf16 weights = 2 bytes; AdamW (states m + v in fp32) = 8 bytes/trainable
+        weight_gb = 2 * n_total / 1024**3
+        grad_gb = 2 * n_train / 1024**3
+        opt_gb = 8 * n_train / 1024**3
+        print(f"  params total      : {n_total/1e9:.3f} B  (~{weight_gb:.2f} GB bf16 weights)")
+        print(f"  params trainable  : {n_train/1e9:.3f} B  (~{grad_gb:.2f} GB grads, ~{opt_gb:.2f} GB Adam states)")
+        print(f"  rough train mem   : ~{weight_gb + grad_gb + opt_gb:.1f} GB (excl. activations / VLA)")
+        print(f"  fsdp flag         : {fsdp_enabled}  activation_ckpt={activation_checkpointing}")
+        print("DRY RUN OK — exiting before optimizer construction.")
+        return
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
@@ -641,6 +814,8 @@ def main():
         val_dataset = DriveLMDataset(
             val_file, processor, max_length=max_length,
             video_mode=video_mode, num_frames=num_frames, video_fps=video_fps,
+            vla_mode=vla_mode, vla_loss_mode=vla_loss_mode,
+            traj_start_id=traj_start_id, traj_end_id=traj_end_id,
         )
         val_loader = DataLoader(
             val_dataset,
@@ -846,7 +1021,10 @@ def main():
 
     # ============ Save final model ============
     final_path = os.path.join(output_dir, "final")
-    model.save_pretrained(final_path)
+    # For full_sft this writes the whole HF model (~6 GB for 3B); for LoRA/QLoRA
+    # it writes only the adapter (~50 MB). Either way save_pretrained does the
+    # right thing because peft-wrapped vs raw both implement the same API.
+    model.save_pretrained(final_path, safe_serialization=True)
     processor.save_pretrained(final_path)
     print(f"\nTraining complete! Final model saved to {final_path}")
 

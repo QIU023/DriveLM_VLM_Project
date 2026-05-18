@@ -1,0 +1,21 @@
+base_config: gb200_vla.yaml
+
+# ============ Tier-2 Video VLA (7B, full SFT) ============
+# Use this when the user has a Tier-1 7B LoRA they want to merge first.
+experiment: video_vla_7b_full_sft
+
+# Warm-init from merged 7B (replace path if your merge output differs).
+model_id: "/workspace/models/Qwen2.5-VL-7B-drivelm-merged"
+
+# 7B is ~2.3x weight memory; halve effective batch via more grad-accum.
+batch_size: 1
+grad_accum_steps: 8          # eff bs = 8 (per-GPU); multiply by world_size for FSDP
+
+# Lower LR for the larger model.
+learning_rate: 1e-5
+
+# Slightly tighter video budget to leave room for the larger LM.
+max_pixels: 75264            # 96 * 28 * 28 per frame
+max_length: 2560
+
+# Everything else (vla_mode, freeze_vision, train_mode, etc) inherits from gb200_vla.yaml.
