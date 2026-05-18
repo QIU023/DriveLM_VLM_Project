@@ -41,3 +41,10 @@ max_length: 2560             # +traj tokens (~14) + reserved boundary; bumped fr
 learning_rate: 5e-6          # paper-aligned full-model SFT; lower than LoRA's 1e-4
 warmup_ratio: 0.03           # OpenVLA-style ratio (~1400 steps of 47K)
 num_epochs: 1                # paper recipe is 1 epoch over full DriveLM
+
+# 80/20 scene-level held-out validation (scripts/split_train_val.py --seed 42 →
+# 557 train scenes / 139 val scenes; 262,833 train / 65,298 val records).
+# train_lora.py val_file convention is {data_path_vla}_val.json which matches
+# data_processed/v1_1_video_n4_FULL_with_traj_val.json on disk.
+val_every: 1000              # opt steps between val passes (~3% of 47K total)
+val_batches: 50              # batches per val pass — caps wall-clock
