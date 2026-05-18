@@ -1,14 +1,20 @@
 base_config: gb200_video.yaml
 
-# ============ Tier-2 Video VLA (3B, full SFT) ============
-# Layered on top of gb200_video.yaml (4-frame CAM_FRONT video).
-# This config trains Qwen2.5-VL-3B end-to-end (no LoRA) to also emit ego
-# trajectory tokens, on 8x B200 / GB200 with FSDP=8 + activation checkpointing.
+# ============ Tier-2 Video VLA (3B, full SFT, paper-aligned) ============
+# Rationale: paper-standard full SFT on Qwen2.5-VL-3B without any LoRA warm-init,
+# vision tower frozen (SigLIP/ViT stays as-is — only the LM is trained), and a
+# conservative 5e-6 learning rate (full-model SFT is much more LR-sensitive than
+# LoRA; OpenVLA / AutoVLA use 1e-5..5e-6 for the LM with the visual encoder
+# frozen). 1 epoch over the full 377K DriveLM video clips ~= ~47K opt steps at
+# eff_bs=64 (8x B200 * bs1 * grad_accum=8). Warmup ratio 0.03 is the OpenVLA
+# default. Loss is computed on both the answer text AND the trajectory tokens
+# (OpenVLA-style); switch to traj_only to ablate. AC is on to keep memory
+# headroom for 4-frame video activations.
 experiment: video_vla_3b_full_sft
 
-# Warm-init: prefer the merged Tier-1 LoRA. If you haven't run merge_lora_to_base.py
-# yet, point this at the raw base — training will just take longer to converge.
-model_id: "/workspace/models/Qwen2.5-VL-3B-drivelm-merged"
+# Clean base (NOT a Tier-1 merged dir) — the user has decided to skip Tier-1
+# LoRA warm-init for the paper-standard run.
+model_id: "/workspace/models/Qwen2.5-VL-3B-Instruct"
 
 # Training topology
 train_mode: full_sft         # "lora" | "full_sft" | "qlora"
@@ -20,16 +26,18 @@ gradient_checkpointing: true
 # VLA: append trajectory targets to the assistant turn
 vla_mode: true
 vla_loss_mode: answer_and_traj   # OpenVLA-style; switch to "traj_only" to ablate
-data_path_vla: data_processed/v1_1_video_n4_with_traj.json
+data_path_vla: data_processed/v1_1_video_n4_FULL_with_traj.json
+
+# Vision tower stays frozen, so LoRA targets don't matter; explicitly empty.
+lora_target_modules_vision: []
 
 # Video tensors (from gb200_video.yaml): N=4, fps=2.0, max_pixels=100352 / frame.
 
-# Memory: full 3B SFT + 4-frame video + AC ~= 18 GB / GPU at bs=1 grad_accum=4.
-# At 8x B200 (192 GB each) we can push higher; start conservative.
+# Memory: full 3B SFT + 4-frame video + AC ~= 18 GB / GPU at bs=1 grad_accum=8.
+# At 8x B200 (192 GB each) we can push higher; start conservative for stability.
 batch_size: 1
-grad_accum_steps: 4          # eff bs = 8 across 1 GPU; multiply by world_size for FSDP=8
+grad_accum_steps: 8          # eff bs per-GPU = 8; * 8 GPUs FSDP = 64 global
 max_length: 2560             # +traj tokens (~14) + reserved boundary; bumped from 2048
-learning_rate: 2e-5          # lower than LoRA (full model is much more sensitive)
-num_epochs: 2
-
-# Vision tower stays frozen, so LoRA targets don't matter; keep defaults.
+learning_rate: 5e-6          # paper-aligned full-model SFT; lower than LoRA's 1e-4
+warmup_ratio: 0.03           # OpenVLA-style ratio (~1400 steps of 47K)
+num_epochs: 1                # paper recipe is 1 epoch over full DriveLM
