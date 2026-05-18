@@ -834,11 +834,14 @@ def main():
 
     # ============ Optimizer ============
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
+    warmup_ratio = float(cfg.get("warmup_ratio", 0.05))
     scheduler = get_cosine_schedule_with_warmup(
         optimizer,
-        num_warmup_steps=int(total_steps * 0.05),
+        num_warmup_steps=max(1, int(total_steps * warmup_ratio)),
         num_training_steps=total_steps,
     )
+    print(f"Scheduler: cosine with warmup_ratio={warmup_ratio:.3f} -> "
+          f"{int(total_steps * warmup_ratio)} warmup steps / {total_steps} total")
 
     # ============ Resume training state ============
     resume_step = 0

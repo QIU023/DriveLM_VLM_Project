@@ -1,21 +1,26 @@
 base_config: gb200_vla.yaml
 
-# ============ Tier-2 Video VLA (7B, full SFT) ============
-# Use this when the user has a Tier-1 7B LoRA they want to merge first.
+# ============ Tier-2 Video VLA (7B, full SFT, paper-aligned) ============
+# Rationale: same paper-standard recipe as the 3B variant — full SFT, frozen
+# vision tower, no LoRA warm-init, lr=5e-6, warmup=0.03, 1 epoch. The 7B model
+# is ~2.3x weight memory + a wider activation footprint, so we (a) keep AC on
+# (inherited), (b) double grad_accum to 16 to halve per-step activation cost,
+# and (c) shrink the per-frame pixel budget slightly. Effective global batch on
+# 8x B200 stays at ~64 (bs1 * grad_accum=16 * 8 GPUs / 2 = ... actually 128 —
+# the user may want to drop grad_accum to 8 if convergence is the goal vs. fit).
+# Everything else inherits from gb200_vla.yaml.
 experiment: video_vla_7b_full_sft
 
-# Warm-init from merged 7B (replace path if your merge output differs).
-model_id: "/workspace/models/Qwen2.5-VL-7B-drivelm-merged"
+model_id: "/workspace/models/Qwen2.5-VL-7B-Instruct"
 
-# 7B is ~2.3x weight memory; halve effective batch via more grad-accum.
+# 7B is ~2.3x weight memory; bump grad_accum to keep per-step memory tight.
 batch_size: 1
-grad_accum_steps: 8          # eff bs = 8 (per-GPU); multiply by world_size for FSDP
-
-# Lower LR for the larger model.
-learning_rate: 1e-5
+grad_accum_steps: 16         # eff bs per-GPU = 16; * 8 GPUs FSDP = 128 global
 
 # Slightly tighter video budget to leave room for the larger LM.
 max_pixels: 75264            # 96 * 28 * 28 per frame
 max_length: 2560
 
-# Everything else (vla_mode, freeze_vision, train_mode, etc) inherits from gb200_vla.yaml.
+# Inherit: vla_mode, freeze_vision, train_mode, learning_rate (5e-6),
+# warmup_ratio (0.03), num_epochs (1), vla_loss_mode, data_path_vla,
+# activation_checkpointing, gradient_checkpointing, lora_target_modules_vision.
