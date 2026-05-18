@@ -47,13 +47,27 @@ def load_config(config_path):
 
 
 class DriveLMDataset(Dataset):
-    """Dataset for DriveLM QA fine-tuning with Qwen2.5-VL."""
+    """Dataset for DriveLM QA fine-tuning with Qwen2.5-VL.
 
-    def __init__(self, data_path, processor, max_length=512):
+    Supports two modes (selected via ``video_mode``):
+      * ``video_mode=False`` (default): each sample contains ONE ``{"type": "image"}``
+        message and a single CAM_FRONT PIL image is fed to ``processor(images=...)``.
+      * ``video_mode=True`` (Tier-1 video): each sample contains ONE ``{"type": "video"}``
+        message holding ``num_frames`` CAM_FRONT frames; we materialise the list as
+        ``[PIL.Image, ...]`` and pass to ``processor(videos=[frames], fps=video_fps, ...)``.
+        Transformers >= 5.x routes that through ``Qwen2_5_VLVideoProcessor`` which
+        returns ``pixel_values_videos`` + ``video_grid_thw`` + ``second_per_grid_ts``.
+    """
+
+    def __init__(self, data_path, processor, max_length=512,
+                 video_mode=False, num_frames=4, video_fps=2.0):
         with open(data_path, "r") as f:
             self.data = json.load(f)
         self.processor = processor
         self.max_length = max_length
+        self.video_mode = video_mode
+        self.num_frames = num_frames
+        self.video_fps = video_fps
 
     def __len__(self):
         return len(self.data)
@@ -69,8 +83,9 @@ class DriveLMDataset(Dataset):
                 continue
             proc_messages.append(msg)
 
-        # Extract images and build clean messages
-        images = []
+        # Extract images / videos and build clean messages
+        images = []           # list of PIL.Image — single-image branch
+        videos = []           # list of list[PIL.Image] — video branch (per-clip frames)
         image_name = ""
         clean_messages = []
         for msg in proc_messages:
@@ -84,6 +99,19 @@ class DriveLMDataset(Dataset):
                         images.append(Image.open(image_path).convert("RGB"))
                         image_name = os.path.basename(image_path)
                         new_content.append({"type": "image"})
+                    elif part.get("type") == "video":
+                        # part["video"] is list of absolute frame paths (see convert_data_video.py).
+                        frame_paths = part["video"]
+                        if isinstance(frame_paths, str):
+                            frame_paths = [frame_paths]
+                        frames = []
+                        for fp in frame_paths:
+                            if fp.startswith("file://"):
+                                fp = fp[7:]
+                            frames.append(Image.open(fp).convert("RGB"))
+                        videos.append(frames)
+                        image_name = os.path.basename(frame_paths[-1])
+                        new_content.append({"type": "video"})
                     else:
                         new_content.append(part)
                 clean_messages.append({"role": msg["role"], "content": new_content})
@@ -95,18 +123,43 @@ class DriveLMDataset(Dataset):
             clean_messages, tokenize=False, add_generation_prompt=False
         )
 
-        # Tokenize with processor
-        inputs = self.processor(
-            text=[text],
-            images=images if images else None,
-            return_tensors="pt",
-        )
+        # Tokenize with processor.
+        # NOTE on processor signature (transformers 5.x, processing_qwen2_5_vl.py):
+        #   __call__(images=None, text=None, videos=None, **kwargs)
+        # The processor routes images -> image_processor (returns pixel_values + image_grid_thw)
+        # and videos -> video_processor (returns pixel_values_videos + video_grid_thw +
+        # second_per_grid_ts). fps is consumed inside videos_kwargs.
+        proc_kwargs = {
+            "text": [text],
+            "return_tensors": "pt",
+        }
+        if self.video_mode and videos:
+            proc_kwargs["videos"] = videos
+            # Tell video_processor how to compute second_per_grid_ts. Supplying a
+            # VideoMetadata with fps lets it derive `sampled_fps` correctly.
+            from transformers.video_utils import VideoMetadata
+            metadata = []
+            for frames in videos:
+                metadata.append(VideoMetadata(
+                    total_num_frames=len(frames),
+                    fps=float(self.video_fps) if self.video_fps else 2.0,
+                    frames_indices=list(range(len(frames))),
+                    height=frames[0].height,
+                    width=frames[0].width,
+                ))
+            proc_kwargs["video_metadata"] = metadata
+        elif images:
+            proc_kwargs["images"] = images
+        inputs = self.processor(**proc_kwargs)
 
         # Squeeze batch dimension
         input_ids = inputs["input_ids"].squeeze(0)
         attention_mask = inputs["attention_mask"].squeeze(0)
         pixel_values = inputs.get("pixel_values")
         image_grid_thw = inputs.get("image_grid_thw")
+        pixel_values_videos = inputs.get("pixel_values_videos")
+        video_grid_thw = inputs.get("video_grid_thw")
+        second_per_grid_ts = inputs.get("second_per_grid_ts")
 
         # Truncate if too long
         if input_ids.shape[0] > self.max_length:
@@ -139,6 +192,16 @@ class DriveLMDataset(Dataset):
             result["pixel_values"] = pixel_values.squeeze(0) if pixel_values.dim() > 3 else pixel_values
         if image_grid_thw is not None:
             result["image_grid_thw"] = image_grid_thw.squeeze(0) if image_grid_thw.dim() > 1 else image_grid_thw
+        if pixel_values_videos is not None:
+            # shape: (num_video_patches, hidden) — keep as-is, batched in collate_fn.
+            result["pixel_values_videos"] = pixel_values_videos.squeeze(0) if pixel_values_videos.dim() > 2 else pixel_values_videos
+        if video_grid_thw is not None:
+            result["video_grid_thw"] = video_grid_thw.squeeze(0) if video_grid_thw.dim() > 1 else video_grid_thw
+        if second_per_grid_ts is not None:
+            # Tensor or list[float]; standardize to tensor.
+            if not isinstance(second_per_grid_ts, torch.Tensor):
+                second_per_grid_ts = torch.tensor(second_per_grid_ts, dtype=torch.float32)
+            result["second_per_grid_ts"] = second_per_grid_ts
 
         # Store image name for CRP importance lookup
         result["image_name"] = image_name if 'image_name' in dir() else ""
@@ -183,6 +246,22 @@ def collate_fn(batch):
         result["image_grid_thw"] = torch.cat(
             [item["image_grid_thw"].unsqueeze(0) if item["image_grid_thw"].dim() == 1 else item["image_grid_thw"] for item in batch],
             dim=0,
+        )
+    # Video tensors. pixel_values_videos has shape (num_patches, hidden) per sample;
+    # we concatenate along dim 0 since Qwen2.5-VL flattens patches across the batch
+    # and uses video_grid_thw to recover per-sample slices.
+    if "pixel_values_videos" in batch[0]:
+        result["pixel_values_videos"] = torch.cat(
+            [item["pixel_values_videos"] for item in batch], dim=0,
+        )
+    if "video_grid_thw" in batch[0]:
+        result["video_grid_thw"] = torch.cat(
+            [item["video_grid_thw"].unsqueeze(0) if item["video_grid_thw"].dim() == 1 else item["video_grid_thw"] for item in batch],
+            dim=0,
+        )
+    if "second_per_grid_ts" in batch[0]:
+        result["second_per_grid_ts"] = torch.cat(
+            [item["second_per_grid_ts"].view(-1) for item in batch], dim=0,
         )
     if "image_name" in batch[0]:
         result["image_names"] = [item["image_name"] for item in batch]
@@ -394,6 +473,21 @@ def main():
     min_pixels = cfg.get("min_pixels", 256 * 28 * 28)
     max_pixels = cfg.get("max_pixels", 512 * 28 * 28)
 
+    # Video-mode settings (Tier-1 multi-frame video).
+    # When video_mode=True, the dataset emits {"type":"video"} messages and we route
+    # `max_pixels` into the **video processor** (per-frame). For a constant *total*
+    # visual-token budget across an N-frame clip, the YAML should set
+    # `max_pixels: <single-frame budget> // N` — documented in configs/gb200_video.yaml.
+    video_mode = cfg.get("video_mode", False)
+    num_frames = cfg.get("num_frames", 4)
+    video_fps = cfg.get("video_fps", 2.0)
+    data_path_video = cfg.get("data_path_video", None)
+    # TODO(v2): visual token compression for video — needs a per-frame variant of
+    # forward_with_compression (currently compress_visual_tokens only handles image
+    # tokens via image_grid_thw). For Tier-1 we leave compress_method='none' in video
+    # configs and only exercise the data + forward path.
+    lora_target_modules_vision = cfg.get("lora_target_modules_vision", []) or []
+
     # Compression & experiment settings
     compress_method = args.compress_method or cfg.get("compress_method", "none")
     compress_ratio = args.compress_ratio or cfg.get("compress_ratio", 1)
@@ -439,6 +533,22 @@ def main():
     if hasattr(processor, "image_processor") and processor.image_processor is not None:
         processor.image_processor.min_pixels = min_pixels
         processor.image_processor.max_pixels = max_pixels
+    # In video_mode, also push min/max pixels into the video processor — this caps
+    # PER-FRAME resolution (the size dict's shortest/longest_edge in pixels). When the
+    # YAML sets max_pixels = base_max // num_frames, the total visual token budget per
+    # clip stays close to the single-image budget.
+    if video_mode and hasattr(processor, "video_processor") and processor.video_processor is not None:
+        vp = processor.video_processor
+        # vp.size is a SizeDict dataclass (no __setitem__) — use setattr.
+        if hasattr(vp, "size") and vp.size is not None:
+            if hasattr(vp.size, "shortest_edge"):
+                setattr(vp.size, "shortest_edge", min_pixels)
+            if hasattr(vp.size, "longest_edge"):
+                setattr(vp.size, "longest_edge", max_pixels)
+        for attr, val in (("min_pixels", min_pixels), ("max_pixels", max_pixels)):
+            if hasattr(vp, attr):
+                setattr(vp, attr, val)
+        print(f"Video processor caps: min_pixels={min_pixels} max_pixels={max_pixels} (per frame); size={vp.size}")
 
     # Prepare for training
     if quantize:
@@ -451,10 +561,21 @@ def main():
         model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
         print("Gradient checkpointing enabled")
 
+    # Optionally extend LoRA targets to vision-tower modules. Off by default since
+    # video Tier-1 starts with LLM-only LoRA; if a user wants to also adapt the
+    # SigLIP/ViT side, set `lora_target_modules_vision: [...]` in the YAML (e.g.
+    # ["qkv", "proj"] for Qwen2.5-VL's vision blocks).
+    effective_lora_targets = list(lora_targets)
+    if lora_target_modules_vision:
+        for t in lora_target_modules_vision:
+            if t not in effective_lora_targets:
+                effective_lora_targets.append(t)
+        print(f"Vision-tower LoRA targets added: {lora_target_modules_vision}")
+
     lora_config = LoraConfig(
         r=lora_r,
         lora_alpha=lora_alpha,
-        target_modules=lora_targets,
+        target_modules=effective_lora_targets,
         lora_dropout=lora_dropout,
         bias="none",
         task_type="CAUSAL_LM",
@@ -489,12 +610,23 @@ def main():
             print(f"[WARN] CRP importance not found at {crp_path}, falling back to L2 norm")
 
     # ============ Data setup ============
-    default_train = "train_mini.json" if args.mini else "train.json"
-    train_file = os.path.join(data_dir, cfg.get("train_file", default_train))
-    val_file = os.path.join(data_dir, "val.json")
-    print(f"Loading dataset: {train_file}")
+    if video_mode:
+        # Prefer explicit data_path_video; fall back to v1_1_video_n{N}.json
+        v_path = data_path_video or f"data_processed/v1_1_video_n{num_frames}.json"
+        if not os.path.isabs(v_path):
+            v_path = os.path.join(_BASE_DIR, v_path)
+        train_file = v_path
+        val_file = v_path.replace(".json", "_val.json")  # convention; smoke uses same file
+    else:
+        default_train = "train_mini.json" if args.mini else "train.json"
+        train_file = os.path.join(data_dir, cfg.get("train_file", default_train))
+        val_file = os.path.join(data_dir, "val.json")
+    print(f"Loading dataset: {train_file} (video_mode={video_mode}, num_frames={num_frames})")
 
-    train_dataset = DriveLMDataset(train_file, processor, max_length=max_length)
+    train_dataset = DriveLMDataset(
+        train_file, processor, max_length=max_length,
+        video_mode=video_mode, num_frames=num_frames, video_fps=video_fps,
+    )
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
@@ -506,7 +638,10 @@ def main():
 
     val_loader = None
     if val_every > 0 and os.path.exists(val_file):
-        val_dataset = DriveLMDataset(val_file, processor, max_length=max_length)
+        val_dataset = DriveLMDataset(
+            val_file, processor, max_length=max_length,
+            video_mode=video_mode, num_frames=num_frames, video_fps=video_fps,
+        )
         val_loader = DataLoader(
             val_dataset,
             batch_size=batch_size,

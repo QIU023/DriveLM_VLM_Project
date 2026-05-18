@@ -1,0 +1,20 @@
+base_config: gb200.yaml
+
+# ============ Tier-1 video (8 frames) ============
+experiment: video_n8
+model_id: "/workspace/models/Qwen2.5-VL-3B-Instruct"
+
+video_mode: true
+num_frames: 8
+video_fps: 2.0
+data_path_video: data_processed/v1_1_video_n8.json
+
+# 401408 // 8 = 50176 per frame (= 64 * 28 * 28)
+min_pixels: 25088          # 32 * 28 * 28
+max_pixels: 50176          # 64 * 28 * 28
+max_length: 2048           # ~200 video tokens at this size + text
+
+batch_size: 1
+grad_accum_steps: 8        # effective batch = 8
+
+lora_target_modules_vision: []
