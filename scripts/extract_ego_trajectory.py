@@ -88,14 +88,70 @@ def _quat_to_rot2d(q_wxyz: List[float]) -> np.ndarray:
     return np.array([[c, -s], [s, c]], dtype=np.float64)
 
 
+class _MetaIndex:
+    """Pre-built indexes over nuScenes meta — hoisted out of the per-record path.
+
+    Building these once for the full v1.0-trainval (~700K sample_data rows + ~200K
+    ego_pose rows + ~200K sample rows for the 12Hz interpolated meta) takes ~20 s
+    and is then constant-time per query. With 377K DriveLM QA records, rebuilding
+    on every call (the previous behaviour) was the bottleneck.
+    """
+
+    def __init__(self, meta: Dict[str, list]):
+        self.samples_by_token: Dict[str, dict] = {s["token"]: s for s in meta["sample"]}
+        self.ep_by_token: Dict[str, dict] = {ep["token"]: ep for ep in meta["ego_pose"]}
+
+        # Group sample_data rows by sample_token; for each sample, remember the
+        # canonical LIDAR_TOP keyframe row (if any) so _ego_pose_for_sample is O(1).
+        sd_by_sample: Dict[str, list] = {}
+        lidar_top_by_sample: Dict[str, dict] = {}
+        for sd in meta["sample_data"]:
+            stok = sd["sample_token"]
+            sd_by_sample.setdefault(stok, []).append(sd)
+            if (
+                sd.get("channel", "") == "LIDAR_TOP"
+                and sd.get("is_key_frame", False)
+                and stok not in lidar_top_by_sample
+            ):
+                lidar_top_by_sample[stok] = sd
+        self.sd_by_sample = sd_by_sample
+        self.lidar_top_by_sample = lidar_top_by_sample
+
+    def ego_pose_for_sample(self, stok: str) -> Optional[dict]:
+        sd = self.lidar_top_by_sample.get(stok)
+        if sd is not None:
+            ep_tok = sd.get("ego_pose_token")
+            if ep_tok and ep_tok in self.ep_by_token:
+                return self.ep_by_token[ep_tok]
+        # Fall back to ANY sample_data row that has an ego_pose_token.
+        for sd in self.sd_by_sample.get(stok, []):
+            ep_tok = sd.get("ego_pose_token")
+            if ep_tok and ep_tok in self.ep_by_token:
+                return self.ep_by_token[ep_tok]
+        return None
+
+
 def _build_future_trajectory_real(
-    meta: Dict[str, list],
+    index: "_MetaIndex",
     sample_token: str,
     horizon_s: float,
     sample_hz: float,
+    strict_tolerance_s: float = 0.25,
 ) -> Optional[np.ndarray]:
-    """Return (T, 2) future ego positions in the current ego frame, or None."""
-    samples_by_token = {s["token"]: s for s in meta["sample"]}
+    """Return (T, 2) future ego positions in the current ego frame, or None.
+
+    BUGFIX 2026-05-18: previously, if the requested future timestamp exceeded
+    the scene's last available ego_pose, we silently clamped to xys[-1],
+    producing a frozen-tail trajectory (last two waypoints identical). On the
+    full DriveLM real meta this happened on 100% of keyframes because most
+    keyframes are near the *end* of their scene.
+
+    Fix (Option A): return None if the latest available ego_pose timestamp is
+    more than `strict_tolerance_s` seconds short of (t0 + horizon_s). Caller
+    drops the record. Note we permit the *interpolation* of intermediate
+    waypoints (np.interp), but never extrapolation past the last real pose.
+    """
+    samples_by_token = index.samples_by_token
     if sample_token not in samples_by_token:
         return None
 
@@ -103,32 +159,7 @@ def _build_future_trajectory_real(
     cur = samples_by_token[sample_token]
     t0_us = cur["timestamp"]  # microseconds
 
-    # Map sample_token -> ego_pose at the LIDAR_TOP timestamp (canonical pose).
-    # nuScenes stores ego_pose per *sample_data*, not per sample. We pick the
-    # ego_pose belonging to the LIDAR_TOP sample_data for this sample.
-    sd_by_sample = {}
-    for sd in meta["sample_data"]:
-        if sd["sample_token"] not in sd_by_sample:
-            sd_by_sample[sd["sample_token"]] = []
-        sd_by_sample[sd["sample_token"]].append(sd)
-
-    ep_by_token = {ep["token"]: ep for ep in meta["ego_pose"]}
-
-    def _ego_pose_for_sample(stok: str) -> Optional[dict]:
-        sds = sd_by_sample.get(stok, [])
-        # Prefer LIDAR_TOP; fall back to any with ego_pose_token set.
-        for sd in sds:
-            if sd.get("channel", "") == "LIDAR_TOP" and sd.get("is_key_frame", False):
-                ep_tok = sd.get("ego_pose_token")
-                if ep_tok and ep_tok in ep_by_token:
-                    return ep_by_token[ep_tok]
-        for sd in sds:
-            ep_tok = sd.get("ego_pose_token")
-            if ep_tok and ep_tok in ep_by_token:
-                return ep_by_token[ep_tok]
-        return None
-
-    ep0 = _ego_pose_for_sample(sample_token)
+    ep0 = index.ego_pose_for_sample(sample_token)
     if ep0 is None:
         return None
     p0 = np.array(ep0["translation"][:2], dtype=np.float64)
@@ -143,12 +174,15 @@ def _build_future_trajectory_real(
     walk = []  # list of (timestamp_us, np.array([x,y]))
     cur_tok = sample_token
     walked = 0
-    max_walk = num_waypoints * 4 + 4  # safety bound (samples are ~0.5 s apart)
+    # Safety bound. The 12Hz interpolated meta puts samples ~83 ms apart,
+    # so we need ~12 * horizon_s + slack. Plain 2Hz keyframe meta is
+    # ~500 ms apart -> num_waypoints * 4 was fine. Use a generous bound.
+    max_walk = int(15 * horizon_s) + 8
     while cur_tok and walked < max_walk:
         smp = samples_by_token.get(cur_tok)
         if smp is None:
             break
-        ep = _ego_pose_for_sample(cur_tok)
+        ep = index.ego_pose_for_sample(cur_tok)
         if ep is not None:
             walk.append((smp["timestamp"], np.array(ep["translation"][:2], dtype=np.float64)))
         if walk and walk[-1][0] >= t0_us + int(1e6 * horizon_s) + 200_000:
@@ -162,18 +196,28 @@ def _build_future_trajectory_real(
     times = np.array([w[0] for w in walk], dtype=np.float64)
     xys = np.stack([w[1] for w in walk], axis=0)
 
-    # Interpolate at target timestamps.
+    # BUGFIX (Option A): refuse to extrapolate past the last real ego_pose.
+    # If any future target timestamp lies more than strict_tolerance_s seconds
+    # past `times[-1]`, drop the record. We DO allow a small tolerance so a
+    # waypoint that lies e.g. 50 ms past the last logged pose is still kept
+    # (just interpolated to the very last logged pose).
+    tol_us = int(strict_tolerance_s * 1e6)
+    for ts in targets_us:
+        if ts > times[-1] + tol_us:
+            return None
+        if ts < times[0] - tol_us:
+            # Should never happen (t0 is in the walk by construction), but guard.
+            return None
+
     waypoints_global = []
     for ts in targets_us:
-        if ts < times[0] or ts > times[-1]:
-            # Out of range (scene ends before horizon). Use last available.
-            waypoints_global.append(xys[-1])
-        else:
-            ix = float(np.interp(ts, times, np.arange(len(times))))
-            i0 = int(np.floor(ix))
-            i1 = min(i0 + 1, len(times) - 1)
-            a = ix - i0
-            waypoints_global.append((1 - a) * xys[i0] + a * xys[i1])
+        # Clamp to interpolation range; tolerance was already enforced above.
+        ts_clip = min(max(ts, float(times[0])), float(times[-1]))
+        ix = float(np.interp(ts_clip, times, np.arange(len(times))))
+        i0 = int(np.floor(ix))
+        i1 = min(i0 + 1, len(times) - 1)
+        a = ix - i0
+        waypoints_global.append((1 - a) * xys[i0] + a * xys[i1])
     waypoints_global = np.stack(waypoints_global, axis=0)  # (T, 2)
 
     # Convert to ego frame at t0: local = R0^T (global - p0). Note nuScenes
@@ -266,11 +310,19 @@ def main():
     # Detect / load nuScenes meta
     meta_dir = args.meta_dir or _find_nuscenes_meta()
     meta = None
+    index = None
     if meta_dir and not args.force_heuristic:
         print(f"Using nuScenes meta at: {meta_dir}")
+        t_meta0 = __import__("time").time()
         meta = _load_nusc_meta(meta_dir)
         for k, v in meta.items():
             print(f"  {k}: {len(v)} entries")
+        print(f"  meta load: {__import__('time').time() - t_meta0:.1f} s")
+        t_idx0 = __import__("time").time()
+        index = _MetaIndex(meta)
+        print(f"  index build: {__import__('time').time() - t_idx0:.1f} s")
+        # Free the heavy raw lists ASAP — they're ~2 GB of dicts after parsing
+        meta = None
     else:
         if args.force_heuristic:
             print("--force-heuristic: skipping real nuScenes meta.")
@@ -284,7 +336,17 @@ def main():
     out_records = []
     stats = Counter()
 
-    for rec in data:
+    # Cache: many records share the same frame_token (one per QA category).
+    # Compute the trajectory once per frame_token.
+    traj_cache: Dict[str, Optional[np.ndarray]] = {}
+
+    try:
+        from tqdm import tqdm  # noqa: WPS433 (local import: optional dep)
+        iterator = tqdm(data, desc="extract_traj", unit="rec", mininterval=2.0)
+    except ImportError:
+        iterator = data
+
+    for rec in iterator:
         frame_token = rec.get("frame_token") or rec.get("metadata", {}).get("frame_token", "")
         if not frame_token:
             stats["no_frame_token"] += 1
@@ -292,23 +354,27 @@ def main():
 
         waypoints = None
         source = None
-        if meta is not None:
-            waypoints = _build_future_trajectory_real(
-                meta, frame_token, args.horizon_s, args.sample_hz,
-            )
+        if index is not None:
+            if frame_token in traj_cache:
+                waypoints = traj_cache[frame_token]
+            else:
+                waypoints = _build_future_trajectory_real(
+                    index, frame_token, args.horizon_s, args.sample_hz,
+                )
+                traj_cache[frame_token] = waypoints
             if waypoints is not None:
                 source = "nuscenes_real"
                 stats["resolved_real"] += 1
             else:
-                stats["unresolved_real"] += 1
+                stats["unresolved_real_skipped"] += 1
+                # When real meta is available, OPTION A says: drop the record
+                # rather than fall back to heuristic. Heuristic would mask the
+                # real-meta coverage gaps and pollute training.
+                continue
 
         if waypoints is None:
-            # Heuristic path: pull behavior answer for this frame if available
+            # Heuristic path (only entered when index is None, i.e. no real meta).
             behavior_text = ""
-            # rec is one QA — but the heuristic should ideally average across
-            # behavior QAs at the same frame_token. For simplicity, look at this
-            # record's own answer when the category is behavior; otherwise use a
-            # generic "go straight".
             if rec.get("metadata", {}).get("category") == "behavior":
                 msgs = rec.get("messages", [])
                 for m in msgs:
@@ -322,11 +388,21 @@ def main():
         # Encode
         action_tokens = tok.encode(waypoints, with_boundaries=True)
 
+        # Regression metric for the frozen-tail bugfix: check if the last
+        # two waypoints are within 1 cm of each other (i.e. would have been
+        # produced by the old "clamp to end of scene" path).
+        last_two_same = bool(
+            np.allclose(waypoints[-1], waypoints[-2], atol=0.01)
+        )
+        if last_two_same:
+            stats["trailing_duplicate"] += 1
+
         # Round-trip echo for debugging on the first few
         if stats["written"] < 3:
             rt = tok.decode(action_tokens)
             print(f"  [demo] frame={frame_token[:8]} src={source} "
-                  f"wp_first={waypoints[0].tolist()} rt_first={rt[0].tolist()}")
+                  f"wp_first={waypoints[0].tolist()} rt_first={rt[0].tolist()}  "
+                  f"wp_last={waypoints[-1].tolist()}")
 
         rec2 = dict(rec)
         rec2["action_tokens"] = action_tokens
@@ -347,6 +423,11 @@ def main():
     print(f"Wrote {stats['written']}/{len(data)} records")
     for k, v in stats.most_common():
         print(f"  {k}: {v}")
+
+    if stats["written"] > 0:
+        dup_pct = 100.0 * stats["trailing_duplicate"] / stats["written"]
+        print(f"  trailing_duplicate ratio: {dup_pct:.2f}% "
+              f"(target after bugfix: <= 5%)")
 
     with open(out_path, "w") as f:
         json.dump(out_records, f)
