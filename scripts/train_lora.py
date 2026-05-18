@@ -607,6 +607,7 @@ def main():
     max_length = cfg.get("max_length", 512)
     num_workers = cfg.get("num_workers", 0)
     save_every = cfg.get("save_every", 500)
+    keep_latest_k = cfg.get("keep_latest_k", 3)  # disk discipline; 0 disables pruning
     min_pixels = cfg.get("min_pixels", 256 * 28 * 28)
     max_pixels = cfg.get("max_pixels", 512 * 28 * 28)
 
@@ -1230,6 +1231,19 @@ def main():
                     )
                     if accelerator.is_main_process:
                         tqdm.write(f"  [SAVE] checkpoint-{global_step}")
+                        # Disk discipline: keep only the latest K ckpts.
+                        # At save_every=100 and ckpt~18GB this caps disk use
+                        # to ~K * 18GB instead of 41 * 18GB = 738GB.
+                        if keep_latest_k > 0:
+                            import glob, shutil
+                            ckpts = sorted(
+                                glob.glob(os.path.join(output_dir, "checkpoint-*")),
+                                key=lambda p: int(p.rsplit("-", 1)[-1]),
+                            )
+                            for old in ckpts[:-keep_latest_k]:
+                                tqdm.write(f"  [PRUNE] removing {os.path.basename(old)}")
+                                shutil.rmtree(old, ignore_errors=True)
+                    accelerator.wait_for_everyone()
 
                 # Validation
                 if val_every > 0 and val_loader is not None and global_step % val_every == 0:
