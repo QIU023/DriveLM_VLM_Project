@@ -1,0 +1,23 @@
+base_config: gb200_video.yaml
+
+# ============ Generic full-SFT video config (no VLA trajectory tokens) ============
+# Useful for ablating "full SFT vs LoRA" without the action-token head, and as
+# the target of `python scripts/train_lora.py --config <this> --dry-run`.
+experiment: video_full_sft_3b
+
+model_id: "/workspace/models/Qwen2.5-VL-3B-Instruct"
+
+train_mode: full_sft
+freeze_vision: true
+fsdp: true
+activation_checkpointing: true
+gradient_checkpointing: true
+
+# Same VLA-off behaviour as Tier 1, just full SFT instead of LoRA.
+vla_mode: false
+
+batch_size: 1
+grad_accum_steps: 4
+learning_rate: 2e-5
+num_epochs: 1
+max_length: 2048

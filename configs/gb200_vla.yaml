@@ -1,0 +1,35 @@
+base_config: gb200_video.yaml
+
+# ============ Tier-2 Video VLA (3B, full SFT) ============
+# Layered on top of gb200_video.yaml (4-frame CAM_FRONT video).
+# This config trains Qwen2.5-VL-3B end-to-end (no LoRA) to also emit ego
+# trajectory tokens, on 8x B200 / GB200 with FSDP=8 + activation checkpointing.
+experiment: video_vla_3b_full_sft
+
+# Warm-init: prefer the merged Tier-1 LoRA. If you haven't run merge_lora_to_base.py
+# yet, point this at the raw base — training will just take longer to converge.
+model_id: "/workspace/models/Qwen2.5-VL-3B-drivelm-merged"
+
+# Training topology
+train_mode: full_sft         # "lora" | "full_sft" | "qlora"
+freeze_vision: true          # SigLIP/ViT side frozen during Tier-2 SFT
+fsdp: true                   # informational; launch with `accelerate launch --use_fsdp`
+activation_checkpointing: true
+gradient_checkpointing: true
+
+# VLA: append trajectory targets to the assistant turn
+vla_mode: true
+vla_loss_mode: answer_and_traj   # OpenVLA-style; switch to "traj_only" to ablate
+data_path_vla: data_processed/v1_1_video_n4_with_traj.json
+
+# Video tensors (from gb200_video.yaml): N=4, fps=2.0, max_pixels=100352 / frame.
+
+# Memory: full 3B SFT + 4-frame video + AC ~= 18 GB / GPU at bs=1 grad_accum=4.
+# At 8x B200 (192 GB each) we can push higher; start conservative.
+batch_size: 1
+grad_accum_steps: 4          # eff bs = 8 across 1 GPU; multiply by world_size for FSDP=8
+max_length: 2560             # +traj tokens (~14) + reserved boundary; bumped from 2048
+learning_rate: 2e-5          # lower than LoRA (full model is much more sensitive)
+num_epochs: 2
+
+# Vision tower stays frozen, so LoRA targets don't matter; keep defaults.
