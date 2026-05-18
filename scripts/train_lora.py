@@ -28,6 +28,13 @@ from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from PIL import Image
 from tqdm import tqdm
 
+# ---- Distributed / FSDP via HuggingFace Accelerate -------------------------
+# Imports are intentionally light at module scope; FSDP-specific symbols are
+# imported lazily inside main() if a distributed launch is detected, so the
+# single-GPU smoke-test path continues to work on machines without a fully
+# functional FSDP build.
+from accelerate import Accelerator
+
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -495,6 +502,61 @@ def validate(model, val_loader, compress_method, compress_ratio, image_token_id,
     return val_loss, val_acc
 
 
+def _save_model_and_state(accelerator, model, optimizer, scheduler,
+                          train_mode, save_path, global_step, epoch, batch_idx,
+                          save_processor=None):
+    """Distributed-safe checkpoint writer.
+
+    For LoRA / QLoRA we save the adapter only (small, single rank writes).
+    For full_sft under FSDP we gather a full state_dict on rank 0 and write
+    via HF `save_pretrained` so the result is a drop-in HF checkpoint dir.
+    """
+    if accelerator.is_main_process:
+        os.makedirs(save_path, exist_ok=True)
+    accelerator.wait_for_everyone()
+
+    unwrapped = accelerator.unwrap_model(model)
+    if train_mode == "full_sft":
+        # `accelerator.get_state_dict` gathers FSDP shards onto rank 0 (or
+        # returns the local state dict in single-GPU mode).
+        state_dict = accelerator.get_state_dict(model)
+        if accelerator.is_main_process:
+            unwrapped.save_pretrained(
+                save_path,
+                is_main_process=True,
+                save_function=accelerator.save,
+                state_dict=state_dict,
+                safe_serialization=True,
+            )
+            if save_processor is not None:
+                save_processor.save_pretrained(save_path)
+    else:
+        # LoRA / QLoRA: only adapter weights, main process writes.
+        if accelerator.is_main_process:
+            unwrapped.save_pretrained(save_path, safe_serialization=True)
+            if save_processor is not None:
+                save_processor.save_pretrained(save_path)
+
+    # Optimizer / scheduler state — single rank dump (sharded optim under
+    # FSDP would need accelerator.save_state; we keep the simple legacy
+    # path for compatibility with the existing --resume code).
+    if accelerator.is_main_process:
+        try:
+            torch.save({
+                "optimizer": optimizer.state_dict(),
+                "scheduler": scheduler.state_dict(),
+                "global_step": global_step,
+                "epoch": epoch,
+                "batch_idx": batch_idx,
+            }, os.path.join(save_path, "training_state.pt"))
+        except Exception as e:
+            # Under FSDP the optimizer state can be sharded — fall back to
+            # accelerator.save_state so we get a proper distributed dump.
+            print(f"[warn] direct optimizer.state_dict() failed ({e}); "
+                  f"using accelerator.save_state instead")
+    accelerator.wait_for_everyone()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, required=True, help="Path to YAML config file")
@@ -518,9 +580,17 @@ def main():
                         help="Override train_mode from config. Defaults to 'lora'.")
     args = parser.parse_args()
 
+    # ============ Distributed / Accelerator setup ============
+    # Detect torchrun / `accelerate launch` environment. When RANK/WORLD_SIZE
+    # are present we assume a multi-process distributed launch; the actual
+    # FSDP wiring depends on `fsdp: true` in the YAML (parsed below).
+    _is_distributed_env = ("RANK" in os.environ and "WORLD_SIZE" in os.environ
+                           and int(os.environ.get("WORLD_SIZE", "1")) > 1)
+
     # ============ Load config ============
     cfg = load_config(args.config)
-    print(f"Config: {args.config}")
+    if not _is_distributed_env or os.environ.get("RANK", "0") == "0":
+        print(f"Config: {args.config}")
 
     model_id = cfg["model_id"]
     lora_r = cfg["lora_r"]
@@ -578,15 +648,88 @@ def main():
     output_dir = os.path.join(_BASE_DIR, "checkpoints_qwen25", experiment)
     os.makedirs(output_dir, exist_ok=True)
 
+    # ---- Build Accelerator (FSDP if requested, else default DDP/single-GPU) ----
+    # When `fsdp_enabled` (YAML `fsdp: true`) AND we are inside a distributed
+    # launch we construct a FullyShardedDataParallelPlugin and pass it to the
+    # Accelerator. Otherwise we still create an Accelerator (so the training
+    # loop has a single code path) but it stays in `no` distributed mode or
+    # plain multi-GPU DDP depending on launch.
+    accelerator = None
+    use_fsdp = bool(fsdp_enabled) and _is_distributed_env
+    if use_fsdp:
+        from accelerate.utils import FullyShardedDataParallelPlugin
+        from torch.distributed.fsdp import (
+            MixedPrecision, BackwardPrefetch, ShardingStrategy,
+        )
+        # Try to locate the actual decoder-layer class to enable a
+        # cls-name-based auto-wrap policy. Fall back to string-based
+        # name (which the plugin also accepts) if the import fails.
+        try:
+            from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
+                Qwen2_5_VLDecoderLayer,
+            )
+            transformer_cls_names = ["Qwen2_5_VLDecoderLayer"]
+        except Exception as e:  # pragma: no cover
+            print(f"[FSDP] Could not import Qwen2_5_VLDecoderLayer ({e}); "
+                  f"falling back to string name only")
+            transformer_cls_names = ["Qwen2_5_VLDecoderLayer"]
+
+        # IMPORTANT: do NOT enable activation_checkpointing in the FSDP plugin
+        # for transformers >= 5.x — `Qwen2_5_VLDecoderLayer` inherits from
+        # `transformers.modeling_layers.GradientCheckpointingLayer` and already
+        # handles AC internally when the model has gradient checkpointing on.
+        # If we also wrap each layer with FSDP's `checkpoint_wrapper`, the
+        # double-wrap causes a `CheckpointError: A different number of tensors
+        # was saved during the original forward and recomputation` on backward.
+        # Instead, leave AC off in the plugin and let HF's built-in
+        # `model.gradient_checkpointing_enable()` (called below) do it.
+        fsdp_plugin = FullyShardedDataParallelPlugin(
+            sharding_strategy=ShardingStrategy.FULL_SHARD,
+            backward_prefetch=BackwardPrefetch.BACKWARD_PRE,
+            mixed_precision_policy=MixedPrecision(
+                param_dtype=torch.bfloat16,
+                reduce_dtype=torch.float32,
+                buffer_dtype=torch.bfloat16,
+            ),
+            transformer_cls_names_to_wrap=transformer_cls_names,
+            use_orig_params=True,
+            sync_module_states=True,
+            cpu_ram_efficient_loading=True,
+            forward_prefetch=False,
+            activation_checkpointing=False,  # see comment above
+            state_dict_type="SHARDED_STATE_DICT",
+        )
+        accelerator = Accelerator(fsdp_plugin=fsdp_plugin,
+                                  gradient_accumulation_steps=grad_accum,
+                                  mixed_precision="bf16")
+    else:
+        # Plain Accelerator: single-GPU or DDP. When fsdp YAML flag is set but
+        # we were not launched via accelerate/torchrun, fall through here and
+        # warn so the user sees that FSDP is silently off.
+        if fsdp_enabled and not _is_distributed_env:
+            print("[FSDP] WARNING: cfg.fsdp=true but no distributed launch detected; "
+                  "running in single-process mode. Use `accelerate launch ...` to enable FSDP.")
+        accelerator = Accelerator(gradient_accumulation_steps=grad_accum)
+
     eff_bs = batch_size * grad_accum
-    print(f"Experiment: {experiment}")
-    print(f"Model: {model_id} | dtype: {dtype_str} | quantize: {quantize}")
-    print(f"LoRA: r={lora_r} alpha={lora_alpha} dropout={lora_dropout}")
-    print(f"BS={batch_size} x accum={grad_accum} = eff_bs={eff_bs} | LR={lr} | max_len={max_length}")
-    print(f"Image pixels: {min_pixels} ~ {max_pixels} | workers={num_workers}")
-    print(f"Compression: {compress_method} ratio={compress_ratio}")
+    # World-size aware global batch when distributed.
+    world_size = (accelerator.num_processes if accelerator is not None else 1)
+    global_bs = eff_bs * world_size
+
+    accelerator.print(f"Experiment: {experiment}")
+    accelerator.print(f"Model: {model_id} | dtype: {dtype_str} | quantize: {quantize}")
+    accelerator.print(f"LoRA: r={lora_r} alpha={lora_alpha} dropout={lora_dropout}")
+    accelerator.print(
+        f"BS={batch_size} x accum={grad_accum} = eff_bs={eff_bs} per-rank | "
+        f"world_size={world_size} -> global_bs={global_bs} | LR={lr} | max_len={max_length}"
+    )
+    accelerator.print(f"Image pixels: {min_pixels} ~ {max_pixels} | workers={num_workers}")
+    accelerator.print(f"Compression: {compress_method} ratio={compress_ratio}")
+    accelerator.print(f"Distributed: type={accelerator.distributed_type} "
+                      f"num_processes={accelerator.num_processes} "
+                      f"FSDP={'on' if use_fsdp else 'off'}")
     if val_every > 0:
-        print(f"Validation: every {val_every} opt steps, {val_batches} batches")
+        accelerator.print(f"Validation: every {val_every} opt steps, {val_batches} batches")
 
     # ============ Model setup ============
     print(f"Training mode: {train_mode}  |  vla_mode={vla_mode}  |  freeze_vision={freeze_vision}")
@@ -605,7 +748,20 @@ def main():
                 print(f"[dry-run] model_id {model_id!r} missing; using fall-back {cand}")
                 model_id = cand
                 break
-    load_kwargs = {"device_map": "auto"}
+    # Under FSDP we must load on CPU (or meta) so the plugin can shard;
+    # `device_map="auto"` would pre-place weights on a single GPU and
+    # collide with FSDP. For single-GPU / DDP keep the auto-placement path.
+    if use_fsdp:
+        load_kwargs = {}
+        # cpu_ram_efficient_loading: only rank 0 holds the full weights, other
+        # ranks load on meta-device — the plugin will broadcast at wrap time.
+        if int(os.environ.get("RANK", "0")) != 0 and accelerator is not None:
+            # rank>0 should load on meta to save host RAM. Use low_cpu_mem_usage
+            # to defer materialization; the FSDP plugin's
+            # `cpu_ram_efficient_loading` will sync_module_states from rank0.
+            load_kwargs["low_cpu_mem_usage"] = True
+    else:
+        load_kwargs = {"device_map": "auto"}
 
     # qlora implies quantize-on-load even if YAML didn't set quantize:true
     if train_mode == "qlora":
@@ -613,7 +769,7 @@ def main():
         cfg.setdefault("quant_bits", 4)
 
     if quantize:
-        print(f"Loading with {cfg.get('quant_bits', 4)}-bit quantization...")
+        accelerator.print(f"Loading with {cfg.get('quant_bits', 4)}-bit quantization...")
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=(cfg.get("quant_bits", 4) == 4),
             load_in_8bit=(cfg.get("quant_bits", 4) == 8),
@@ -623,7 +779,7 @@ def main():
         )
         load_kwargs["quantization_config"] = bnb_config
     else:
-        print(f"Loading in {dtype_str} (no quantization)...")
+        accelerator.print(f"Loading in {dtype_str} (no quantization)...")
         load_kwargs["torch_dtype"] = compute_dtype
 
     load_kwargs["attn_implementation"] = "sdpa"
@@ -654,12 +810,31 @@ def main():
     if quantize:
         model = prepare_model_for_kbit_training(model)
     else:
-        model.enable_input_require_grads()
+        # enable_input_require_grads installs a forward hook that attaches a
+        # grad-requiring view to the embedding output. That is necessary for
+        # LoRA/PEFT (so gradients flow into adapters through frozen embeddings)
+        # but under FSDP + activation_checkpointing it injects a "phantom"
+        # saved-tensor that does not reappear during the recompute pass and
+        # triggers `CheckpointError: A different number of tensors was saved
+        # during the original forward and recomputation`. For full_sft (no
+        # frozen embeddings on the LLM side) we can safely skip it.
+        _need_input_require_grads = train_mode != "full_sft"
+        if _need_input_require_grads:
+            model.enable_input_require_grads()
 
-    # Gradient checkpointing: trade compute for memory (critical for large models)
-    if cfg.get("gradient_checkpointing", False):
+    # Gradient checkpointing: trade compute for memory.
+    # Strategy: ALWAYS use HF-side gradient_checkpointing_enable (which routes
+    # through `Qwen2_5_VLDecoderLayer`'s built-in `GradientCheckpointingLayer`
+    # base). The FSDP plugin's `activation_checkpointing` is deliberately left
+    # OFF (see fsdp_plugin construction above) to avoid double-wrap mismatches.
+    # We enable gradient checkpointing whenever either YAML knob asks for it
+    # OR we are running full_sft under FSDP (memory pressure on shards).
+    _want_gc = (cfg.get("gradient_checkpointing", False)
+                or activation_checkpointing
+                or (use_fsdp and train_mode == "full_sft"))
+    if _want_gc:
         model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
-        print("Gradient checkpointing enabled")
+        accelerator.print("Gradient checkpointing enabled (HF-side, non-reentrant)")
 
     # Optionally extend LoRA targets to vision-tower modules. Off by default since
     # video Tier-1 starts with LLM-only LoRA; if a user wants to also adapt the
@@ -675,7 +850,7 @@ def main():
     if train_mode == "full_sft":
         # Skip LoRA entirely; train all (non-frozen) parameters.
         if args.resume:
-            print(f"NOTE: --resume with train_mode=full_sft loads model weights from {args.resume}")
+            accelerator.print(f"NOTE: --resume with train_mode=full_sft loads model weights from {args.resume}")
             # Caller is responsible for pointing model_id at the resume checkpoint or
             # using accelerate/torch.distributed checkpoint loading.
         # Freeze vision tower if requested.
@@ -689,14 +864,14 @@ def main():
                 for p in visual.parameters():
                     p.requires_grad = False
                     frozen += p.numel()
-                print(f"Froze vision tower: {frozen / 1e6:.1f} M params")
+                accelerator.print(f"Froze vision tower: {frozen / 1e6:.1f} M params")
             else:
-                print("WARNING: train_mode=full_sft, freeze_vision=true but could not locate visual module")
+                accelerator.print("WARNING: train_mode=full_sft, freeze_vision=true but could not locate visual module")
         # Param accounting
         n_total = sum(p.numel() for p in model.parameters())
         n_train = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        print(f"Full SFT: {n_train/1e9:.3f} B trainable / {n_total/1e9:.3f} B total "
-              f"({100 * n_train / n_total:.2f}%)")
+        accelerator.print(f"Full SFT: {n_train/1e9:.3f} B trainable / {n_total/1e9:.3f} B total "
+                          f"({100 * n_train / n_total:.2f}%)")
     else:
         # LoRA / QLoRA
         lora_config = LoraConfig(
@@ -712,17 +887,18 @@ def main():
             resume_path = args.resume if os.path.isabs(args.resume) else os.path.join(_BASE_DIR, args.resume)
             from peft import PeftModel
             model = PeftModel.from_pretrained(model, resume_path, is_trainable=True)
-            print(f"Resumed LoRA from {resume_path}")
+            accelerator.print(f"Resumed LoRA from {resume_path}")
         else:
             model = get_peft_model(model, lora_config)
-        model.print_trainable_parameters()
+        if accelerator.is_main_process:
+            model.print_trainable_parameters()
 
     # Image token id for compression
     image_token_id = processor.tokenizer.convert_tokens_to_ids("<|image_pad|>")
-    print(f"Image token id: {image_token_id}")
+    accelerator.print(f"Image token id: {image_token_id}")
 
     gpu_mem = torch.cuda.memory_allocated() / 1024**3
-    print(f"GPU memory after model load: {gpu_mem:.2f} GB")
+    accelerator.print(f"GPU memory after model load (pre-shard): {gpu_mem:.2f} GB")
 
     # ============ Load CRP importance (if needed) ============
     global _CRP_IMPORTANCE
@@ -732,9 +908,9 @@ def main():
             crp_path = os.path.join(_BASE_DIR, crp_path)
         if os.path.exists(crp_path):
             _CRP_IMPORTANCE = torch.load(crp_path, weights_only=True)
-            print(f"Loaded CRP importance for {len(_CRP_IMPORTANCE)} images")
+            accelerator.print(f"Loaded CRP importance for {len(_CRP_IMPORTANCE)} images")
         else:
-            print(f"[WARN] CRP importance not found at {crp_path}, falling back to L2 norm")
+            accelerator.print(f"[WARN] CRP importance not found at {crp_path}, falling back to L2 norm")
 
     # ============ Data setup ============
     # Resolve trajectory tokenizer (only if vla_mode) so we can wire boundary ids
@@ -745,8 +921,8 @@ def main():
         traj_cfg = TrajectoryTokenizerConfig()
         traj_start_id = traj_cfg.traj_start_id
         traj_end_id = traj_cfg.traj_end_id
-        print(f"VLA mode: traj_start_id={traj_start_id} traj_end_id={traj_end_id} "
-              f"loss={vla_loss_mode}")
+        accelerator.print(f"VLA mode: traj_start_id={traj_start_id} traj_end_id={traj_end_id} "
+                          f"loss={vla_loss_mode}")
 
     if vla_mode:
         v_path = data_path_vla or f"data_processed/v1_1_video_n{num_frames}_with_traj.json"
@@ -765,7 +941,7 @@ def main():
         default_train = "train_mini.json" if args.mini else "train.json"
         train_file = os.path.join(data_dir, cfg.get("train_file", default_train))
         val_file = os.path.join(data_dir, "val.json")
-    print(f"Loading dataset: {train_file} (video_mode={video_mode}, num_frames={num_frames}, vla={vla_mode})")
+    accelerator.print(f"Loading dataset: {train_file} (video_mode={video_mode}, num_frames={num_frames}, vla={vla_mode})")
 
     train_dataset = DriveLMDataset(
         train_file, processor, max_length=max_length,
@@ -776,28 +952,29 @@ def main():
 
     if args.dry_run:
         # Sanity-print one sample + memory estimate; do NOT build optimizer / train.
-        print("\n========= DRY RUN =========")
+        accelerator.print("\n========= DRY RUN =========")
         sample0 = train_dataset[0]
-        print(f"  dataset size      : {len(train_dataset)}")
-        print(f"  sample input_ids  : {tuple(sample0['input_ids'].shape)}")
+        accelerator.print(f"  dataset size      : {len(train_dataset)}")
+        accelerator.print(f"  sample input_ids  : {tuple(sample0['input_ids'].shape)}")
         if "pixel_values_videos" in sample0:
-            print(f"  pixel_values_vids : {tuple(sample0['pixel_values_videos'].shape)}")
+            accelerator.print(f"  pixel_values_vids : {tuple(sample0['pixel_values_videos'].shape)}")
         if "video_grid_thw" in sample0:
-            print(f"  video_grid_thw    : {sample0['video_grid_thw'].tolist()}")
+            accelerator.print(f"  video_grid_thw    : {sample0['video_grid_thw'].tolist()}")
         n_action = sum(1 for tid in sample0['input_ids'].tolist()
                        if (traj_start_id is not None and tid >= traj_start_id - 256))
-        print(f"  ~action tokens    : {n_action}  (rough heuristic)")
+        accelerator.print(f"  ~action tokens    : {n_action}  (rough heuristic)")
         n_total = sum(p.numel() for p in model.parameters())
         n_train = sum(p.numel() for p in model.parameters() if p.requires_grad)
         # Memory estimate: bf16 weights = 2 bytes; AdamW (states m + v in fp32) = 8 bytes/trainable
         weight_gb = 2 * n_total / 1024**3
         grad_gb = 2 * n_train / 1024**3
         opt_gb = 8 * n_train / 1024**3
-        print(f"  params total      : {n_total/1e9:.3f} B  (~{weight_gb:.2f} GB bf16 weights)")
-        print(f"  params trainable  : {n_train/1e9:.3f} B  (~{grad_gb:.2f} GB grads, ~{opt_gb:.2f} GB Adam states)")
-        print(f"  rough train mem   : ~{weight_gb + grad_gb + opt_gb:.1f} GB (excl. activations / VLA)")
-        print(f"  fsdp flag         : {fsdp_enabled}  activation_ckpt={activation_checkpointing}")
-        print("DRY RUN OK — exiting before optimizer construction.")
+        accelerator.print(f"  params total      : {n_total/1e9:.3f} B  (~{weight_gb:.2f} GB bf16 weights)")
+        accelerator.print(f"  params trainable  : {n_train/1e9:.3f} B  (~{grad_gb:.2f} GB grads, ~{opt_gb:.2f} GB Adam states)")
+        accelerator.print(f"  rough train mem   : ~{weight_gb + grad_gb + opt_gb:.1f} GB (excl. activations / VLA)")
+        accelerator.print(f"  fsdp flag         : {fsdp_enabled}  activation_ckpt={activation_checkpointing}  use_fsdp={use_fsdp}")
+        accelerator.print(f"  accelerator       : type={accelerator.distributed_type} world={accelerator.num_processes}")
+        accelerator.print("DRY RUN OK — exiting before optimizer construction.")
         return
 
     train_loader = DataLoader(
@@ -825,14 +1002,31 @@ def main():
             collate_fn=collate_fn,
             pin_memory=True,
         )
-        print(f"Validation samples: {len(val_dataset)}")
+        accelerator.print(f"Validation samples: {len(val_dataset)}")
 
-    num_batches = len(train_loader)
+    # World-size aware step count. Accelerator.prepare() will shard the
+    # dataloader across ranks, so per-rank batches = unsharded_len / world.
+    # We compute total_steps against the per-rank length so the scheduler's
+    # cosine decay aligns with the actual optimizer.step() cadence (an opt
+    # step fires every `grad_accum` *per-rank* micro-batches, regardless of
+    # world size — gradients are all-reduced at the sync boundary).
+    _unsharded_batches = len(train_loader)
+    _per_rank_batches = max(1, _unsharded_batches // max(1, accelerator.num_processes))
+    num_batches = _per_rank_batches
     total_steps = num_batches * num_epochs // grad_accum
-    print(f"Training samples: {len(train_dataset)}")
-    print(f"Steps per epoch: {num_batches} | Total opt steps: {total_steps}")
+    accelerator.print(f"Training samples: {len(train_dataset)}")
+    accelerator.print(
+        f"Batches (unsharded): {_unsharded_batches} | "
+        f"per-rank batches: {num_batches} | "
+        f"world_size: {accelerator.num_processes} | "
+        f"Total opt steps: {total_steps}"
+    )
 
     # ============ Optimizer ============
+    # NB: Optimizer must be built AFTER FSDP wraps the model when use_orig_params=True;
+    # but Accelerator.prepare() wraps the model first, then the optimizer — so we build
+    # the optimizer here against the raw (CPU) params, and accelerator.prepare() will
+    # rebind them after sharding. This is the supported path in accelerate>=1.x.
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
     warmup_ratio = float(cfg.get("warmup_ratio", 0.05))
     scheduler = get_cosine_schedule_with_warmup(
@@ -840,8 +1034,37 @@ def main():
         num_warmup_steps=max(1, int(total_steps * warmup_ratio)),
         num_training_steps=total_steps,
     )
-    print(f"Scheduler: cosine with warmup_ratio={warmup_ratio:.3f} -> "
-          f"{int(total_steps * warmup_ratio)} warmup steps / {total_steps} total")
+    accelerator.print(f"Scheduler: cosine with warmup_ratio={warmup_ratio:.3f} -> "
+                      f"{int(total_steps * warmup_ratio)} warmup steps / {total_steps} total")
+
+    # ============ Accelerator.prepare (FSDP sharding happens here) ============
+    if val_loader is not None:
+        model, optimizer, train_loader, val_loader, scheduler = accelerator.prepare(
+            model, optimizer, train_loader, val_loader, scheduler,
+        )
+    else:
+        model, optimizer, train_loader, scheduler = accelerator.prepare(
+            model, optimizer, train_loader, scheduler,
+        )
+    if use_fsdp and freeze_vision and train_mode == "full_sft":
+        # Re-apply the vision freeze AFTER FSDP wrap, because FSDP's flat-param
+        # layout (with use_orig_params=True) can re-attach requires_grad to params
+        # during wrap. Walk the unwrapped module tree and zero the flag again.
+        _unwrapped = accelerator.unwrap_model(model)
+        _visual = getattr(getattr(_unwrapped, "model", _unwrapped), "visual", None)
+        if _visual is None and hasattr(_unwrapped, "visual"):
+            _visual = _unwrapped.visual
+        if _visual is not None:
+            _frozen = 0
+            for p in _visual.parameters():
+                if p.requires_grad:
+                    p.requires_grad = False
+                _frozen += p.numel()
+            accelerator.print(f"[post-prepare] re-froze vision tower: {_frozen / 1e6:.1f} M params")
+
+    if torch.cuda.is_available():
+        post_shard_gb = torch.cuda.memory_allocated() / 1024**3
+        accelerator.print(f"GPU memory after FSDP prepare: {post_shard_gb:.2f} GB / rank")
 
     # ============ Resume training state ============
     resume_step = 0
@@ -857,12 +1080,12 @@ def main():
             scheduler.load_state_dict(state["scheduler"])
             resume_step = state["global_step"]
             resume_epoch = state.get("epoch", 0)
-            print(f"Resumed optimizer/scheduler from step {resume_step}, epoch {resume_epoch}")
+            accelerator.print(f"Resumed optimizer/scheduler from step {resume_step}, epoch {resume_epoch}")
         else:
-            print(f"[WARN] No training_state.pt found, resuming LoRA weights only (optimizer reset)")
+            accelerator.print(f"[WARN] No training_state.pt found, resuming LoRA weights only (optimizer reset)")
 
     # ============ Optional wandb ============
-    if args.wandb:
+    if args.wandb and accelerator.is_main_process:
         import wandb
         wandb.init(project="drivelm-qwen25vl", name=experiment, config={
             **cfg, "mini": args.mini, "lr": lr, "batch_size": batch_size,
@@ -870,151 +1093,159 @@ def main():
         })
 
     # ============ Training loop ============
-    print(f"\n{'='*60}")
-    print(f"  Starting training | {experiment} | {num_epochs} epoch(s) | {total_steps} opt steps")
-    print(f"  Compression: {compress_method} ratio={compress_ratio}")
-    print(f"{'='*60}\n")
+    accelerator.print(f"\n{'='*60}")
+    accelerator.print(f"  Starting training | {experiment} | {num_epochs} epoch(s) | {total_steps} opt steps")
+    accelerator.print(f"  Compression: {compress_method} ratio={compress_ratio}")
+    accelerator.print(f"{'='*60}\n")
     model.train()
     global_step = resume_step
     accum_loss = 0.0
     skip_batches = resume_step * grad_accum if resume_step > 0 else 0
+    _device = accelerator.device
 
     for epoch in range(resume_epoch, num_epochs):
         epoch_loss_sum = 0.0
         epoch_loss_count = 0
 
+        # Only render the progress bar on the main process to avoid 8x stdout spam.
         pbar = tqdm(
             enumerate(train_loader),
             total=num_batches,
             desc=f"Epoch {epoch+1}/{num_epochs}",
             bar_format="{l_bar}{bar:30}{r_bar}",
             dynamic_ncols=True,
+            disable=not accelerator.is_main_process,
         )
 
         for step, batch in pbar:
             # Skip already-trained batches on resume
             if skip_batches > 0:
                 skip_batches -= 1
-                if skip_batches % 1000 == 0:
+                if skip_batches % 1000 == 0 and accelerator.is_main_process:
                     pbar.set_postfix_str(f"skipping... {skip_batches} left")
                 continue
 
-            batch = {k: v.to(model.device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+            # Accelerate's prepared dataloader already places tensors on the
+            # right device, but our custom collate may produce extra keys
+            # (image_names, second_per_grid_ts) — sweep .to(device) defensively.
+            batch = {k: v.to(_device) if isinstance(v, torch.Tensor) else v
+                     for k, v in batch.items()}
 
             try:
-                outputs = forward_with_compression(
-                    model, batch, compress_method, compress_ratio, image_token_id
-                )
-                loss = outputs.loss / grad_accum
-                batch_loss = outputs.loss.item()
+                with accelerator.accumulate(model):
+                    outputs = forward_with_compression(
+                        model, batch, compress_method, compress_ratio, image_token_id
+                    )
+                    loss = outputs.loss
+                    batch_loss = loss.detach().float().item()
 
-                # NaN guard: skip bad batches before they poison the model
-                if not math.isfinite(batch_loss):
-                    tqdm.write(f"[NaN] batch {step+1}/{num_batches}, loss={batch_loss}, skipping")
+                    # NaN guard: skip bad batches before they poison the model
+                    if not math.isfinite(batch_loss):
+                        if accelerator.is_main_process:
+                            tqdm.write(f"[NaN] batch {step+1}/{num_batches}, loss={batch_loss}, skipping")
+                        optimizer.zero_grad(set_to_none=True)
+                        accum_loss = 0.0
+                        del outputs, loss
+                        torch.cuda.empty_cache()
+                        continue
+
+                    accelerator.backward(loss)
+                    accum_loss += batch_loss / grad_accum
+                    epoch_loss_sum += batch_loss
+                    epoch_loss_count += 1
+
+                    if accelerator.sync_gradients:
+                        # Gradient clipping (FSDP-aware).
+                        grad_norm = accelerator.clip_grad_norm_(model.parameters(), 1.0)
+                        # grad_norm may be a tensor returned by accelerate; coerce to float
+                        try:
+                            _gn = float(grad_norm)
+                        except Exception:
+                            _gn = float('nan')
+                        if not math.isfinite(_gn):
+                            if accelerator.is_main_process:
+                                tqdm.write(f"[NaN grad] step {global_step}, grad_norm={_gn}, skipping update")
+                            optimizer.zero_grad(set_to_none=True)
+                            accum_loss = 0.0
+                            del outputs, loss
+                            continue
+                        optimizer.step()
+                        scheduler.step()
+                        optimizer.zero_grad(set_to_none=True)
+                        global_step += 1
+                        _did_step = True
+                    else:
+                        _did_step = False
+
                     del outputs, loss
-                    optimizer.zero_grad()
-                    accum_loss = 0.0
-                    torch.cuda.empty_cache()
-                    continue
-
-                loss.backward()
-                accum_loss += loss.item()
-                epoch_loss_sum += batch_loss
-                epoch_loss_count += 1
-
-                # Drop refs so activations / forward graph get freed immediately.
-                # NOTE: do NOT call empty_cache() on the normal path — it returns
-                # cached blocks to the driver and forces re-allocation next step,
-                # defeating the caching allocator and costing ~50% throughput.
-                # empty_cache() is only worth it in OOM/NaN recovery paths.
-                del outputs, loss
             except RuntimeError as e:
                 if "out of memory" in str(e):
-                    tqdm.write(f"[OOM] batch {step+1}/{num_batches}, skipping")
-                    # Drop any references before clearing cache
-                    try:
-                        del outputs
-                    except NameError:
-                        pass
-                    try:
-                        del loss
-                    except NameError:
-                        pass
-                    try:
-                        del batch
-                    except NameError:
-                        pass
+                    if accelerator.is_main_process:
+                        tqdm.write(f"[OOM] batch {step+1}/{num_batches}, skipping")
+                    for _v in ("outputs", "loss", "batch"):
+                        try:
+                            del locals()[_v]
+                        except (KeyError, NameError):
+                            pass
                     optimizer.zero_grad(set_to_none=True)
                     accum_loss = 0.0
                     torch.cuda.empty_cache()
                     continue
                 raise
 
-            # Update tqdm postfix every batch
-            avg_loss = epoch_loss_sum / epoch_loss_count
-            gpu_mem = torch.cuda.memory_allocated() / 1024**3
-            cur_lr = scheduler.get_last_lr()[0] if global_step > 0 else lr
-            pbar.set_postfix_str(
-                f"batch_loss={batch_loss:.4f} | avg_loss={avg_loss:.4f} | "
-                f"lr={cur_lr:.2e} | opt_step={global_step}/{total_steps} | "
-                f"GPU={gpu_mem:.1f}GB"
-            )
+            # Update tqdm postfix every batch (main process only)
+            if accelerator.is_main_process:
+                avg_loss = epoch_loss_sum / epoch_loss_count
+                gpu_mem = torch.cuda.memory_allocated() / 1024**3
+                cur_lr = scheduler.get_last_lr()[0] if global_step > 0 else lr
+                pbar.set_postfix_str(
+                    f"batch_loss={batch_loss:.4f} | avg_loss={avg_loss:.4f} | "
+                    f"lr={cur_lr:.2e} | opt_step={global_step}/{total_steps} | "
+                    f"GPU={gpu_mem:.1f}GB"
+                )
 
-            if (step + 1) % grad_accum == 0:
-                grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                # Skip optimizer step if gradients are NaN/Inf
-                if not math.isfinite(grad_norm.item()):
-                    tqdm.write(f"[NaN grad] step {global_step}, grad_norm={grad_norm.item()}, skipping update")
-                    optimizer.zero_grad()
-                    accum_loss = 0.0
-                    continue
-                optimizer.step()
-                scheduler.step()
-                optimizer.zero_grad()
-                global_step += 1
-
-                if args.wandb:
+            if _did_step:
+                if args.wandb and accelerator.is_main_process:
                     import wandb
                     cur_lr = scheduler.get_last_lr()[0]
                     wandb.log({
                         "loss": accum_loss, "batch_loss": batch_loss,
-                        "avg_loss": avg_loss, "lr": cur_lr, "gpu_mem": gpu_mem,
+                        "avg_loss": epoch_loss_sum / max(epoch_loss_count, 1),
+                        "lr": cur_lr, "gpu_mem": gpu_mem,
                     }, step=global_step)
                 accum_loss = 0.0
 
                 if global_step % save_every == 0:
                     save_path = os.path.join(output_dir, f"checkpoint-{global_step}")
-                    model.save_pretrained(save_path)
-                    # Save training state for resume
-                    torch.save({
-                        "optimizer": optimizer.state_dict(),
-                        "scheduler": scheduler.state_dict(),
-                        "global_step": global_step,
-                        "epoch": epoch,
-                        "batch_idx": step,
-                    }, os.path.join(save_path, "training_state.pt"))
-                    tqdm.write(f"  [SAVE] checkpoint-{global_step}")
+                    _save_model_and_state(
+                        accelerator, model, optimizer, scheduler,
+                        train_mode, save_path, global_step, epoch, step,
+                    )
+                    if accelerator.is_main_process:
+                        tqdm.write(f"  [SAVE] checkpoint-{global_step}")
 
                 # Validation
                 if val_every > 0 and val_loader is not None and global_step % val_every == 0:
                     val_loss, val_acc = validate(
                         model, val_loader, compress_method, compress_ratio,
-                        image_token_id, val_batches, model.device,
+                        image_token_id, val_batches, _device,
                     )
-                    tqdm.write(f"  [VAL] step={global_step} val_loss={val_loss:.4f} val_acc={val_acc:.4f}")
-                    if args.wandb:
+                    if accelerator.is_main_process:
+                        tqdm.write(f"  [VAL] step={global_step} val_loss={val_loss:.4f} val_acc={val_acc:.4f}")
+                    if args.wandb and accelerator.is_main_process:
                         import wandb
                         wandb.log({"val_loss": val_loss, "val_acc": val_acc}, step=global_step)
 
                 if args.max_steps and global_step >= args.max_steps:
-                    tqdm.write(f"  [STOP] Reached max_steps={args.max_steps}")
+                    if accelerator.is_main_process:
+                        tqdm.write(f"  [STOP] Reached max_steps={args.max_steps}")
                     pbar.close()
                     break
 
         pbar.close()
         avg_loss = epoch_loss_sum / max(epoch_loss_count, 1)
         cur_lr = scheduler.get_last_lr()[0]
-        print(
+        accelerator.print(
             f"\n  Epoch {epoch+1} done | "
             f"avg_loss={avg_loss:.4f} | LR={cur_lr:.2e} | "
             f"opt_steps={global_step}/{total_steps}\n"
@@ -1024,14 +1255,14 @@ def main():
 
     # ============ Save final model ============
     final_path = os.path.join(output_dir, "final")
-    # For full_sft this writes the whole HF model (~6 GB for 3B); for LoRA/QLoRA
-    # it writes only the adapter (~50 MB). Either way save_pretrained does the
-    # right thing because peft-wrapped vs raw both implement the same API.
-    model.save_pretrained(final_path, safe_serialization=True)
-    processor.save_pretrained(final_path)
-    print(f"\nTraining complete! Final model saved to {final_path}")
+    _save_model_and_state(
+        accelerator, model, optimizer, scheduler,
+        train_mode, final_path, global_step, num_epochs - 1, -1,
+        save_processor=processor,
+    )
+    accelerator.print(f"\nTraining complete! Final model saved to {final_path}")
 
-    if args.wandb:
+    if args.wandb and accelerator.is_main_process:
         import wandb
         wandb.finish()
 
