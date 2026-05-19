@@ -48,3 +48,12 @@ val_every: 100
 val_batches: 20
 save_every: 100
 keep_latest_k: 3
+
+# CAM_FRONT @ 1600x900 with min_pixels=max_pixels=109760 emits ~900 visual
+# tokens per frame -> 4 frames = ~3600 visual tokens; plus chat-template
+# overhead and the "Ego speed at current frame: X.XX m/s. " prompt preamble,
+# untruncated total is ~3740. The base config's 2560 budget chopped the user
+# text *including the ego-speed line* off the front of the prompt. 4096 fits
+# the full prompt with margin and keeps GPU peak well under the 32 GB cap
+# (smoke @ 2560 peaked at 11.4 GB).
+max_length: 4096
