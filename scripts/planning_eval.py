@@ -60,11 +60,18 @@ HZ = 2.0
 DT = 1.0 / HZ              # 0.5 s
 HORIZONS = (1.0, 2.0, 3.0)
 HORIZON_IDX = (1, 3, 5)    # 0-indexed waypoint at each horizon (t = 1/2/3 s)
-# Ego footprint (nuScenes spec): length 4.084 m, width 1.730 m. We use the
-# UniAD/VAD default of 2.0 m half-length / 0.9 m half-width which slightly
-# inflates the box to make the collision check more conservative.
-EGO_HALF_LEN_M = 2.0
-EGO_HALF_WID_M = 0.9
+# Ego footprint — matches UniAD/VAD/ST-P3 exactly (Renault Zoe: 4.084 m length,
+# 1.85 m width). Both papers use these values in their official planning-metric
+# code (see UniAD planning_head_plugin/metric_stp3.py and VAD planner/metric_stp3.py).
+EGO_LENGTH_M = 4.084
+EGO_WIDTH_M = 1.85
+EGO_HALF_LEN_M = EGO_LENGTH_M * 0.5
+EGO_HALF_WID_M = EGO_WIDTH_M * 0.5
+# nuScenes ego pose is reported at the rear-axle (lidar-top mount point), so
+# the box CENTRE is +0.5 m forward of the pose origin along ego +x. Both UniAD
+# and VAD shift the box by +0.5 m forward to match this (`[-H/2 + 0.5, ...]`
+# in their code). We replicate that shift here.
+EGO_BOX_FWD_OFFSET_M = 0.5
 
 
 # ============================================================================
@@ -108,39 +115,69 @@ def decode_waypoints(generated_ids: List[int], traj_tok: TrajectoryTokenizer,
 # Helpers: agent boxes in current ego frame
 # ============================================================================
 
-def _gt_boxes_in_ego(future_info: dict, cur_R: np.ndarray, cur_p: np.ndarray
+def _gt_boxes_in_ego(future_info: dict, cur_info: dict
                      ) -> List[Tuple[float, float, float, float, float]]:
     """Return list of (x, y, length, width, yaw_rad) for each annotated agent in
-    `future_info`, transformed from the future ego frame back into the *current*
-    ego frame.
+    `future_info`, transformed from the future LiDAR frame back into the
+    *current* ego frame.
 
     UniAD's nuscenes_converter stores `gt_boxes` as Nx7 = (x, y, z, w, l, h, yaw)
-    in the LiDAR (≈ ego) frame at that keyframe. We transform to current ego:
-        global_p   = R_future @ box_p_in_future_ego + p_future
-        cur_p_box  = cur_R.T @ (global_p - cur_p)
-    Yaw transforms as yaw_cur = yaw_future + (heading_future - heading_cur).
+    in the **LiDAR** frame at that keyframe (NOT the ego frame — verified on
+    nuscenes_infos_temporal_val.pkl 2026-05-19). The LiDAR sensor is mounted
+    rotated ~90 deg about z relative to ego, so we MUST compose lidar2ego on
+    both sides of the round-trip:
+
+        p_global       = R_e2g_f @ (R_le_f @ p_lidar + t_le_f) + t_e2g_f
+        p_in_cur_ego   = R_e2g_c.T @ (p_global - t_e2g_c)
+
+    Yaw transforms via the same chain — the box yaw is measured in the future
+    LiDAR frame, so we add the (future-LiDAR -> global) - (current-ego ->
+    global) heading delta (this lands the yaw in the current-ego frame).
+
+    Without the lidar2ego step, every agent box was rotated ~90 deg around the
+    ego origin in our frame, which placed agents directly on the predicted
+    trajectory and inflated the collision rate ~25x relative to the paper
+    baselines (~24% -> <1%).
     """
     boxes_lidar = np.asarray(future_info["gt_boxes"], dtype=np.float64)
     if boxes_lidar.size == 0:
         return []
-    R_f = quat_to_R(future_info["ego2global_rotation"])
-    p_f = np.asarray(future_info["ego2global_translation"], dtype=np.float64)
+    # Future frame: lidar->ego, ego->global.
+    R_le_f = quat_to_R(future_info["lidar2ego_rotation"])
+    t_le_f = np.asarray(future_info["lidar2ego_translation"], dtype=np.float64)
+    R_e2g_f = quat_to_R(future_info["ego2global_rotation"])
+    t_e2g_f = np.asarray(future_info["ego2global_translation"], dtype=np.float64)
+    # Current frame: ego->global. (lidar->ego at current isn't needed because
+    # we transform agent positions all the way back into the current ego
+    # frame; only the future-frame lidar->ego matters for the box's intrinsic
+    # yaw, see yaw_offset below.)
+    R_e2g_c = quat_to_R(cur_info["ego2global_rotation"])
+    t_e2g_c = np.asarray(cur_info["ego2global_translation"], dtype=np.float64)
 
     # Heading of each pose (yaw about z) — use atan2 of the first column.
     def _heading(R: np.ndarray) -> float:
         return math.atan2(R[1, 0], R[0, 0])
 
-    yaw_offset = _heading(R_f) - _heading(cur_R)
+    # Box yaw is in the *future-LiDAR* frame. The compound rotation
+    # future-LiDAR -> current-ego is R_e2g_c.T @ R_e2g_f @ R_le_f; for
+    # rotations about z the heading of that compound equals
+    #   heading(R_e2g_f @ R_le_f) - heading(R_e2g_c).
+    # Add that to each box's yaw_box to get its yaw in the current-ego frame.
+    yaw_offset = _heading(R_e2g_f @ R_le_f) - _heading(R_e2g_c)
 
     out: List[Tuple[float, float, float, float, float]] = []
     for b in boxes_lidar:
         x_lidar, y_lidar, z_lidar = float(b[0]), float(b[1]), float(b[2])
+        # nuScenes box dims order: (w, l, h). w = width (lateral),
+        # l = length (along-yaw).
         w_box, l_box = float(b[3]), float(b[4])
         yaw_box = float(b[6])
-        p_box_future = np.array([x_lidar, y_lidar, z_lidar], dtype=np.float64)
-        p_box_global = R_f @ p_box_future + p_f
-        p_box_cur = cur_R.T @ (p_box_global - cur_p)
-        out.append((float(p_box_cur[0]), float(p_box_cur[1]),
+        p_lidar = np.array([x_lidar, y_lidar, z_lidar], dtype=np.float64)
+        # lidar @ future -> ego @ future -> global -> ego @ current.
+        p_ego_fut = R_le_f @ p_lidar + t_le_f
+        p_global = R_e2g_f @ p_ego_fut + t_e2g_f
+        p_cur_ego = R_e2g_c.T @ (p_global - t_e2g_c)
+        out.append((float(p_cur_ego[0]), float(p_cur_ego[1]),
                     l_box, w_box, yaw_box + yaw_offset))
     return out
 
@@ -176,13 +213,18 @@ def collision_at_step(ego_xy: np.ndarray, ego_yaw: float,
                       gt_boxes_cur_ego: List[Tuple[float, float, float, float, float]],
                       ) -> bool:
     """Returns True if the ego footprint at (ego_xy, ego_yaw) overlaps any
-    annotated agent."""
+    annotated agent.
+
+    The footprint centre is shifted +EGO_BOX_FWD_OFFSET_M forward of the pose
+    origin to match the UniAD/VAD convention (nuScenes ego pose is at the
+    rear-axle/lidar mount, not the box centre)."""
+    cx = float(ego_xy[0]) + EGO_BOX_FWD_OFFSET_M * math.cos(ego_yaw)
+    cy = float(ego_xy[1]) + EGO_BOX_FWD_OFFSET_M * math.sin(ego_yaw)
     ego_corners = _box_corners(
-        float(ego_xy[0]), float(ego_xy[1]),
-        2 * EGO_HALF_LEN_M, 2 * EGO_HALF_WID_M, ego_yaw,
+        cx, cy, EGO_LENGTH_M, EGO_WIDTH_M, ego_yaw,
     )
-    for (cx, cy, l, w, yaw) in gt_boxes_cur_ego:
-        agent_corners = _box_corners(cx, cy, l, w, yaw)
+    for (ax, ay, l, w, yaw) in gt_boxes_cur_ego:
+        agent_corners = _box_corners(ax, ay, l, w, yaw)
         if _sat_overlap(ego_corners, agent_corners):
             return True
     return False
@@ -371,17 +413,17 @@ def main() -> None:
                 if not math.isnan(n[k]):
                     noavg_acc[k].append(n[k])
 
-            # Collision check: ego footprint at each horizon step
-            cur_R = quat_to_R(info["ego2global_rotation"])
-            cur_p = np.asarray(info["ego2global_translation"], dtype=np.float64)
-            # Future infos for collision boxes
+            # Collision check: ego footprint at each horizon step.
+            # _gt_boxes_in_ego reads `cur_info` for both ego2global AND
+            # lidar2ego transforms (the LiDAR mount is rotated ~90 deg from
+            # the ego frame on nuScenes, so we cannot skip lidar2ego).
             future_infos = ds._walk_future(base_idx)
             collisions_per_horizon: List[int] = []
             for h_idx, h_s in zip(HORIZON_IDX, HORIZONS):
                 if h_idx >= len(future_infos) or valid[h_idx] < 1e-6:
                     collisions_per_horizon.append(0)
                     continue
-                gt_boxes = _gt_boxes_in_ego(future_infos[h_idx], cur_R, cur_p)
+                gt_boxes = _gt_boxes_in_ego(future_infos[h_idx], info)
                 yaw_pred = _yaw_from_traj(pred_wp, h_idx)
                 hit = collision_at_step(pred_wp[h_idx], yaw_pred, gt_boxes)
                 collisions_per_horizon.append(int(hit))
@@ -423,7 +465,13 @@ def main() -> None:
         "collision_3s": _mean([float(x) for x in coll["collision_3s"]]),
         "collision_avg": _mean([float(x) for x in coll["collision_avg"]]),
         "protocol_l2": "TemAvg (VAD) shown in flat L2_*; full both protocols inside this JSON",
-        "ego_footprint_m": {"half_length": EGO_HALF_LEN_M, "half_width": EGO_HALF_WID_M},
+        "ego_footprint_m": {
+            "length": EGO_LENGTH_M,
+            "width": EGO_WIDTH_M,
+            "half_length": EGO_HALF_LEN_M,
+            "half_width": EGO_HALF_WID_M,
+            "fwd_offset_from_pose": EGO_BOX_FWD_OFFSET_M,
+        },
     }
 
     out_path = args.output or os.path.join(args.ckpt, "eval_results.json")
