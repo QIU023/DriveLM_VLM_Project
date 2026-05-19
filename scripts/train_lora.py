@@ -730,11 +730,18 @@ def validate(model, val_loader, compress_method, compress_ratio, image_token_id,
                 count += 1
                 logits = outputs.logits[:, :-1, :]
                 labels = batch["labels"][:, 1:]
-                mask = labels != -100
-                if mask.any():
-                    preds = logits.argmax(dim=-1)
-                    correct_tokens += (preds[mask] == labels[mask]).sum().item()
-                    total_tokens += mask.sum().item()
+                # NOTE: in xframe compression mode, logits seq_len is the
+                # COMPRESSED length (after T*N -> N video token reduction) while
+                # batch["labels"] is the uncompressed length. The shapes diverge
+                # and we cannot align without re-doing the input_ids surgery
+                # that forward_with_video_xframe_compression did. Skip token-acc
+                # in that case; val_loss is still meaningful.
+                if logits.shape[1] == labels.shape[1]:
+                    mask = labels != -100
+                    if mask.any():
+                        preds = logits.argmax(dim=-1)
+                        correct_tokens += (preds[mask] == labels[mask]).sum().item()
+                        total_tokens += mask.sum().item()
             except RuntimeError as e:
                 if "out of memory" in str(e):
                     torch.cuda.empty_cache()
