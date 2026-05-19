@@ -43,8 +43,10 @@ _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from planning_dataset import (  # noqa: E402
+    DEFAULT_PLANNING_CAMS,
     PROMPT_TEXT,
     PlanningDataset,
+    _build_user_content_multicam,
     _format_ego_speed_preamble,
     quat_to_R,
 )
@@ -250,6 +252,12 @@ def main() -> None:
     p.add_argument("--num-past-frames", type=int, default=4)
     p.add_argument("--num-future-waypoints", type=int, default=6)
     p.add_argument("--video-fps", type=float, default=2.0)
+    p.add_argument(
+        "--planning-cams",
+        default="CAM_FRONT",
+        help="Comma-separated cam list, e.g. 'CAM_FRONT,CAM_FRONT_LEFT,CAM_FRONT_RIGHT' "
+             "(AutoVLA 3-cam). Must match training config.",
+    )
     p.add_argument("--max-new-tokens", type=int, default=20,
                    help="Greedy generate budget; 1 start + 12 bins + 1 end is enough.")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -269,17 +277,23 @@ def main() -> None:
     traj_cfg = TrajectoryTokenizerConfig(num_waypoints=args.num_future_waypoints)
     traj_tok = TrajectoryTokenizer(traj_cfg)
 
+    planning_cams = [c.strip() for c in args.planning_cams.split(",") if c.strip()]
+    # Multi-cam expands visual tokens ~Nx; raise the eval max_length to match
+    # the 3-cam training config (8192). Single-cam keeps 4096 for back-compat.
+    eval_max_length = 4096 if len(planning_cams) == 1 else 8192
     ds = PlanningDataset(
         infos_path=args.infos_val,
         nusc_root=args.nusc_root,
         processor=processor,
-        max_length=4096,
+        max_length=eval_max_length,
         num_past_frames=args.num_past_frames,
         num_future_waypoints=args.num_future_waypoints,
         video_fps=args.video_fps,
         vla_loss_mode="answer_and_traj",
         max_samples=args.max_samples,
         require_full_future=True,  # only score samples with full 3 s of future
+        planning_cams=planning_cams,
+        require_all_cams=True,
     )
 
     # Build the *generation prompt* (NO appended action tokens). We rebuild it
@@ -309,29 +323,29 @@ def main() -> None:
             base_idx = ds._keep[i]
             info = ds.infos[base_idx]
             hist = ds._walk_history(base_idx)
-            frames = ds._load_frames(hist)
-            user_text = _format_ego_speed_preamble(info) + PROMPT_TEXT
-            sys_user_messages = [
-                {"role": "user", "content": [
-                    {"type": "video"},
-                    {"type": "text", "text": user_text},
-                ]},
-            ]
+            # Single- or multi-cam clip loading; mirrors training dataset.
+            if len(planning_cams) == 1:
+                clips = [ds._load_frames(hist, planning_cams[0])]
+            else:
+                clips = ds._load_frames_multicam(hist)
+            user_content = _build_user_content_multicam(info, planning_cams)
+            sys_user_messages = [{"role": "user", "content": user_content}]
             text = processor.apply_chat_template(
                 sys_user_messages, tokenize=False, add_generation_prompt=True
             )
             from transformers.video_utils import VideoMetadata
             md = [
                 VideoMetadata(
-                    total_num_frames=len(frames),
+                    total_num_frames=len(clip),
                     fps=args.video_fps,
-                    frames_indices=list(range(len(frames))),
-                    height=frames[0].height,
-                    width=frames[0].width,
+                    frames_indices=list(range(len(clip))),
+                    height=clip[0].height,
+                    width=clip[0].width,
                 )
+                for clip in clips
             ]
             inputs = processor(
-                text=[text], videos=[frames], video_metadata=md, return_tensors="pt"
+                text=[text], videos=clips, video_metadata=md, return_tensors="pt"
             ).to(device)
             # Cast video pixels to model dtype
             if "pixel_values_videos" in inputs:

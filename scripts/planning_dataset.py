@@ -87,6 +87,65 @@ PROMPT_TEXT = (
     "Given 4 past front-camera frames @ 2Hz, predict the ego vehicle's "
     "next 6 waypoints at 2 Hz (3 s horizon) in ego frame."
 )
+# AutoVLA (NeurIPS'25) feeds three forward-arc cameras (CAM_FRONT,
+# CAM_FRONT_LEFT, CAM_FRONT_RIGHT), each as a separate <video> block of 4
+# frames @ 2 Hz. The user prompt names each block so the LM can attribute
+# context across cameras. _build_user_text_multicam below produces this format.
+DEFAULT_PLANNING_CAMS = ["CAM_FRONT"]
+CAM_LABELS_3 = {
+    "CAM_FRONT": "Front camera",
+    "CAM_FRONT_LEFT": "Front-left camera",
+    "CAM_FRONT_RIGHT": "Front-right camera",
+    "CAM_BACK": "Back camera",
+    "CAM_BACK_LEFT": "Back-left camera",
+    "CAM_BACK_RIGHT": "Back-right camera",
+}
+
+
+def _multicam_prompt_suffix(cams: List[str]) -> str:
+    """Suffix appended to the per-sample ego-speed preamble for the multi-cam
+    variant. Single-cam keeps the original PROMPT_TEXT for back-compat."""
+    if len(cams) == 1 and cams[0] == "CAM_FRONT":
+        return PROMPT_TEXT
+    cam_phrase = ", ".join(
+        CAM_LABELS_3.get(c, c).lower() for c in cams
+    )
+    return (
+        f"Given 4 past frames @ 2Hz from each of {len(cams)} cameras "
+        f"({cam_phrase}), predict the ego vehicle's next 6 waypoints at 2 Hz "
+        f"(3 s horizon) in ego frame."
+    )
+
+
+def _build_user_content_multicam(info: dict, cams: List[str]) -> list:
+    """Return the `content` list for the user turn given a list of cameras.
+
+    Single-cam mode: one {"type":"video"} block + ego speed + PROMPT_TEXT.
+    Multi-cam mode (e.g. AutoVLA 3-cam): interleaved
+        "<CamLabel>: " {video} ... ego_speed + multi-cam prompt text.
+
+    The chat template (apply_chat_template) replaces each {"type":"video"}
+    entry with a <|vision_start|><|video_pad|><|vision_end|> token triple in
+    insertion order. The processor's `videos=[clip1, clip2, ...]` argument
+    must contain one clip per video block, in the same order.
+    """
+    if len(cams) == 1 and cams[0] == "CAM_FRONT":
+        return [
+            {"type": "video"},
+            {"type": "text", "text": _format_ego_speed_preamble(info) + PROMPT_TEXT},
+        ]
+    content: list = []
+    for cam in cams:
+        label = CAM_LABELS_3.get(cam, cam)
+        content.append({"type": "text", "text": f"{label}: "})
+        content.append({"type": "video"})
+        content.append({"type": "text", "text": " "})
+    # Trailing task prompt + ego speed
+    content.append({
+        "type": "text",
+        "text": _format_ego_speed_preamble(info) + _multicam_prompt_suffix(cams),
+    })
+    return content
 SYSTEM_TEXT = (
     "You are an autonomous driving planner. Predict the ego vehicle's "
     "future trajectory as a sequence of 2-D waypoints in the current ego frame."
@@ -152,6 +211,8 @@ class PlanningDataset(Dataset):
         traj_cfg: TrajectoryTokenizerConfig | None = None,
         max_samples: Optional[int] = None,
         require_full_future: bool = True,
+        planning_cams: Optional[List[str]] = None,
+        require_all_cams: bool = True,
     ):
         if not os.path.exists(infos_path):
             raise FileNotFoundError(f"Infos pkl not found: {infos_path}")
@@ -173,6 +234,12 @@ class PlanningDataset(Dataset):
         self.num_future = int(num_future_waypoints)
         self.video_fps = float(video_fps)
         self.vla_loss_mode = vla_loss_mode
+        # Multi-camera config. CAM_FRONT-only is the default and exactly
+        # matches the pre-3cam dataset behavior (back-compat for existing
+        # configs). With multiple cams, each cam is emitted as a separate
+        # <video> block in the user turn (AutoVLA-style).
+        self.planning_cams: List[str] = list(planning_cams or DEFAULT_PLANNING_CAMS)
+        self.require_all_cams = bool(require_all_cams)
 
         self.traj_cfg = traj_cfg or TrajectoryTokenizerConfig(
             num_waypoints=self.num_future,
@@ -190,6 +257,26 @@ class PlanningDataset(Dataset):
             self._keep = keep_idx
         else:
             self._keep = list(range(len(self.infos)))
+
+        # In multi-cam mode, the FL/FR images may not exist on disk for every
+        # keyframe (depending on which nuScenes blob tarballs were extracted).
+        # Filter to indices for which *every* requested cam file exists across
+        # all num_past history frames. This is stricter than CAM_FRONT-only
+        # filtering and prevents __getitem__ from hitting a FileNotFoundError
+        # mid-training.
+        if self.require_all_cams and len(self.planning_cams) > 1:
+            ok_idx = []
+            for i in self._keep:
+                if self._all_cams_present(i):
+                    ok_idx.append(i)
+            dropped = len(self._keep) - len(ok_idx)
+            self._keep = ok_idx
+            if dropped:
+                print(
+                    f"[PlanningDataset] cams={self.planning_cams}: "
+                    f"dropped {dropped} samples missing one or more cam files; "
+                    f"keeping {len(self._keep)}"
+                )
 
         if max_samples is not None:
             self._keep = self._keep[: int(max_samples)]
@@ -264,9 +351,9 @@ class PlanningDataset(Dataset):
     # Frame loading
     # ------------------------------------------------------------------
 
-    def _image_path(self, info: dict) -> str:
-        rel = info["cams"]["CAM_FRONT"]["data_path"]
-        # data_path is typically "samples/CAM_FRONT/...". Strip a leading
+    def _image_path(self, info: dict, cam: str = "CAM_FRONT") -> str:
+        rel = info["cams"][cam]["data_path"]
+        # data_path is typically "samples/<cam>/...". Strip a leading
         # "./" or "data/nuscenes/" if some upstream variant included it.
         if rel.startswith("./"):
             rel = rel[2:]
@@ -274,13 +361,32 @@ class PlanningDataset(Dataset):
             rel = rel[len("data/nuscenes/"):]
         return os.path.join(self.nusc_root, rel)
 
-    def _load_frames(self, hist: List[dict]) -> List[Image.Image]:
+    def _load_frames(self, hist: List[dict], cam: str = "CAM_FRONT") -> List[Image.Image]:
         frames: List[Image.Image] = []
         for info in hist:
-            p = self._image_path(info)
+            p = self._image_path(info, cam)
             img = Image.open(p).convert("RGB")
             frames.append(img)
         return frames
+
+    def _load_frames_multicam(self, hist: List[dict]) -> List[List[Image.Image]]:
+        """Return one frame list per cam (in self.planning_cams order). Used
+        when len(planning_cams)>1; each per-cam clip is passed as a separate
+        entry to `processor(videos=[...])`."""
+        return [self._load_frames(hist, cam) for cam in self.planning_cams]
+
+    def _all_cams_present(self, base_idx: int) -> bool:
+        """True iff every requested cam has an on-disk file for every
+        history frame at this index (current + num_past-1 prev)."""
+        hist = self._walk_history(base_idx)
+        for h in hist:
+            for cam in self.planning_cams:
+                if cam not in h.get("cams", {}):
+                    return False
+                p = self._image_path(h, cam)
+                if not os.path.exists(p):
+                    return False
+        return True
 
     # ------------------------------------------------------------------
     # __getitem__
@@ -290,9 +396,13 @@ class PlanningDataset(Dataset):
         base_idx = self._keep[i]
         info = self.infos[base_idx]
 
-        # 1. Past frames (oldest-first).
+        # 1. Past frames (oldest-first). Single-cam returns one clip; multi-cam
+        # returns one clip per camera in self.planning_cams order.
         hist = self._walk_history(base_idx)
-        frames = self._load_frames(hist)
+        if len(self.planning_cams) == 1:
+            clips: List[List[Image.Image]] = [self._load_frames(hist, self.planning_cams[0])]
+        else:
+            clips = self._load_frames_multicam(hist)
 
         # 2. Future waypoints in ego frame.
         wp, valid_mask = self._compute_waypoints(base_idx)
@@ -300,34 +410,34 @@ class PlanningDataset(Dataset):
         # 3. Tokenize trajectory (OpenVLA-bin, K=256 per-dim).
         action_tokens = self.tok.encode(wp, with_boundaries=True)
 
-        # 4. Chat template: 1 video block + prompt; assistant emits a short
-        # text wrapper around the trajectory tokens. We mirror the
-        # smoke/extract_ego_trajectory.py output structure (1 video, plain text
-        # answer, optional traj tokens appended in-place by DriveLMDataset's
-        # action_tokens path).
-        user_text = _format_ego_speed_preamble(info) + PROMPT_TEXT
+        # 4. Chat template: one <video> block per cam + ego-speed/prompt;
+        # assistant emits a short text wrapper around the trajectory tokens.
+        user_content = _build_user_content_multicam(info, self.planning_cams)
         proc_messages = [
-            {"role": "user", "content": [{"type": "video"}, {"type": "text", "text": user_text}]},
+            {"role": "user", "content": user_content},
             {"role": "assistant", "content": "Predicted trajectory:"},
         ]
         text = self.processor.apply_chat_template(
             proc_messages, tokenize=False, add_generation_prompt=False
         )
 
-        # 5. Run the processor with the video frames.
+        # 5. Run the processor with one video per cam. Qwen2.5-VL's processor
+        # builds a per-cam vision_start/vision_end block in token order matching
+        # the order of {"type": "video"} entries in user_content.
         from transformers.video_utils import VideoMetadata  # local import
         metadata = [
             VideoMetadata(
-                total_num_frames=len(frames),
+                total_num_frames=len(clip),
                 fps=self.video_fps,
-                frames_indices=list(range(len(frames))),
-                height=frames[0].height,
-                width=frames[0].width,
+                frames_indices=list(range(len(clip))),
+                height=clip[0].height,
+                width=clip[0].width,
             )
+            for clip in clips
         ]
         inputs = self.processor(
             text=[text],
-            videos=[frames],
+            videos=clips,
             video_metadata=metadata,
             return_tensors="pt",
         )
@@ -448,6 +558,11 @@ def build_planning_dataset(cfg: dict, processor, split: str = "train"):
         nusc_root = os.path.join(base_dir, nusc_root)
 
     max_samples = cfg.get(f"{split}_max_samples", None)
+    planning_cams_cfg = cfg.get("planning_cams", None)
+    # Tolerate the common YAML mistake of providing a single string instead of
+    # a list (`planning_cams: CAM_FRONT_LEFT` -> ["CAM_FRONT_LEFT"]).
+    if isinstance(planning_cams_cfg, str):
+        planning_cams_cfg = [planning_cams_cfg]
     return PlanningDataset(
         infos_path=infos_path,
         nusc_root=nusc_root,
@@ -459,4 +574,6 @@ def build_planning_dataset(cfg: dict, processor, split: str = "train"):
         vla_loss_mode=str(cfg.get("vla_loss_mode", "answer_and_traj")),
         max_samples=max_samples,
         require_full_future=bool(cfg.get("planning_require_full_future", True)),
+        planning_cams=planning_cams_cfg,
+        require_all_cams=bool(cfg.get("planning_require_all_cams", True)),
     )
