@@ -6,14 +6,22 @@ in vehicle frame and adapted to Qwen2.5-VL's spare-slot vocabulary):
   * Future horizon = 3.0 s @ 2 Hz = 6 waypoints (configurable).
   * Each waypoint is (dx_local, dy_local) relative to the *current* ego pose,
     measured in metres in the ego-vehicle frame (x forward, y left).
-  * Each dim is clamped to [-50, +50] m and uniformly quantised to 256 bins.
+  * Each dim is clamped per-dim:
+       dx (forward)  ∈ [-2,  +40] m  -> half-bin 0.082 m
+       dy (lateral)  ∈ [-8,   +8] m  -> half-bin 0.031 m
+    and uniformly quantised to 256 bins.  The asymmetric forward range
+    reflects nuScenes: cars rarely move backward more than ~2 m within a
+    3 s horizon (min dx across the train set is −2.02 m), while forward
+    can reach ~55 m at highway speeds (99.75% of train GT is in [-2,40]).
+    Lateral is symmetric and tight because the 99.9 percentile is ~7.5 m.
   * Bin index i in [0, 255] maps to token id   BIN_BASE + i.
   * Boundary tokens <traj_start>, <traj_end> wrap the action sequence.
 
 Round-trip guarantee:
-  Half a bin on a 100 m range = 100 / (2 * 256) = 0.195 m  < 0.20 m
-  -> encode(decode(...)) reproduces every waypoint with < 0.20 m L2 error
-  per dim (well within the user-required half-bin spec).
+  Max half-bin = max( (40-(-2))/(2*256), (8-(-8))/(2*256) )
+              = max(0.082, 0.031) = 0.082 m.
+  -> encode(decode(...)) reproduces every in-range waypoint with
+     < 0.10 m L2 error per dim (vs 0.195 m on the prior [-50,50] range).
 
 Qwen2.5-VL vocab layout:
   tokenizer length = 151665 (added vocab ends at 151664)
@@ -49,10 +57,17 @@ DEFAULT_HORIZON_S = 3.0
 DEFAULT_HZ = 2.0
 DEFAULT_NUM_WAYPOINTS = int(DEFAULT_HORIZON_S * DEFAULT_HZ)
 
-# Per-dim binning
+# Per-dim binning (tight per-axis ranges; see module docstring).
 DEFAULT_NUM_BINS = 256
-DEFAULT_MIN_M = -50.0
-DEFAULT_MAX_M = +50.0
+DEFAULT_DX_MIN_M = -2.0
+DEFAULT_DX_MAX_M = +40.0
+DEFAULT_DY_MIN_M = -8.0
+DEFAULT_DY_MAX_M = +8.0
+# Legacy aliases kept for backwards-compatibility with code that referenced
+# the symmetric [min_m, max_m] range. Anything reading these now sees the
+# *union* of dx/dy bounds so clipping is at least as permissive as before.
+DEFAULT_MIN_M = min(DEFAULT_DX_MIN_M, DEFAULT_DY_MIN_M)
+DEFAULT_MAX_M = max(DEFAULT_DX_MAX_M, DEFAULT_DY_MAX_M)
 
 # Token-id layout. Qwen2.5-VL has 271 spare slots after added vocab (id 151665).
 # We grab the highest contiguous block so we don't trip over any future added
@@ -84,6 +99,16 @@ class TrajectoryTokenizerConfig:
     horizon_s: float = DEFAULT_HORIZON_S
     sample_hz: float = DEFAULT_HZ
     num_bins: int = DEFAULT_NUM_BINS
+    # Per-dim quantization bounds (preferred). dx is asymmetric because cars
+    # rarely reverse more than ~2 m in 3 s; dy is symmetric.
+    dx_min_m: float = DEFAULT_DX_MIN_M
+    dx_max_m: float = DEFAULT_DX_MAX_M
+    dy_min_m: float = DEFAULT_DY_MIN_M
+    dy_max_m: float = DEFAULT_DY_MAX_M
+    # Legacy aliases — kept on the dataclass so persisted configs from older
+    # runs still load. New code should read dx_/dy_ fields. min_m/max_m below
+    # are the union of dx/dy bounds (loosest clip), purely for back-compat
+    # with any caller that still references them.
     min_m: float = DEFAULT_MIN_M
     max_m: float = DEFAULT_MAX_M
     bin_base: int = BIN_BASE
@@ -107,11 +132,21 @@ class TrajectoryTokenizer:
 
     def __init__(self, cfg: TrajectoryTokenizerConfig | None = None):
         self.cfg = cfg or TrajectoryTokenizerConfig()
-        # Bin edges in original units. np.digitize uses right-exclusive bins.
+        # Per-dim bin edges and centres. np.digitize uses right-exclusive bins.
+        self.dx_edges = np.linspace(
+            self.cfg.dx_min_m, self.cfg.dx_max_m, self.cfg.num_bins + 1
+        )
+        self.dy_edges = np.linspace(
+            self.cfg.dy_min_m, self.cfg.dy_max_m, self.cfg.num_bins + 1
+        )
+        self.dx_centers = 0.5 * (self.dx_edges[:-1] + self.dx_edges[1:])
+        self.dy_centers = 0.5 * (self.dy_edges[:-1] + self.dy_edges[1:])
+
+        # Legacy single-axis aliases (loosest range), kept for any older caller
+        # that hasn't been migrated. NEW code should use the per-dim arrays.
         self.bin_edges = np.linspace(
             self.cfg.min_m, self.cfg.max_m, self.cfg.num_bins + 1
         )
-        # Bin centres (length num_bins) for the inverse.
         self.bin_centers = 0.5 * (self.bin_edges[:-1] + self.bin_edges[1:])
 
     # ---- vocab helpers ----
@@ -148,19 +183,21 @@ class TrajectoryTokenizer:
             # Allow shorter / longer sequences but warn; trim/pad nothing — caller's job.
             pass
 
-        # Clamp into [min_m, max_m].
-        wp = np.clip(wp, self.cfg.min_m, self.cfg.max_m)
+        # Clamp per-dim so values outside the tight range saturate at the
+        # last bin instead of corrupting an unrelated axis.
+        dx = np.clip(wp[:, 0], self.cfg.dx_min_m, self.cfg.dx_max_m)
+        dy = np.clip(wp[:, 1], self.cfg.dy_min_m, self.cfg.dy_max_m)
 
-        # digitize returns 1..num_bins (inclusive); subtract 1 to get 0..num_bins-1.
-        # Use bin_edges[1:-1] so values equal to max_m fall in the last bin (index num_bins-1).
-        bins = np.digitize(wp, self.bin_edges[1:-1])  # shape (T, 2), values in [0, num_bins-1]
+        # digitize edges[1:-1] -> 0..num_bins-1; values at max land in last bin.
+        bx = np.digitize(dx, self.dx_edges[1:-1])
+        by = np.digitize(dy, self.dy_edges[1:-1])
 
         ids: List[int] = []
         if with_boundaries:
             ids.append(self.cfg.traj_start_id)
         for t in range(wp.shape[0]):
-            ids.append(self.bin_token_id(int(bins[t, 0])))
-            ids.append(self.bin_token_id(int(bins[t, 1])))
+            ids.append(self.bin_token_id(int(bx[t])))
+            ids.append(self.bin_token_id(int(by[t])))
         if with_boundaries:
             ids.append(self.cfg.traj_end_id)
         return ids
@@ -200,7 +237,11 @@ class TrajectoryTokenizer:
             return np.zeros((0, 2), dtype=np.float32)
 
         bins = np.asarray(bin_idxs, dtype=np.int64).reshape(-1, 2)
-        wp = self.bin_centers[bins].astype(np.float32)  # (T, 2)
+        # Per-dim inverse: column 0 indexes dx bin centres, column 1 indexes dy.
+        wp = np.stack(
+            [self.dx_centers[bins[:, 0]], self.dy_centers[bins[:, 1]]],
+            axis=1,
+        ).astype(np.float32)
         return wp
 
     # ---- string form for inserting into the chat-template text ----
@@ -214,12 +255,14 @@ class TrajectoryTokenizer:
         `register_with_tokenizer` below).
         """
         wp = np.asarray(waypoints, dtype=np.float32)
-        wp = np.clip(wp, self.cfg.min_m, self.cfg.max_m)
-        bins = np.digitize(wp, self.bin_edges[1:-1])
+        dx = np.clip(wp[:, 0], self.cfg.dx_min_m, self.cfg.dx_max_m)
+        dy = np.clip(wp[:, 1], self.cfg.dy_min_m, self.cfg.dy_max_m)
+        bx = np.digitize(dx, self.dx_edges[1:-1])
+        by = np.digitize(dy, self.dy_edges[1:-1])
         parts = [self.cfg.traj_start_token]
         for t in range(wp.shape[0]):
-            parts.append(_bin_token(int(bins[t, 0])))
-            parts.append(_bin_token(int(bins[t, 1])))
+            parts.append(_bin_token(int(bx[t])))
+            parts.append(_bin_token(int(by[t])))
         parts.append(self.cfg.traj_end_token)
         return "".join(parts)
 
@@ -308,42 +351,50 @@ def _self_test() -> None:
     tok = TrajectoryTokenizer(cfg)
 
     rng = np.random.default_rng(0)
-    half_bin_m = (cfg.max_m - cfg.min_m) / (2 * cfg.num_bins)  # 0.195 m
+    half_bin_dx = (cfg.dx_max_m - cfg.dx_min_m) / (2 * cfg.num_bins)
+    half_bin_dy = (cfg.dy_max_m - cfg.dy_min_m) / (2 * cfg.num_bins)
+    half_bin_m = max(half_bin_dx, half_bin_dy)
 
     # Case 1: a typical forward-driving curve (~3 s of 10 m/s curving slightly left).
     t = np.linspace(0.5, 3.0, cfg.num_waypoints)
-    dx = 10.0 * t                               # straight forward
-    dy = 0.5 * t**2                             # slight left drift
+    dx = 10.0 * t                               # straight forward (stays in [-2,40])
+    dy = 0.5 * t**2                             # slight left drift (stays in [-8,8])
     wp1 = np.stack([dx, dy], axis=1).astype(np.float32)
 
     # Case 2: stationary (all zeros — important corner case)
     wp2 = np.zeros((cfg.num_waypoints, 2), dtype=np.float32)
 
-    # Case 3: out-of-range values (should clamp)
+    # Case 3: out-of-range values (should clamp per-dim)
     wp3 = np.array([
         [+80.0, -120.0],  # both saturate
         [-200.0, +200.0],
         [12.3, -4.5],
         [0.0, 0.0],
-        [49.99, -49.99],  # at the upper/lower edge
-        [-50.0, 50.0],
+        [cfg.dx_max_m - 0.01, cfg.dy_min_m + 0.01],  # at edges
+        [cfg.dx_min_m, cfg.dy_max_m],
     ], dtype=np.float32)[: cfg.num_waypoints]
 
-    # Case 4: random uniform in-range
-    wp4 = rng.uniform(cfg.min_m, cfg.max_m, size=(cfg.num_waypoints, 2)).astype(np.float32)
+    # Case 4: random uniform in-range (per-dim)
+    rdx = rng.uniform(cfg.dx_min_m, cfg.dx_max_m, size=cfg.num_waypoints)
+    rdy = rng.uniform(cfg.dy_min_m, cfg.dy_max_m, size=cfg.num_waypoints)
+    wp4 = np.stack([rdx, rdy], axis=1).astype(np.float32)
 
     for name, wp in [("curve", wp1), ("zeros", wp2), ("clamp", wp3), ("random", wp4)]:
         ids = tok.encode(wp)
         # Sanity: length = 2T + 2
         assert len(ids) == 2 * cfg.num_waypoints + 2, len(ids)
         recovered = tok.decode(ids)
-        clamped = np.clip(wp, cfg.min_m, cfg.max_m)
+        clamped = np.stack([
+            np.clip(wp[:, 0], cfg.dx_min_m, cfg.dx_max_m),
+            np.clip(wp[:, 1], cfg.dy_min_m, cfg.dy_max_m),
+        ], axis=1)
         err = np.abs(recovered - clamped)
-        max_err = err.max()
+        max_err_dx = err[:, 0].max()
+        max_err_dy = err[:, 1].max()
         rms_err = np.sqrt((err ** 2).mean())
-        ok = bool(max_err <= half_bin_m + 1e-6)
-        print(f"  case={name:8s}  max_err={max_err:.4f} m  rms={rms_err:.4f} m  "
-              f"(half_bin={half_bin_m:.4f}) ok={ok}")
+        ok = bool(max_err_dx <= half_bin_dx + 1e-6 and max_err_dy <= half_bin_dy + 1e-6)
+        print(f"  case={name:8s}  max_err_dx={max_err_dx:.4f} (≤{half_bin_dx:.4f}) "
+              f" max_err_dy={max_err_dy:.4f} (≤{half_bin_dy:.4f}) rms={rms_err:.4f} ok={ok}")
         if not ok:
             raise AssertionError(f"round-trip error exceeds half-bin for case {name}")
 
