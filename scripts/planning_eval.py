@@ -45,6 +45,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from planning_dataset import (  # noqa: E402
     PROMPT_TEXT,
     PlanningDataset,
+    _format_ego_speed_preamble,
     quat_to_R,
 )
 from trajectory_tokenizer import (  # noqa: E402
@@ -283,10 +284,8 @@ def main() -> None:
 
     # Build the *generation prompt* (NO appended action tokens). We rebuild it
     # here rather than using ds.__getitem__ because we want generation, not
-    # teacher-forcing input.
-    sys_user_messages = [
-        {"role": "user", "content": [{"type": "video"}, {"type": "text", "text": PROMPT_TEXT}]},
-    ]
+    # teacher-forcing input. The user text is per-sample because we prepend the
+    # ego-speed preamble (read from info["can_bus"][13]) — must match training.
 
     n_total = len(ds)
     print(f"[planning_eval] val samples: {n_total}")
@@ -311,6 +310,13 @@ def main() -> None:
             info = ds.infos[base_idx]
             hist = ds._walk_history(base_idx)
             frames = ds._load_frames(hist)
+            user_text = _format_ego_speed_preamble(info) + PROMPT_TEXT
+            sys_user_messages = [
+                {"role": "user", "content": [
+                    {"type": "video"},
+                    {"type": "text", "text": user_text},
+                ]},
+            ]
             text = processor.apply_chat_template(
                 sys_user_messages, tokenize=False, add_generation_prompt=True
             )
