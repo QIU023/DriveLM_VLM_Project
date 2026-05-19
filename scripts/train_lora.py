@@ -519,8 +519,11 @@ def forward_with_video_xframe_compression(
     block into one token, so the post-merger token count per sample is
     ``T_pre * H_pre/2 * W_pre/2``. We:
 
-    1. Run the (frozen) vision encoder under ``no_grad`` to obtain post-merger
-       embeddings ``(total_post, D)``.
+    1. Use the model's own ``get_video_features`` to run the (frozen) vision
+       tower in the standard FSDP-aware way. The model's forward path
+       internally summons unsharded params; we call ``get_video_features``
+       through a monkey-patch so the downstream ``model(...)`` invocation
+       sees the compressed tokens directly instead of recomputing.
     2. Reshape to ``(B, T_post=T_pre, N, D)`` where ``N = (H_pre/2)*(W_pre/2)``
        is the per-frame-group spatial token count.
     3. Apply ``compressor(frames)`` -> ``(B, N', D)``. The compressor has its
@@ -528,13 +531,15 @@ def forward_with_video_xframe_compression(
     4. Drop the (``T_post - 1``) excess ``<|video_pad|>`` placeholders per
        sample from ``input_ids`` / ``attention_mask`` / ``labels`` so that the
        LM sees exactly ``N'`` video tokens.
-    5. Build ``inputs_embeds`` = LM text embedding with the compressed
-       visual features scattered into the surviving video-pad positions.
+    5. Build a fake ``pixel_values_videos`` (1-patch tensor; ignored by our
+       patched ``get_video_features``) so the model's forward enters the
+       video-branch and runs its built-in masked_scatter using OUR compressed
+       tokens.
     6. Construct a new ``video_grid_thw = (1, h, w)`` with
        ``(h//merge)*(w//merge) == N'``.
-    7. Call the LM with ``input_ids`` + ``inputs_embeds`` + the new
-       ``video_grid_thw``, NOT passing ``pixel_values_videos`` (so the model
-       does not re-encode the vision tokens).
+
+    The monkey-patch is restored in a try/finally so a raise inside the LM
+    forward never leaves the model in a corrupted state.
     """
     # Strip non-tensor / non-model keys before forward
     batch.pop("image_names", None)
@@ -547,24 +552,10 @@ def forward_with_video_xframe_compression(
     if grid.dim() == 1:
         grid = grid.unsqueeze(0)
 
-    # 1. Vision encoder (frozen — no grad through it; compressor still has grad).
-    vis_dtype = next(base.model.visual.parameters()).dtype
-    with torch.no_grad():
-        vis_out = base.model.visual(pv.to(vis_dtype), grid_thw=grid)
-        video_embeds = vis_out.pooler_output if hasattr(vis_out, "pooler_output") else vis_out
-        if isinstance(video_embeds, (tuple, list)):
-            video_embeds = video_embeds[0]
-        video_embeds = video_embeds.detach()
-    del vis_out
-
-    # 2. Reshape (total_post, D) -> (B, T_post, N, D).
     B = grid.shape[0]
-    # Per-sample post-merger token count: T_pre * (H_pre/merge) * (W_pre/merge).
     t_pre = grid[:, 0].tolist()
     h_post = (grid[:, 1] // merge_size).tolist()
     w_post = (grid[:, 2] // merge_size).tolist()
-    # Verify all samples share the same N for clean reshape (true for our nuScenes pipeline since
-    # min_pixels=max_pixels keeps frame size constant).
     n_per_group = h_post[0] * w_post[0]
     for b in range(B):
         if h_post[b] * w_post[b] != n_per_group:
@@ -572,33 +563,29 @@ def forward_with_video_xframe_compression(
                 f"cross-frame compression requires per-frame N to match across batch; "
                 f"sample {b} has N={h_post[b]*w_post[b]} != {n_per_group}"
             )
-    T_post_max = max(t_pre)
-    # Per-sample post counts may differ if T_pre differs. For the planning dataset
-    # all samples share the same num_past_frames -> same T_pre -> uniform. We assert.
+    T_post_max = t_pre[0]
     for b in range(B):
         if t_pre[b] != T_post_max:
             raise RuntimeError(
                 f"cross-frame compression requires uniform T across batch; "
                 f"sample {b} has T={t_pre[b]} != {T_post_max}"
             )
-    expected_total = B * T_post_max * n_per_group
-    if video_embeds.shape[0] != expected_total:
-        raise RuntimeError(
-            f"video_embeds total {video_embeds.shape[0]} != B*T*N {expected_total}"
-        )
-    D = video_embeds.shape[-1]
-    frames = video_embeds.view(B, T_post_max, n_per_group, D)
 
-    # 3. Compress (gradients flow through compressor params).
-    compressed = compressor(frames)  # (B, N', D)
-    if compressed.dim() != 3 or compressed.shape[0] != B or compressed.shape[-1] != D:
-        raise RuntimeError(
-            f"compressor output expected (B, N', D)=({B}, ?, {D}); got {tuple(compressed.shape)}"
-        )
-    N_new = compressed.shape[1]
-    del video_embeds, frames
+    # 1. Determine N_new (compressor output token count) WITHOUT running the
+    # vision tower. We need this up-front to trim input_ids before the model
+    # forward (the model uses input_ids' <|video_pad|> count to scatter the
+    # compressed embeds). Each compressor exposes ``output_token_count(T, N)``;
+    # VTM's signature has an extra kwarg.
+    try:
+        if hasattr(compressor, "target_tokens"):
+            N_new = int(compressor.target_tokens)
+        else:
+            N_new = int(type(compressor).output_token_count(T_post_max, n_per_group))
+    except TypeError:
+        # Fallback for compressors with non-static output_token_count.
+        N_new = int(compressor.output_token_count(T_post_max, n_per_group))
 
-    # 4. Drop excess <|video_pad|> tokens. Per sample: keep first N_new
+    # 2. Drop excess <|video_pad|> tokens. Per sample: keep first N_new
     # video-pad positions, drop the rest.
     input_ids = batch["input_ids"]
     attn_mask = batch["attention_mask"]
@@ -655,33 +642,68 @@ def forward_with_video_xframe_compression(
     new_attn_mask = torch.stack(new_mask_list)
     new_labels = torch.stack(new_lab_list)
 
-    # 5. Build inputs_embeds and scatter compressed tokens into the video positions.
-    inputs_embeds = base.model.language_model.embed_tokens(new_input_ids).clone()
-    vid_mask = new_input_ids == video_token_id
-    # compressed: (B, N_new, D) -> flatten to (B*N_new, D) and the mask should select
-    # exactly that many slots.
-    n_vid_total = int(vid_mask.sum().item())
-    if n_vid_total != B * N_new:
-        raise RuntimeError(
-            f"post-trim video-pad count {n_vid_total} != B*N_new {B*N_new}"
-        )
-    inputs_embeds[vid_mask] = compressed.reshape(B * N_new, D).to(inputs_embeds.dtype)
-
-    # 6. New video_grid_thw with T=1 and a clean (h, w) factorization of N_new.
+    # 4. New video_grid_thw with T=1 and a clean (h, w) factorization of N_new.
     _, h_pre_new, w_pre_new = _factor_grid_thw_for_count(N_new, merge_size=merge_size)
     new_grid_thw = torch.tensor(
         [[1, h_pre_new, w_pre_new]] * B,
         dtype=grid.dtype, device=device,
     )
 
-    # 7. Forward (no pixel_values_videos -> no re-encoding).
-    outputs = model(
-        input_ids=new_input_ids,
-        inputs_embeds=inputs_embeds,
-        attention_mask=new_attn_mask,
-        video_grid_thw=new_grid_thw,
-        labels=new_labels,
-    )
+    # 5. Monkey-patch `inner.get_video_features` so the model.forward call
+    #    runs OUR pipeline (vision encoder under no_grad -> compressor) and
+    #    returns the compressed features. Calling the vision tower from
+    #    INSIDE model.forward (vs from our pre-step) is the only safe way to
+    #    interact with FSDP-sharded visual params: the FSDP root summons them
+    #    automatically at the model.forward entry.
+    #
+    #    The model expects a return with a `.pooler_output` attribute holding
+    #    the (total_post_tokens, D) tensor. We mimic that with an ad-hoc
+    #    namespace.
+    inner = base.model  # Qwen2_5_VLModel
+    _orig_get_video_features = inner.get_video_features
+
+    class _FakeVisOut:
+        def __init__(self, t):
+            self.pooler_output = t
+
+    def _patched_get_video_features(_pv, _grid):  # noqa: ARG001
+        # Run original encoder under no_grad (vision tower frozen).
+        with torch.no_grad():
+            real = _orig_get_video_features(pv, grid)
+            embeds = real.pooler_output
+            if isinstance(embeds, (tuple, list)):
+                # Some HF versions split per-video into a list/tuple.
+                embeds = torch.cat([e for e in embeds], dim=0)
+            embeds = embeds.detach()
+        D_inner = embeds.shape[-1]
+        expected = B * T_post_max * n_per_group
+        if embeds.shape[0] != expected:
+            raise RuntimeError(
+                f"vision pooler_output {embeds.shape[0]} != B*T*N {expected}"
+            )
+        frames_local = embeds.view(B, T_post_max, n_per_group, D_inner)
+        compressed_local = compressor(frames_local)  # (B, N_new, D)
+        if compressed_local.shape != (B, N_new, D_inner):
+            raise RuntimeError(
+                f"compressor output {tuple(compressed_local.shape)} != "
+                f"expected (B={B}, N_new={N_new}, D={D_inner})"
+            )
+        # Return per-video tensors as a list so the caller's torch.cat works.
+        # We treat the compressed bag as ONE video per sample with N_new tokens.
+        per_sample = [compressed_local[b] for b in range(B)]
+        return _FakeVisOut(per_sample)
+
+    inner.get_video_features = _patched_get_video_features
+    try:
+        outputs = model(
+            input_ids=new_input_ids,
+            attention_mask=new_attn_mask,
+            labels=new_labels,
+            pixel_values_videos=pv,        # passed through (the patch ignores it)
+            video_grid_thw=new_grid_thw,
+        )
+    finally:
+        inner.get_video_features = _orig_get_video_features
     return outputs
 
 
@@ -797,6 +819,7 @@ def main():
     parser.add_argument("--save-every", type=int, default=None, help="Override save_every from config (smoke: pass huge value to skip ckpts)")
     parser.add_argument("--train-max-samples", type=int, default=None, help="Cap train dataset to first N samples (planning branch only)")
     parser.add_argument("--no-validate", action="store_true", help="Disable in-loop validation (smoke runs)")
+    parser.add_argument("--no-final-save", action="store_true", help="Skip the post-training _save_model_and_state final dump (smoke runs)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Tier-2 VLA: load model + processor + dataset (1 sample), print "
                              "param counts and memory estimate, then exit. Does NOT train.")
@@ -1616,13 +1639,16 @@ def main():
             break
 
     # ============ Save final model ============
-    final_path = os.path.join(output_dir, "final")
-    _save_model_and_state(
-        accelerator, model, optimizer, scheduler,
-        train_mode, final_path, global_step, num_epochs - 1, -1,
-        save_processor=processor,
-    )
-    accelerator.print(f"\nTraining complete! Final model saved to {final_path}")
+    if args.no_final_save:
+        accelerator.print(f"\nTraining complete! (--no-final-save -> skipping final dump)")
+    else:
+        final_path = os.path.join(output_dir, "final")
+        _save_model_and_state(
+            accelerator, model, optimizer, scheduler,
+            train_mode, final_path, global_step, num_epochs - 1, -1,
+            save_processor=processor,
+        )
+        accelerator.print(f"\nTraining complete! Final model saved to {final_path}")
 
     if args.wandb and accelerator.is_main_process:
         import wandb
