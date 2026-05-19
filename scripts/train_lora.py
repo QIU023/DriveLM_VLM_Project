@@ -470,8 +470,224 @@ def forward_with_compression(model, batch, compress_method, compress_ratio, imag
     return outputs
 
 
+# --------------- Cross-frame video token compression (planning VLA) ---------------
+
+
+def _factor_grid_thw_for_count(target: int, merge_size: int = 2) -> "tuple[int, int, int]":
+    """Choose a ``video_grid_thw = (T, H_pre, W_pre)`` that maps to ``target``
+    LM-side video-pad placeholders after the spatial merger.
+
+    The Qwen2.5-VL video pipeline emits exactly
+    ``T_pre * (H_pre // merge) * (W_pre // merge)`` placeholders for one video
+    of grid ``(T_pre, H_pre, W_pre)``. After cross-frame compression we always
+    collapse to ``T_pre = 1`` (we treat the compressed bag of tokens as one
+    temporal slice), so we need ``H_post * W_post == target`` where
+    ``H_post = H_pre // merge`` etc.
+
+    We pick the factor pair ``(h, w)`` of ``target`` with the smallest aspect
+    ratio (most square-ish). Returns ``(1, h * merge, w * merge)`` so that the
+    grid is exactly representable in ``video_grid_thw`` (which is stored in
+    pre-merger units).
+    """
+    best = None
+    for h in range(1, int(target ** 0.5) + 1):
+        if target % h == 0:
+            w = target // h
+            ar = max(h, w) / min(h, w)
+            if best is None or ar < best[0]:
+                best = (ar, h, w)
+    if best is None:
+        # Shouldn't happen for target >= 1; fall back to (1, target).
+        return (1, 1 * merge_size, target * merge_size)
+    _, h, w = best
+    return (1, h * merge_size, w * merge_size)
+
+
+def forward_with_video_xframe_compression(
+    model,
+    batch,
+    compressor,
+    video_token_id: int,
+    num_past_frames: int,
+    merge_size: int = 2,
+):
+    """Forward pass with cross-frame visual token compression.
+
+    Designed for the Qwen2.5-VL **video** branch of nuScenes planning. The
+    dataset emits one video clip per sample with grid ``(T_pre, H_pre, W_pre)``
+    in ``video_grid_thw``; the vision tower's merger collapses each 2x2 spatial
+    block into one token, so the post-merger token count per sample is
+    ``T_pre * H_pre/2 * W_pre/2``. We:
+
+    1. Run the (frozen) vision encoder under ``no_grad`` to obtain post-merger
+       embeddings ``(total_post, D)``.
+    2. Reshape to ``(B, T_post=T_pre, N, D)`` where ``N = (H_pre/2)*(W_pre/2)``
+       is the per-frame-group spatial token count.
+    3. Apply ``compressor(frames)`` -> ``(B, N', D)``. The compressor has its
+       own learnable parameters (gradient flows through it).
+    4. Drop the (``T_post - 1``) excess ``<|video_pad|>`` placeholders per
+       sample from ``input_ids`` / ``attention_mask`` / ``labels`` so that the
+       LM sees exactly ``N'`` video tokens.
+    5. Build ``inputs_embeds`` = LM text embedding with the compressed
+       visual features scattered into the surviving video-pad positions.
+    6. Construct a new ``video_grid_thw = (1, h, w)`` with
+       ``(h//merge)*(w//merge) == N'``.
+    7. Call the LM with ``input_ids`` + ``inputs_embeds`` + the new
+       ``video_grid_thw``, NOT passing ``pixel_values_videos`` (so the model
+       does not re-encode the vision tokens).
+    """
+    # Strip non-tensor / non-model keys before forward
+    batch.pop("image_names", None)
+
+    base = get_base_model(model)
+    device = batch["input_ids"].device
+
+    pv = batch["pixel_values_videos"]
+    grid = batch["video_grid_thw"]  # (num_videos, 3) — concat'd by collate; one video per sample
+    if grid.dim() == 1:
+        grid = grid.unsqueeze(0)
+
+    # 1. Vision encoder (frozen — no grad through it; compressor still has grad).
+    vis_dtype = next(base.model.visual.parameters()).dtype
+    with torch.no_grad():
+        vis_out = base.model.visual(pv.to(vis_dtype), grid_thw=grid)
+        video_embeds = vis_out.pooler_output if hasattr(vis_out, "pooler_output") else vis_out
+        if isinstance(video_embeds, (tuple, list)):
+            video_embeds = video_embeds[0]
+        video_embeds = video_embeds.detach()
+    del vis_out
+
+    # 2. Reshape (total_post, D) -> (B, T_post, N, D).
+    B = grid.shape[0]
+    # Per-sample post-merger token count: T_pre * (H_pre/merge) * (W_pre/merge).
+    t_pre = grid[:, 0].tolist()
+    h_post = (grid[:, 1] // merge_size).tolist()
+    w_post = (grid[:, 2] // merge_size).tolist()
+    # Verify all samples share the same N for clean reshape (true for our nuScenes pipeline since
+    # min_pixels=max_pixels keeps frame size constant).
+    n_per_group = h_post[0] * w_post[0]
+    for b in range(B):
+        if h_post[b] * w_post[b] != n_per_group:
+            raise RuntimeError(
+                f"cross-frame compression requires per-frame N to match across batch; "
+                f"sample {b} has N={h_post[b]*w_post[b]} != {n_per_group}"
+            )
+    T_post_max = max(t_pre)
+    # Per-sample post counts may differ if T_pre differs. For the planning dataset
+    # all samples share the same num_past_frames -> same T_pre -> uniform. We assert.
+    for b in range(B):
+        if t_pre[b] != T_post_max:
+            raise RuntimeError(
+                f"cross-frame compression requires uniform T across batch; "
+                f"sample {b} has T={t_pre[b]} != {T_post_max}"
+            )
+    expected_total = B * T_post_max * n_per_group
+    if video_embeds.shape[0] != expected_total:
+        raise RuntimeError(
+            f"video_embeds total {video_embeds.shape[0]} != B*T*N {expected_total}"
+        )
+    D = video_embeds.shape[-1]
+    frames = video_embeds.view(B, T_post_max, n_per_group, D)
+
+    # 3. Compress (gradients flow through compressor params).
+    compressed = compressor(frames)  # (B, N', D)
+    if compressed.dim() != 3 or compressed.shape[0] != B or compressed.shape[-1] != D:
+        raise RuntimeError(
+            f"compressor output expected (B, N', D)=({B}, ?, {D}); got {tuple(compressed.shape)}"
+        )
+    N_new = compressed.shape[1]
+    del video_embeds, frames
+
+    # 4. Drop excess <|video_pad|> tokens. Per sample: keep first N_new
+    # video-pad positions, drop the rest.
+    input_ids = batch["input_ids"]
+    attn_mask = batch["attention_mask"]
+    labels = batch["labels"]
+
+    new_ids_list, new_mask_list, new_lab_list = [], [], []
+    for b in range(B):
+        ids = input_ids[b]
+        msk = attn_mask[b]
+        lab = labels[b]
+        vid_pos = (ids == video_token_id).nonzero(as_tuple=True)[0]
+        n_vid = len(vid_pos)
+        if n_vid == 0:
+            new_ids_list.append(ids)
+            new_mask_list.append(msk)
+            new_lab_list.append(lab)
+            continue
+        if n_vid < N_new:
+            raise RuntimeError(
+                f"sample {b}: only {n_vid} video-pad tokens but compressor emits {N_new}; "
+                f"max_length truncation may have eaten visual placeholders"
+            )
+        n_remove = n_vid - N_new
+        if n_remove == 0:
+            new_ids_list.append(ids)
+            new_mask_list.append(msk)
+            new_lab_list.append(lab)
+            continue
+        remove_pos = vid_pos[N_new:]
+        keep = torch.ones(len(ids), dtype=torch.bool, device=device)
+        keep[remove_pos] = False
+        new_ids_list.append(ids[keep])
+        new_mask_list.append(msk[keep])
+        new_lab_list.append(lab[keep])
+
+    # Pad to max length
+    max_len = max(t.shape[0] for t in new_ids_list)
+    for i in range(B):
+        pad = max_len - new_ids_list[i].shape[0]
+        if pad > 0:
+            new_ids_list[i] = torch.cat([
+                new_ids_list[i],
+                torch.zeros(pad, dtype=new_ids_list[i].dtype, device=device),
+            ])
+            new_mask_list[i] = torch.cat([
+                new_mask_list[i],
+                torch.zeros(pad, dtype=new_mask_list[i].dtype, device=device),
+            ])
+            new_lab_list[i] = torch.cat([
+                new_lab_list[i],
+                torch.full((pad,), -100, dtype=new_lab_list[i].dtype, device=device),
+            ])
+    new_input_ids = torch.stack(new_ids_list)
+    new_attn_mask = torch.stack(new_mask_list)
+    new_labels = torch.stack(new_lab_list)
+
+    # 5. Build inputs_embeds and scatter compressed tokens into the video positions.
+    inputs_embeds = base.model.language_model.embed_tokens(new_input_ids).clone()
+    vid_mask = new_input_ids == video_token_id
+    # compressed: (B, N_new, D) -> flatten to (B*N_new, D) and the mask should select
+    # exactly that many slots.
+    n_vid_total = int(vid_mask.sum().item())
+    if n_vid_total != B * N_new:
+        raise RuntimeError(
+            f"post-trim video-pad count {n_vid_total} != B*N_new {B*N_new}"
+        )
+    inputs_embeds[vid_mask] = compressed.reshape(B * N_new, D).to(inputs_embeds.dtype)
+
+    # 6. New video_grid_thw with T=1 and a clean (h, w) factorization of N_new.
+    _, h_pre_new, w_pre_new = _factor_grid_thw_for_count(N_new, merge_size=merge_size)
+    new_grid_thw = torch.tensor(
+        [[1, h_pre_new, w_pre_new]] * B,
+        dtype=grid.dtype, device=device,
+    )
+
+    # 7. Forward (no pixel_values_videos -> no re-encoding).
+    outputs = model(
+        input_ids=new_input_ids,
+        inputs_embeds=inputs_embeds,
+        attention_mask=new_attn_mask,
+        video_grid_thw=new_grid_thw,
+        labels=new_labels,
+    )
+    return outputs
+
+
 @torch.no_grad()
-def validate(model, val_loader, compress_method, compress_ratio, image_token_id, val_batches, device):
+def validate(model, val_loader, compress_method, compress_ratio, image_token_id, val_batches, device,
+             *, xframe_compressor=None, video_token_id=None, num_past_frames=None):
     """Run validation for val_batches batches and return avg loss + token accuracy."""
     model.eval()
     total_loss, count = 0.0, 0
@@ -482,7 +698,12 @@ def validate(model, val_loader, compress_method, compress_ratio, image_token_id,
                 break
             batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
             try:
-                outputs = forward_with_compression(model, batch, compress_method, compress_ratio, image_token_id)
+                if xframe_compressor is not None:
+                    outputs = forward_with_video_xframe_compression(
+                        model, batch, xframe_compressor, video_token_id, num_past_frames,
+                    )
+                else:
+                    outputs = forward_with_compression(model, batch, compress_method, compress_ratio, image_token_id)
                 total_loss += outputs.loss.item()
                 count += 1
                 logits = outputs.logits[:, :-1, :]
@@ -897,7 +1118,35 @@ def main():
 
     # Image token id for compression
     image_token_id = processor.tokenizer.convert_tokens_to_ids("<|image_pad|>")
-    accelerator.print(f"Image token id: {image_token_id}")
+    video_token_id = processor.tokenizer.convert_tokens_to_ids("<|video_pad|>")
+    accelerator.print(f"Image token id: {image_token_id} | Video token id: {video_token_id}")
+
+    # ============ Cross-frame video token compressor (planning VLA) ============
+    # When `cross_frame_compressor` is set in cfg we build a compressor module
+    # (scripts/compressors registry) and route the planning forward through
+    # `forward_with_video_xframe_compression`. Compressor params are added to
+    # the optimizer; most variants are zero-param but `temporal_pool` with
+    # pool_type='weighted' or `vtm` with `use_learnable_key=True` do learn.
+    xframe_compressor = None
+    xframe_cfg = cfg.get("cross_frame_compressor", None)
+    if xframe_cfg is not None:
+        try:
+            from scripts.compressors import make_compressor  # noqa: E402
+        except ImportError:
+            # When train_lora.py is invoked directly with cwd inside scripts/,
+            # the package path resolves as `compressors` instead.
+            from compressors import make_compressor  # type: ignore  # noqa: E402
+        comp_name = xframe_cfg.get("name")
+        comp_kwargs = xframe_cfg.get("kwargs", {}) or {}
+        xframe_compressor = make_compressor(comp_name, **comp_kwargs)
+        # Move to device with same dtype as LM weights.
+        xframe_compressor = xframe_compressor.to(device=accelerator.device, dtype=compute_dtype)
+        n_comp = sum(p.numel() for p in xframe_compressor.parameters())
+        n_comp_train = sum(p.numel() for p in xframe_compressor.parameters() if p.requires_grad)
+        accelerator.print(
+            f"[xframe] Built compressor '{comp_name}' kwargs={comp_kwargs}: "
+            f"{n_comp_train}/{n_comp} trainable params"
+        )
 
     gpu_mem = torch.cuda.memory_allocated() / 1024**3
     accelerator.print(f"GPU memory after model load (pre-shard): {gpu_mem:.2f} GB")
@@ -1058,7 +1307,10 @@ def main():
     # but Accelerator.prepare() wraps the model first, then the optimizer — so we build
     # the optimizer here against the raw (CPU) params, and accelerator.prepare() will
     # rebind them after sharding. This is the supported path in accelerate>=1.x.
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
+    _opt_params = list(model.parameters())
+    if xframe_compressor is not None:
+        _opt_params = _opt_params + list(xframe_compressor.parameters())
+    optimizer = torch.optim.AdamW(_opt_params, lr=lr, weight_decay=0.01)
 
     lr_schedule = str(cfg.get("lr_schedule", "cosine"))
     if lr_schedule == "autovla_stepdecay":
@@ -1199,9 +1451,15 @@ def main():
 
             try:
                 with accelerator.accumulate(model):
-                    outputs = forward_with_compression(
-                        model, batch, compress_method, compress_ratio, image_token_id
-                    )
+                    if xframe_compressor is not None:
+                        outputs = forward_with_video_xframe_compression(
+                            model, batch, xframe_compressor, video_token_id,
+                            int(cfg.get("planning_num_past_frames", 4)),
+                        )
+                    else:
+                        outputs = forward_with_compression(
+                            model, batch, compress_method, compress_ratio, image_token_id
+                        )
                     loss = outputs.loss
                     batch_loss = loss.detach().float().item()
 
@@ -1311,6 +1569,9 @@ def main():
                     val_loss, val_acc = validate(
                         model, val_loader, compress_method, compress_ratio,
                         image_token_id, val_batches, _device,
+                        xframe_compressor=xframe_compressor,
+                        video_token_id=video_token_id,
+                        num_past_frames=int(cfg.get("planning_num_past_frames", 4)),
                     )
                     if accelerator.is_main_process:
                         tqdm.write(f"  [VAL] step={global_step} val_loss={val_loss:.4f} val_acc={val_acc:.4f}")
