@@ -926,31 +926,49 @@ def main():
         accelerator.print(f"VLA mode: traj_start_id={traj_start_id} traj_end_id={traj_end_id} "
                           f"loss={vla_loss_mode}")
 
-    if vla_mode:
+    # ============ nuScenes-planning branch (Phase B) ============
+    # If dataset_kind == 'nuscenes_planning', skip the JSON loader entirely
+    # and build the dataset on the fly from UniAD's preprocessed temporal infos
+    # + the CAM_FRONT samples under data/nuscenes/samples/CAM_FRONT/.
+    dataset_kind = str(cfg.get("dataset_kind", "drivelm")).lower()
+    use_planning = (dataset_kind == "nuscenes_planning")
+    if use_planning:
+        from planning_dataset import build_planning_dataset  # noqa: E402
+        train_dataset = build_planning_dataset(cfg, processor, split="train")
+        val_dataset = None
+        if val_every > 0 and cfg.get("infos_val"):
+            val_dataset = build_planning_dataset(cfg, processor, split="val")
+        accelerator.print(
+            f"[nusc-planning] train_samples={len(train_dataset)} "
+            f"val_samples={len(val_dataset) if val_dataset is not None else 0}"
+        )
+
+    if vla_mode and not use_planning:
         v_path = data_path_vla or f"data_processed/v1_1_video_n{num_frames}_with_traj.json"
         if not os.path.isabs(v_path):
             v_path = os.path.join(_BASE_DIR, v_path)
         train_file = v_path
         val_file = v_path.replace(".json", "_val.json")
-    elif video_mode:
+    elif video_mode and not use_planning:
         # Prefer explicit data_path_video; fall back to v1_1_video_n{N}.json
         v_path = data_path_video or f"data_processed/v1_1_video_n{num_frames}.json"
         if not os.path.isabs(v_path):
             v_path = os.path.join(_BASE_DIR, v_path)
         train_file = v_path
         val_file = v_path.replace(".json", "_val.json")  # convention; smoke uses same file
-    else:
+    elif not use_planning:
         default_train = "train_mini.json" if args.mini else "train.json"
         train_file = os.path.join(data_dir, cfg.get("train_file", default_train))
         val_file = os.path.join(data_dir, "val.json")
-    accelerator.print(f"Loading dataset: {train_file} (video_mode={video_mode}, num_frames={num_frames}, vla={vla_mode})")
+    if not use_planning:
+        accelerator.print(f"Loading dataset: {train_file} (video_mode={video_mode}, num_frames={num_frames}, vla={vla_mode})")
 
-    train_dataset = DriveLMDataset(
-        train_file, processor, max_length=max_length,
-        video_mode=video_mode, num_frames=num_frames, video_fps=video_fps,
-        vla_mode=vla_mode, vla_loss_mode=vla_loss_mode,
-        traj_start_id=traj_start_id, traj_end_id=traj_end_id,
-    )
+        train_dataset = DriveLMDataset(
+            train_file, processor, max_length=max_length,
+            video_mode=video_mode, num_frames=num_frames, video_fps=video_fps,
+            vla_mode=vla_mode, vla_loss_mode=vla_loss_mode,
+            traj_start_id=traj_start_id, traj_end_id=traj_end_id,
+        )
 
     if args.dry_run:
         # Sanity-print one sample + memory estimate; do NOT build optimizer / train.
@@ -989,7 +1007,18 @@ def main():
     )
 
     val_loader = None
-    if val_every > 0 and os.path.exists(val_file):
+    if use_planning:
+        if val_every > 0 and val_dataset is not None:
+            val_loader = DataLoader(
+                val_dataset,
+                batch_size=batch_size,
+                shuffle=False,
+                num_workers=num_workers,
+                collate_fn=collate_fn,
+                pin_memory=True,
+            )
+            accelerator.print(f"Validation samples: {len(val_dataset)}")
+    elif val_every > 0 and os.path.exists(val_file):
         val_dataset = DriveLMDataset(
             val_file, processor, max_length=max_length,
             video_mode=video_mode, num_frames=num_frames, video_fps=video_fps,

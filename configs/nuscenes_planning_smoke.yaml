@@ -1,0 +1,30 @@
+base_config: nuscenes_planning_full.yaml
+
+# ============================================================================
+# Phase B smoke: 5 optimizer steps on 100 train samples, just enough to verify
+# FSDP wrap + dataset + forward + backward + save + eval pipeline.
+# ============================================================================
+
+experiment: nuscenes_planning_3b_smoke
+
+# Cap the train infos to first 100 entries that survive the full-future filter.
+# At grad_accum=4 + world=8, 100 train samples gives 12 per-rank batches /
+# 4 accum = 3 opt steps per epoch. Bump epochs to make sure val + save both
+# fire within the smoke budget.
+train_max_samples: 160
+val_max_samples: 40
+
+# Tiny val + save cadence so they fire within the 5-step budget.
+val_every: 2
+val_batches: 2
+
+save_every: 5
+keep_latest_k: 1
+
+# No need to run a full epoch.
+num_epochs: 1
+
+# Pressure-test rule (memory feedback_no_ckpt_smoke_pressure): NORMALLY smoke
+# runs disable ckpt save. Here we DO save once at step 5 so the smoke can be
+# followed by planning_eval.py on the resulting dir. After validation the
+# parent agent should delete checkpoints_qwen25/nuscenes_planning_3b_smoke.

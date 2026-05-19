@@ -1,0 +1,50 @@
+base_config: gb200_vla.yaml
+
+# ============================================================================
+# Phase B: nuScenes ego-trajectory planning, FULL v1.0-trainval (CAM_FRONT-only)
+# ============================================================================
+# Trains Qwen2.5-VL-3B end-to-end on every train info entry of
+# `nuscenes_infos_temporal_train.pkl` (UniAD preprocessing), with 4 past
+# CAM_FRONT frames @ 2Hz as the vision input and the next 6 ego waypoints
+# (3 s @ 2 Hz) as the OpenVLA-bin tokenized action target.
+#
+# Sample count: 21830 useable samples (those with >=3 prev frames AND >=6
+# future frames available in-scene). At global_bs=32 (1 * grad_accum_4 *
+# 8 GPUs) that's ~683 opt steps per epoch -> ~2050 steps over 3 epochs.
+# Disk: ~18 GB/ckpt × keep_latest_k=3 = ~54 GB.
+
+experiment: nuscenes_planning_3b_full_sft
+
+# Tell train_lora.py to take the on-the-fly planning branch.
+dataset_kind: nuscenes_planning
+nusc_root: data/nuscenes
+nusc_version: v1.0-trainval
+infos_train: data/uniad_infos/nuscenes_infos_temporal_train.pkl
+infos_val: data/uniad_infos/nuscenes_infos_temporal_val.pkl
+
+# Planning-specific knobs (see planning_dataset.py for defaults).
+planning_num_past_frames: 4
+planning_num_future_wp: 6
+planning_require_full_future: true
+
+# Override num_epochs from base. Paper note: AutoVLA's 5 epochs is for the
+# 4x-larger DriveLM mix; on nuScenes-only (~22 K samples) 3 epochs gives
+# comfortable convergence without overfit.
+num_epochs: 3
+
+# VLA-side: we use the same OpenVLA-bin tokenizer as Phase A and append the
+# trajectory tokens to the assistant turn ("answer_and_traj" trains the
+# tiny "Predicted trajectory:" wrapper PLUS the trajectory bins).
+vla_mode: true
+vla_loss_mode: answer_and_traj
+
+# Video plumbing (overrides any video_mode legacy from the base chain).
+video_mode: true
+num_frames: 4
+video_fps: 2.0
+
+# Validation cadence — keep paper-aligned 100-step save / 100-step val.
+val_every: 100
+val_batches: 20
+save_every: 100
+keep_latest_k: 3
