@@ -710,10 +710,35 @@ def forward_with_video_xframe_compression(
 @torch.no_grad()
 def validate(model, val_loader, compress_method, compress_ratio, image_token_id, val_batches, device,
              *, xframe_compressor=None, video_token_id=None, num_past_frames=None):
-    """Run validation for val_batches batches and return avg loss + token accuracy."""
+    """Run validation for val_batches batches.
+
+    Returns ``(val_loss, val_acc, l2_dict)`` where ``l2_dict`` carries
+    teacher-forced L2 (metres) at horizons 1/2/3 s and the average over all
+    6 waypoints, decoded via the trajectory tokenizer's per-dim bin centres.
+
+    ``l2_dict`` is an empty dict when L2 cannot be computed (xframe mode, or
+    no trajectory tokens found in the val batches).
+    """
+    # Build a CPU-side trajectory tokenizer so we can map bin token-ids back to
+    # (Δx, Δy) metres. This mirrors the planning_eval.py decode path but works
+    # on teacher-forced labels/logits instead of generated tokens.
+    from trajectory_tokenizer import TrajectoryTokenizer, TrajectoryTokenizerConfig
+    _traj_cfg = TrajectoryTokenizerConfig()
+    _traj_tok = TrajectoryTokenizer(_traj_cfg)
+    _bin_base = _traj_cfg.bin_base
+    _bin_hi = _bin_base + _traj_cfg.num_bins  # exclusive
+    _num_wp = _traj_cfg.num_waypoints  # 6
+    _dx_centers = torch.from_numpy(_traj_tok.dx_centers).float()  # (256,)
+    _dy_centers = torch.from_numpy(_traj_tok.dy_centers).float()  # (256,)
+
     model.eval()
     total_loss, count = 0.0, 0
     correct_tokens, total_tokens = 0, 0
+    # Mean-of-batch-means aggregation (ST-P3 TemAvg, batched).
+    l2_1s_sum = l2_2s_sum = l2_3s_sum = l2_avg_sum = 0.0
+    l2_n_batches = 0
+    l2_n_samples = 0
+    l2_skipped = (xframe_compressor is not None)
     with torch.no_grad():
         for i, batch in enumerate(val_loader):
             if i >= val_batches:
@@ -742,6 +767,43 @@ def validate(model, val_loader, compress_method, compress_ratio, image_token_id,
                         preds = logits.argmax(dim=-1)
                         correct_tokens += (preds[mask] == labels[mask]).sum().item()
                         total_tokens += mask.sum().item()
+
+                    # ---- Teacher-forced L2 (metres) over trajectory tokens ----
+                    # Identify GT trajectory bin positions in labels. Bin token
+                    # ids live in [BIN_BASE, BIN_BASE+256). -100 (ignore) is
+                    # already excluded by the half-open range.
+                    traj_mask = (labels >= _bin_base) & (labels < _bin_hi)  # (B, T-1)
+                    # Require every sample in the batch to expose exactly
+                    # 2 * num_waypoints (=12) trajectory token positions.
+                    per_sample_counts = traj_mask.sum(dim=1)  # (B,)
+                    if per_sample_counts.numel() > 0 and bool((per_sample_counts == 2 * _num_wp).all()):
+                        B = labels.shape[0]
+                        # GT bin ids reshaped to (B, num_wp, 2)
+                        gt_ids = labels[traj_mask].view(B, _num_wp, 2)
+                        # Predicted bin ids at the SAME positions (shifted-by-1
+                        # alignment already applied above when we sliced logits).
+                        pred_ids_full = logits.argmax(dim=-1)  # (B, T-1)
+                        pred_ids = pred_ids_full[traj_mask].view(B, _num_wp, 2)
+                        # Decode bin id -> bin index -> metre via per-dim centres.
+                        gt_bins = (gt_ids - _bin_base).clamp_(0, _traj_cfg.num_bins - 1)
+                        pred_bins = (pred_ids - _bin_base).clamp_(0, _traj_cfg.num_bins - 1)
+                        dx_c = _dx_centers.to(labels.device)
+                        dy_c = _dy_centers.to(labels.device)
+                        gt_dx = dx_c[gt_bins[..., 0]]
+                        gt_dy = dy_c[gt_bins[..., 1]]
+                        pred_dx = dx_c[pred_bins[..., 0]]
+                        pred_dy = dy_c[pred_bins[..., 1]]
+                        # L2 per waypoint -> (B, num_wp)
+                        ddx = pred_dx - gt_dx
+                        ddy = pred_dy - gt_dy
+                        dist = torch.sqrt(ddx * ddx + ddy * ddy)
+                        # Horizon indices: [0.5s, 1s, 1.5s, 2s, 2.5s, 3s]
+                        l2_1s_sum += float(dist[:, 1].mean().item())
+                        l2_2s_sum += float(dist[:, 3].mean().item())
+                        l2_3s_sum += float(dist[:, 5].mean().item())
+                        l2_avg_sum += float(dist.mean().item())
+                        l2_n_batches += 1
+                        l2_n_samples += B
             except RuntimeError as e:
                 if "out of memory" in str(e):
                     torch.cuda.empty_cache()
@@ -750,7 +812,17 @@ def validate(model, val_loader, compress_method, compress_ratio, image_token_id,
     model.train()
     val_loss = total_loss / max(count, 1)
     val_acc = correct_tokens / max(total_tokens, 1)
-    return val_loss, val_acc
+
+    l2_dict: dict = {}
+    if not l2_skipped and l2_n_batches > 0:
+        l2_dict = {
+            "L2_1s": l2_1s_sum / l2_n_batches,
+            "L2_2s": l2_2s_sum / l2_n_batches,
+            "L2_3s": l2_3s_sum / l2_n_batches,
+            "L2_avg": l2_avg_sum / l2_n_batches,
+            "n_samples": l2_n_samples,
+        }
+    return val_loss, val_acc, l2_dict
 
 
 def _save_model_and_state(accelerator, model, optimizer, scheduler,
@@ -1615,7 +1687,7 @@ def main():
 
                 # Validation
                 if val_every > 0 and val_loader is not None and global_step % val_every == 0:
-                    val_loss, val_acc = validate(
+                    val_loss, val_acc, l2_dict = validate(
                         model, val_loader, compress_method, compress_ratio,
                         image_token_id, val_batches, _device,
                         xframe_compressor=xframe_compressor,
@@ -1623,10 +1695,29 @@ def main():
                         num_past_frames=int(cfg.get("planning_num_past_frames", 4)),
                     )
                     if accelerator.is_main_process:
-                        tqdm.write(f"  [VAL] step={global_step} val_loss={val_loss:.4f} val_acc={val_acc:.4f}")
+                        base = f"  [VAL] step={global_step} val_loss={val_loss:.4f} val_acc={val_acc:.4f}"
+                        if xframe_compressor is not None:
+                            tqdm.write(f"{base} L2=skipped(xframe)")
+                        elif l2_dict:
+                            tqdm.write(
+                                f"{base} L2 avg={l2_dict['L2_avg']:.3f} "
+                                f"(1s={l2_dict['L2_1s']:.3f} "
+                                f"2s={l2_dict['L2_2s']:.3f} "
+                                f"3s={l2_dict['L2_3s']:.3f})"
+                            )
+                        else:
+                            tqdm.write(f"{base} L2=skipped(no_traj_tokens)")
                     if args.wandb and accelerator.is_main_process:
                         import wandb
-                        wandb.log({"val_loss": val_loss, "val_acc": val_acc}, step=global_step)
+                        log_payload = {"val_loss": val_loss, "val_acc": val_acc}
+                        if l2_dict:
+                            log_payload.update({
+                                "val_l2_avg": l2_dict["L2_avg"],
+                                "val_l2_1s": l2_dict["L2_1s"],
+                                "val_l2_2s": l2_dict["L2_2s"],
+                                "val_l2_3s": l2_dict["L2_3s"],
+                            })
+                        wandb.log(log_payload, step=global_step)
 
                 if args.max_steps and global_step >= args.max_steps:
                     if accelerator.is_main_process:
