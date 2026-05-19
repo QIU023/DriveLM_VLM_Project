@@ -794,6 +794,9 @@ def main():
     parser.add_argument("--val-batches", type=int, default=None, help="Number of val batches")
     parser.add_argument("--resume", type=str, default=None, help="Resume from checkpoint dir (e.g. checkpoints_qwen25/crp_c8/checkpoint-66000)")
     parser.add_argument("--max-steps", type=int, default=None, help="Stop training after N optimizer steps")
+    parser.add_argument("--save-every", type=int, default=None, help="Override save_every from config (smoke: pass huge value to skip ckpts)")
+    parser.add_argument("--train-max-samples", type=int, default=None, help="Cap train dataset to first N samples (planning branch only)")
+    parser.add_argument("--no-validate", action="store_true", help="Disable in-loop validation (smoke runs)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Tier-2 VLA: load model + processor + dataset (1 sample), print "
                              "param counts and memory estimate, then exit. Does NOT train.")
@@ -828,8 +831,12 @@ def main():
     num_epochs = args.epochs if args.epochs is not None else cfg.get("num_epochs", cfg.get("epochs", 1))
     max_length = cfg.get("max_length", 512)
     num_workers = cfg.get("num_workers", 0)
-    save_every = cfg.get("save_every", 500)
+    save_every = args.save_every if args.save_every is not None else cfg.get("save_every", 500)
     keep_latest_k = cfg.get("keep_latest_k", 3)  # disk discipline; 0 disables pruning
+    if args.train_max_samples is not None:
+        cfg["train_max_samples"] = int(args.train_max_samples)
+    if args.no_validate:
+        cfg["val_every"] = 0
     min_pixels = cfg.get("min_pixels", 256 * 28 * 28)
     max_pixels = cfg.get("max_pixels", 512 * 28 * 28)
 
@@ -864,7 +871,7 @@ def main():
     compress_method = args.compress_method or cfg.get("compress_method", "none")
     compress_ratio = args.compress_ratio or cfg.get("compress_ratio", 1)
     experiment = args.experiment or cfg.get("experiment", "default")
-    val_every = args.val_every or cfg.get("val_every", 0)
+    val_every = 0 if args.no_validate else (args.val_every or cfg.get("val_every", 0))
     val_batches = args.val_batches or cfg.get("val_batches", 50)
 
     data_dir = os.path.join(_BASE_DIR, "data_processed")
@@ -1147,6 +1154,18 @@ def main():
             f"[xframe] Built compressor '{comp_name}' kwargs={comp_kwargs}: "
             f"{n_comp_train}/{n_comp} trainable params"
         )
+        # NOTE on FSDP: the compressor sits OUTSIDE the FSDP wrap. For zero-param
+        # variants (mean / last / cosine / norm-only) this is a non-issue. For
+        # learnable variants (pool_type=weighted, vtm use_learnable_key, longvu
+        # similarity_metric=learned) gradients are computed per-rank with no
+        # implicit DDP all-reduce — caller must add an explicit reduce or wrap the
+        # compressor in DDP/FSDP if it is to be trained under multi-GPU launch.
+        if n_comp_train > 0 and _is_distributed_env:
+            accelerator.print(
+                f"[xframe] WARNING: compressor has {n_comp_train} trainable params under "
+                f"distributed launch; cross-rank gradient sync is NOT wired. Set "
+                f"learnable variants only after wiring DDP / FSDP wrap for the compressor."
+            )
 
     gpu_mem = torch.cuda.memory_allocated() / 1024**3
     accelerator.print(f"GPU memory after model load (pre-shard): {gpu_mem:.2f} GB")
