@@ -107,9 +107,17 @@ def _multicam_prompt_suffix(cams: List[str]) -> str:
     variant. Single-cam keeps the original PROMPT_TEXT for back-compat."""
     if len(cams) == 1 and cams[0] == "CAM_FRONT":
         return PROMPT_TEXT
-    cam_phrase = ", ".join(
-        CAM_LABELS_3.get(c, c).lower() for c in cams
-    )
+    # Short cam names ("front", "front-left", "front-right") to match the R1''
+    # design-doc prompt text exactly.
+    short = {
+        "CAM_FRONT": "front",
+        "CAM_FRONT_LEFT": "front-left",
+        "CAM_FRONT_RIGHT": "front-right",
+        "CAM_BACK": "back",
+        "CAM_BACK_LEFT": "back-left",
+        "CAM_BACK_RIGHT": "back-right",
+    }
+    cam_phrase = ", ".join(short.get(c, c) for c in cams)
     return (
         f"Given 4 past frames @ 2Hz from each of {len(cams)} cameras "
         f"({cam_phrase}), predict the ego vehicle's next 6 waypoints at 2 Hz "
