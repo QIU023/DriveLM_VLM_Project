@@ -98,6 +98,7 @@ def make_compressor(name: str, **kwargs: Any) -> CrossFrameCompressor:
 # Import side-effect: register built-in compressors.
 from . import temporal_pool  # noqa: E402,F401  (registers TemporalMeanPoolCompressor)
 from . import vtm  # noqa: E402,F401  (registers VTMCompressor)
+from . import longvu  # noqa: E402,F401  (registers LongVUCompressor)
 
 __all__ = [
     "CrossFrameCompressor",
