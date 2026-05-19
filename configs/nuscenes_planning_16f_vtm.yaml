@@ -1,0 +1,27 @@
+base_config: nuscenes_planning_full.yaml
+
+# ============================================================================
+# Phase B + cross-frame compression: nuScenes planning, 16 past frames @ 2Hz,
+# VTM (Video Token Merging) cross-frame compressor (R4).
+# ============================================================================
+# Compressor: scripts.compressors.vtm.VTMCompressor
+#   - bipartite ToMe merge across the flattened T*N axis
+#   - target_tokens=140 (chosen for parity with prior single-image 4x compression
+#     budgets while staying ≈ the 4-frame baseline 240). The 140-token grid
+#     factors as 10 * 14, so the LM-side video_grid_thw is (1, 20, 28).
+#   - merge_type=mean (uniform average of merged groups)
+# Zero learnable params unless use_learnable_key=true (left off here for the
+# baseline VTM comparison).
+
+experiment: nusc_planning_16f_vtm
+
+planning_num_past_frames: 16
+
+cross_frame_compressor:
+  name: vtm
+  kwargs:
+    target_tokens: 140
+    merge_type: mean
+
+# Disk discipline (user 2026-05-19): keep last 2 ckpts only.
+keep_latest_k: 2
