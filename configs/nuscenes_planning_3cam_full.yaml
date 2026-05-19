@@ -1,0 +1,41 @@
+base_config: nuscenes_planning_full.yaml
+
+# ============================================================================
+# Phase B+: nuScenes ego-trajectory planning, FULL v1.0-trainval, 3-CAMERA
+# variant (AutoVLA forward-arc set: CAM_FRONT + CAM_FRONT_LEFT + CAM_FRONT_RIGHT)
+# ============================================================================
+# Same train/val pkl + same trajectory tokenizer as the 1-cam config; just
+# triples the visual context per sample. AutoVLA (NeurIPS'25 §3.1) reports
+# L2 avg 0.41 m on nuScenes planning with this 3-cam setup (vs UniAD 0.71 m
+# single-cam). Our R1 baseline @ 1-cam was 2.13 m; R1' (ego-speed + tighter
+# bins) is expected ~0.7-1.0 m. The 2 side cams should close ~0.25 m more
+# and bring us close to AutoVLA's reported number.
+#
+# Data dependency: this config requires CAM_FRONT_LEFT and CAM_FRONT_RIGHT
+# images on disk under `data/nuscenes/samples/<cam>/`. See
+# scripts/stream_extract_nuscenes_3cam.sh for the streaming-extract path from
+# the nuScenes public S3 bucket. Train samples whose FL/FR files are missing
+# are filtered out by PlanningDataset (`require_all_cams=True`).
+
+experiment: nuscenes_planning_3cam_3b_full_sft
+
+# Three-camera setup — the planning_dataset emits one <video> block per cam
+# (in the order given here), labeled "Front camera:", "Front-left camera:",
+# "Front-right camera:" in the user prompt. The chat template inserts the
+# corresponding <|vision_start|><|video_pad|><|vision_end|> token triples.
+planning_cams: ["CAM_FRONT", "CAM_FRONT_LEFT", "CAM_FRONT_RIGHT"]
+planning_require_all_cams: true   # drop samples lacking any cam file on disk
+
+# Visual budget. With min_pixels=max_pixels=109760 (inherited from gb200_vla),
+# Qwen2.5-VL emits ~140 visual tokens / frame after the 2x2 spatial-temporal
+# merger. 3 cams * 4 frames * 140 = ~1680 visual tokens; +text+traj +chat
+# template overhead lands ~2000-2300 tokens total. We bump max_length to 8192
+# to leave generous headroom for any per-frame token-count drift and for the
+# trailing trajectory block (14 traj tokens including start/end).
+max_length: 8192
+
+# Keep AutoVLA-aligned hyperparams (lr, schedule, epochs, gbs) unchanged from
+# the base 1-cam config; the only training-side delta is visual context.
+# Ckpt cadence — keep_latest_k=2 to mind disk (3-cam ckpts are the same size
+# as 1-cam since vision tower is frozen and not saved, but be tighter anyway).
+keep_latest_k: 2
