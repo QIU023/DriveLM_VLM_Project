@@ -18,6 +18,7 @@ import time
 import yaml
 import torch
 from torch.utils.data import Dataset, DataLoader
+from collections import deque
 from transformers import (
     AutoModelForImageTextToText,
     AutoProcessor,
@@ -1029,14 +1030,35 @@ def main():
     # the optimizer here against the raw (CPU) params, and accelerator.prepare() will
     # rebind them after sharding. This is the supported path in accelerate>=1.x.
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
-    warmup_ratio = float(cfg.get("warmup_ratio", 0.05))
-    scheduler = get_cosine_schedule_with_warmup(
-        optimizer,
-        num_warmup_steps=max(1, int(total_steps * warmup_ratio)),
-        num_training_steps=total_steps,
-    )
-    accelerator.print(f"Scheduler: cosine with warmup_ratio={warmup_ratio:.3f} -> "
-                      f"{int(total_steps * warmup_ratio)} warmup steps / {total_steps} total")
+
+    lr_schedule = str(cfg.get("lr_schedule", "cosine"))
+    if lr_schedule == "autovla_stepdecay":
+        # AutoVLA recipe: linear warmup for N steps, then ×gamma every step_freq.
+        # Replicates `LambdaLR` from ucla-mobility/AutoVLA tools/run_sft.py.
+        autovla_warmup = int(cfg.get("warmup_steps", 500))
+        autovla_step_freq = int(cfg.get("lr_step_freq", 2000))
+        autovla_step_gamma = float(cfg.get("lr_step_gamma", 0.98))
+
+        def _autovla_lr_lambda(current_step: int) -> float:
+            if current_step < autovla_warmup:
+                return float(current_step) / float(max(1, autovla_warmup))
+            decay_count = (current_step - autovla_warmup) // autovla_step_freq
+            return autovla_step_gamma ** decay_count
+
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=_autovla_lr_lambda)
+        accelerator.print(
+            f"Scheduler: AutoVLA step-decay -> warmup={autovla_warmup} linear, "
+            f"then x{autovla_step_gamma} every {autovla_step_freq} steps / {total_steps} total"
+        )
+    else:
+        warmup_ratio = float(cfg.get("warmup_ratio", 0.05))
+        scheduler = get_cosine_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=max(1, int(total_steps * warmup_ratio)),
+            num_training_steps=total_steps,
+        )
+        accelerator.print(f"Scheduler: cosine with warmup_ratio={warmup_ratio:.3f} -> "
+                          f"{int(total_steps * warmup_ratio)} warmup steps / {total_steps} total")
 
     # ============ Accelerator.prepare (FSDP sharding happens here) ============
     # NOTE: deliberately DO NOT pass `scheduler` to prepare(). accelerate's
@@ -1111,6 +1133,13 @@ def main():
     skip_batches = resume_step * grad_accum if resume_step > 0 else 0
     _device = accelerator.device
 
+    # Sliding-window loss (per user 2026-05-19): show mean of last N batch losses
+    # instead of cumulative epoch average. Epoch-average smears initial-spike
+    # losses across all later steps and hides recent dynamics; the window shows
+    # the loss the optimizer is currently seeing.
+    loss_window_size = int(cfg.get("loss_window", 100))
+    batch_loss_window: deque = deque(maxlen=loss_window_size)
+
     for epoch in range(resume_epoch, num_epochs):
         epoch_loss_sum = 0.0
         epoch_loss_count = 0
@@ -1161,6 +1190,7 @@ def main():
                     accum_loss += batch_loss / grad_accum
                     epoch_loss_sum += batch_loss
                     epoch_loss_count += 1
+                    batch_loss_window.append(batch_loss)
 
                     if accelerator.sync_gradients:
                         # Gradient clipping (FSDP-aware).
@@ -1203,11 +1233,12 @@ def main():
 
             # Update tqdm postfix every batch (main process only)
             if accelerator.is_main_process:
-                avg_loss = epoch_loss_sum / epoch_loss_count
+                # Sliding-window mean over last `loss_window_size` batches.
+                window_loss = sum(batch_loss_window) / max(len(batch_loss_window), 1)
                 gpu_mem = torch.cuda.memory_allocated() / 1024**3
                 cur_lr = scheduler.get_last_lr()[0] if global_step > 0 else lr
                 pbar.set_postfix_str(
-                    f"batch_loss={batch_loss:.4f} | avg_loss={avg_loss:.4f} | "
+                    f"batch_loss={batch_loss:.4f} | loss(w{loss_window_size})={window_loss:.4f} | "
                     f"lr={cur_lr:.2e} | opt_step={global_step}/{total_steps} | "
                     f"GPU={gpu_mem:.1f}GB"
                 )
@@ -1218,6 +1249,7 @@ def main():
                     cur_lr = scheduler.get_last_lr()[0]
                     wandb.log({
                         "loss": accum_loss, "batch_loss": batch_loss,
+                        "loss_window": sum(batch_loss_window) / max(len(batch_loss_window), 1),
                         "avg_loss": epoch_loss_sum / max(epoch_loss_count, 1),
                         "lr": cur_lr, "gpu_mem": gpu_mem,
                     }, step=global_step)
