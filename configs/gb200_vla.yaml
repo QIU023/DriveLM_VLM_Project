@@ -46,8 +46,8 @@ num_epochs: 1                # paper recipe is 1 epoch over full DriveLM
 # 557 train scenes / 139 val scenes; 262,833 train / 65,298 val records).
 # train_lora.py val_file convention is {data_path_vla}_val.json which matches
 # data_processed/v1_1_video_n4_FULL_with_traj_val.json on disk.
-val_every: 1000              # opt steps between val passes (~3% of 47K total)
-val_batches: 50              # batches per val pass — caps wall-clock
+val_every: 100               # match save_every cadence; ~41 val passes total
+val_batches: 50              # ~2 min/val pass × 41 = ~80 min total val overhead
 
 # Ckpt cadence: 100 opt steps. With keep_latest_k=3 disk steady ~54GB
 # (3 * 18GB), peak ~72GB during save+prune. We have 163GB free.
