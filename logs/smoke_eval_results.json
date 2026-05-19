@@ -1,0 +1,41 @@
+{
+  "ckpt": "/workspace/DriveLM_VLM_Project/checkpoints_qwen25/nuscenes_planning_3b_smoke/final",
+  "infos_val": "/workspace/DriveLM_VLM_Project/data/uniad_infos/nuscenes_infos_temporal_val.pkl",
+  "n_samples": 20,
+  "horizon_s": [
+    1.0,
+    2.0,
+    3.0
+  ],
+  "TemAvg": {
+    "L2_1s": 0.6915501031791791,
+    "L2_2s": 1.210564682423137,
+    "L2_3s": 1.7679408114403485,
+    "L2_avg": 1.2233518656808884
+  },
+  "NoAvg": {
+    "L2_1s": 0.9342738522425573,
+    "L2_2s": 2.005313158957318,
+    "L2_3s": 3.181818389996938,
+    "L2_avg": 2.040468467065604
+  },
+  "collision_rate": {
+    "collision_1s": 0.0,
+    "collision_2s": 0.0,
+    "collision_3s": 0.0,
+    "collision_avg": 0.0
+  },
+  "L2_1s": 0.6915501031791791,
+  "L2_2s": 1.210564682423137,
+  "L2_3s": 1.7679408114403485,
+  "L2_avg": 1.2233518656808884,
+  "collision_1s": 0.0,
+  "collision_2s": 0.0,
+  "collision_3s": 0.0,
+  "collision_avg": 0.0,
+  "protocol_l2": "TemAvg (VAD) shown in flat L2_*; full both protocols inside this JSON",
+  "ego_footprint_m": {
+    "half_length": 2.0,
+    "half_width": 0.9
+  }
+}
