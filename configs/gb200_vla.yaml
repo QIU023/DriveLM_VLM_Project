@@ -33,14 +33,32 @@ lora_target_modules_vision: []
 
 # Video tensors (from gb200_video.yaml): N=4, fps=2.0, max_pixels=100352 / frame.
 
-# Memory: full 3B SFT + 4-frame video + AC ~= 18 GB / GPU at bs=1 grad_accum=8.
-# At 8x B200 (192 GB each) we can push higher; start conservative for stability.
+# ============ AutoVLA-aligned (per /loop hyperparam audit gate 2026-05-19) ============
+# Replicates AutoVLA SFT recipe verbatim (arxiv 2506.13757 + ucla-mobility/AutoVLA
+# config/training/qwen2.5-vl-3B-mix-sft.yaml). Deviations are flagged in chat.
 batch_size: 1
-grad_accum_steps: 8          # eff bs per-GPU = 8; * 8 GPUs FSDP = 64 global
-max_length: 2560             # +traj tokens (~14) + reserved boundary; bumped from 2048
-learning_rate: 5e-6          # paper-aligned full-model SFT; lower than LoRA's 1e-4
-warmup_ratio: 0.03           # OpenVLA-style ratio (~1400 steps of 47K)
-num_epochs: 1                # paper recipe is 1 epoch over full DriveLM
+grad_accum_steps: 4          # AutoVLA: global batch = 1 * 4 * 8 GPU = 32 (was 8 -> 64, off-paper)
+max_length: 2560             # +traj tokens vs paper 2048; ok because we have more traj tokens
+learning_rate: 2.0e-5        # AutoVLA YAML; was 5e-6 (4x off-paper, wasted 5h GPU)
+num_epochs: 5                # AutoVLA YAML `epochs: 5`; ~34h GPU est at grad_accum=4
+
+# AutoVLA LR schedule: 500-step LINEAR warmup, then step-decay (no cosine).
+# At step >= warmup, lr <- lr * gamma every step_freq steps.
+lr_schedule: autovla_stepdecay
+warmup_steps: 500            # AutoVLA YAML `lr_warmup_step: 500`
+lr_step_freq: 2000           # AutoVLA YAML `lr_step_frequency: 2000`
+lr_step_gamma: 0.98          # AutoVLA YAML `lr_step_gamma: 0.98`
+
+# Visual token budget — override base gb200_video.yaml (which uses 100352).
+# AutoVLA fixes pixel count via min=max=109760 (= 28^2 * 140) so each frame
+# emits a deterministic token count. Required for tight max_length budgeting.
+min_pixels: 109760
+max_pixels: 109760
+
+# Sliding-window loss display (per user 2026-05-19): show mean of last N batch
+# losses instead of cumulative epoch average. N batches; with grad_accum=4 each
+# 100 batches = 25 opt steps of smoothing.
+loss_window: 100
 
 # 80/20 scene-level held-out validation (scripts/split_train_val.py --seed 42 →
 # 557 train scenes / 139 val scenes; 262,833 train / 65,298 val records).
