@@ -1,0 +1,119 @@
+# Qwen3-VL-8B (dense) nuScenes planning SFT — FSDP=4 x TP=2 2D parallelism.
+#
+# Variant of qwen3_vl_8b_planning_fsdp.toml that showcases torchtitan's
+# 2D parallelism: shard params/grads/optim with FSDP across 4 groups
+# while column/row-paralleling the LM attention and FFN across 2 ranks
+# per group.  Vision encoder is also TP'd by parallelize_qwen3_vl (per
+# the torchtitan README: 'TP applied to both vision encoder and decoder,
+# without SequenceParallel due to vision scatter and DeepStack').
+#
+# Net per-rank memory drops because attention/FFN weights are split
+# across 2 ranks, leaving more headroom for activations.  Trades 1 extra
+# all-reduce per attn/FFN block for that headroom.
+#
+# Mesh layout (8 ranks):
+#   data_parallel_shard_degree=4 x tensor_parallel_degree=2 = 8
+#
+# To launch:
+#
+#   torchrun --nproc-per-node=8 --no-python /usr/bin/python3 \
+#       -m torchtitan.train \
+#       --module scripts_titan.train_titan_qwen3_vl \
+#       --config qwen3_vl_8b_planning_fsdp_tp
+#
+# All other recipe knobs are identical to the FSDP-only baseline.
+
+[meta]
+model_family       = "Qwen3-VL"
+model_size         = "8B"
+model_hf_id        = "Qwen/Qwen3-VL-8B-Instruct"
+hf_assets_path     = "assets/hf/Qwen3-VL-8B-Instruct"
+dataset            = "nuscenes_planning_3cam_4f_tp"
+loss_mode          = "answer_and_traj"
+recipe_origin      = "AutoVLA paper recipe @ 4-frame video horizon (2D parallelism variant)"
+pivot_note         = "subclass-of-Qwen3VL approach abandoned 2026-05-20; native upstream Qwen3-VL-8B spec"
+
+[model]
+spec_module        = "torchtitan.models.qwen3_vl"
+flavor             = "8B"
+vocab_size         = 151936
+dim                = 4096
+n_layers           = 36
+n_heads            = 32
+n_kv_heads         = 8
+head_dim           = 128
+hidden_dim         = 12288
+qk_norm            = true
+weight_tying       = false
+rope_theta         = 5e6
+mrope_section      = [24, 20, 20]
+
+[model.vision_encoder]
+dim                     = 1152
+ffn_dim                 = 4304
+n_layers                = 27
+n_heads                 = 16
+patch_size              = 16
+temporal_patch_size     = 2
+spatial_merge_size      = 2
+out_hidden_size         = 4096
+deepstack_visual_indices = [8, 16, 24]
+num_position_embeddings = 2304
+
+[training]
+local_batch_size       = 1        # global batch = 4 (1 per FSDP-shard group * 4 groups)
+seq_len                = 4096
+steps                  = 10000
+mixed_precision_param  = "bfloat16"
+mixed_precision_reduce = "float32"
+
+[optimizer]
+lr                 = 2e-5
+
+[lr_scheduler]
+warmup_steps       = 174
+decay_ratio        = 1.0
+decay_type         = "linear"
+min_lr_factor      = 0.1
+lr_step_freq       = 696
+
+[parallelism]
+# 8 ranks = 4 FSDP shard groups * 2 TP ranks/group.
+data_parallel_shard_degree = 4
+tensor_parallel_degree     = 2
+context_parallel_degree    = 1
+pipeline_parallel_degree   = 1
+
+[activation_checkpoint]
+mode = "full"
+
+[checkpoint]
+enable               = true
+interval             = 1000
+keep_latest_k        = 2
+export_dtype         = "bfloat16"
+last_save_model_only = false
+
+[vision_tower]
+freeze = true
+
+[dataloader]
+image_mean          = [0.5, 0.5, 0.5]
+image_std           = [0.5, 0.5, 0.5]
+patch_size          = 16
+temporal_patch_size = 2
+spatial_merge_size  = 2
+max_images_per_batch = 128
+min_pixels          = 65536
+max_pixels          = 16777216
+
+[dataset.nuscenes_planning_3cam_4f_tp]
+infos_path           = "data_processed/nuscenes_infos_temporal_train.pkl"
+nusc_root            = "data/nuscenes"
+max_length           = 4096
+num_past_frames      = 4
+num_future_waypoints = 6
+video_fps            = 2.0
+planning_cams        = ["CAM_FRONT", "CAM_FRONT_LEFT", "CAM_FRONT_RIGHT"]
+require_full_future  = true
+require_all_cams     = true

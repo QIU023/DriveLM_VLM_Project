@@ -19,12 +19,22 @@
 #      "pixel_values_videos", "grid_thw_videos", "special_tokens"}.
 #
 # The existing HF PlanningDataset (`scripts/planning_dataset.py`) runs the
-# Qwen2.5-VL HF processor to produce ALREADY-PATCHIFIED video tensors
+# Qwen3-VL HF processor to produce ALREADY-PATCHIFIED video tensors
 # alongside `video_grid_thw`.  torchtitan wants the pre-patchify
 # (T, H_pixels, W_pixels, C) form so its own collator can patch.  We
 # therefore re-load the raw frames here and skip the processor's vision
 # pipeline, while reusing the geometry / waypoint / token logic from the
 # HF dataset.
+#
+# Pivot history (2026-05-20):
+#   This dataset previously consumed a Qwen2.5-VL HF processor and used
+#   OpenAI-CLIP image normalization stats.  We pivoted to Qwen3-VL-8B
+#   native (torchtitan upstream); the dataset is now driven by the
+#   Qwen/Qwen3-VL-8B-Instruct AutoProcessor and uses (0.5, 0.5, 0.5) /
+#   (0.5, 0.5, 0.5) image stats to match Qwen3-VL's vision tower.
+#   Special tokens (<|vision_start|>, <|video_pad|>, <|vision_end|>,
+#   <|im_start|>, <|im_end|>) carry over unchanged because Qwen3-VL
+#   inherits the Qwen3 tokenizer surface.
 
 from __future__ import annotations
 
@@ -61,9 +71,12 @@ from trajectory_tokenizer import (  # type: ignore  # noqa: E402
 
 
 # Default image normalisation for the torchtitan vision pipeline.
-# Qwen2.5-VL HF processor uses OpenAI-CLIP mean/std; we match those.
-QWEN25_IMAGE_MEAN = (0.48145466, 0.4578275, 0.40821073)
-QWEN25_IMAGE_STD = (0.26862954, 0.26130258, 0.27577711)
+# Qwen3-VL switched from OpenAI-CLIP mean/std (Qwen2.5-VL) to (0.5,0.5,0.5)
+# / (0.5,0.5,0.5).  This matches torchtitan's stock
+# qwen3_vl.config_registry._qwen3_vl_dataloader and the upstream Qwen3-VL
+# HF processor.
+QWEN3_VL_IMAGE_MEAN = (0.5, 0.5, 0.5)
+QWEN3_VL_IMAGE_STD = (0.5, 0.5, 0.5)
 
 
 def _pil_to_thwc_float(frames: list[Image.Image]) -> torch.Tensor:
@@ -85,8 +98,8 @@ def _pil_to_thwc_float(frames: list[Image.Image]) -> torch.Tensor:
 
 def _normalise_thwc(
     video: torch.Tensor,
-    mean: tuple[float, float, float] = QWEN25_IMAGE_MEAN,
-    std: tuple[float, float, float] = QWEN25_IMAGE_STD,
+    mean: tuple[float, float, float] = QWEN3_VL_IMAGE_MEAN,
+    std: tuple[float, float, float] = QWEN3_VL_IMAGE_STD,
 ) -> torch.Tensor:
     """In-place-ish normalisation of a (T, H, W, C) float [0,1] tensor."""
     m = torch.tensor(mean, dtype=video.dtype).view(1, 1, 1, 3)
@@ -102,8 +115,8 @@ class NuScenesPlanningDatasetTitan(IterableDataset):
     per-sample text + waypoint + token logic matches the HF training path
     EXACTLY.  The only difference is that we emit raw (T, H, W, C)
     normalised video tensors plus token IDs, instead of running the
-    Qwen2.5-VL HF processor (torchtitan's MultiModalCollator does the
-    patching).
+    Qwen3-VL HF processor's vision pipeline (torchtitan's
+    MultiModalCollator does the patching).
 
     The HF PlanningDataset takes a HF `processor` and uses it to (a) build
     the chat template and (b) tokenize the prompt.  We KEEP step (b) for
@@ -133,8 +146,8 @@ class NuScenesPlanningDatasetTitan(IterableDataset):
         require_full_future: bool = True,
         planning_cams: list[str] | None = None,
         require_all_cams: bool = True,
-        image_mean: tuple[float, float, float] = QWEN25_IMAGE_MEAN,
-        image_std: tuple[float, float, float] = QWEN25_IMAGE_STD,
+        image_mean: tuple[float, float, float] = QWEN3_VL_IMAGE_MEAN,
+        image_std: tuple[float, float, float] = QWEN3_VL_IMAGE_STD,
         dp_rank: int = 0,
         dp_world_size: int = 1,
         infinite: bool = True,
