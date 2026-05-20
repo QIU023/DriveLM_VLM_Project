@@ -36,6 +36,11 @@ max_length: 8192
 
 # Keep AutoVLA-aligned hyperparams (lr, schedule, epochs, gbs) unchanged from
 # the base 1-cam config; the only training-side delta is visual context.
+
+# AC off (user 2026-05-20): "关AC，OOM了再考虑". 3B + 3cam × 4f on 32GB cards
+# has plenty headroom without recompute cost; only re-enable on OOM.
+activation_checkpointing: false
+gradient_checkpointing: false
 #
 # Ratio-scaled schedule (memory feedback_paper_hyperparam_audit_gate
 # Expansion 2): paper AutoVLA used warmup=500 / 28750 = 1.74% and
