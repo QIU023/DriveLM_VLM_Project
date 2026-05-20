@@ -77,16 +77,23 @@ num_position_embeddings = 2304
 # Defaults in __init__.py::_8b_qformer().
 num_queries        = 64
 num_layers         = 6
-n_heads            = 16
+n_heads            = 8
 ffn_mult           = 4
+# Internal Q-Former width — DECOUPLED from lm_dim so the param count
+# stays at BLIP-2 scale (~80-120M) instead of geometrically blowing up
+# to ~1.2B at lm_dim=4096. BLIP-2-base uses 768; we default to 1024.
+# A final Linear(internal_dim, lm_dim) lifts the compressed tokens
+# back to LM width at the boundary.
+internal_dim       = 1024
 # in_features = vision_encoder.out_hidden_size = 4096 (post-merger path);
 # switching to 1152 would consume raw ViT features (pre-merger path).
 in_features        = 4096
 lm_dim             = 4096
-# Approximate param count: ~1.2B at the post-merger path (lm_dim=4096,
-# ffn_mult=4, 6 layers). The bulk is FFN; see tests/unit_tests/test_qformer_projector.py
-# ::test_param_count_ballpark for the source-of-truth measurement.
-approx_param_count = "~1.2B"
+# Approximate param count: ~117.6M at the post-merger path (in_features=4096,
+# internal_dim=1024, ffn_mult=4, 6 layers), matching BLIP-2 scale. See
+# tests/unit_tests/test_qformer_projector.py::test_param_count_guard for
+# the source-of-truth measurement.
+approx_param_count = "~117.6M"
 
 [training]
 local_batch_size       = 1
