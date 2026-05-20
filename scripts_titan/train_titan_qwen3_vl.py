@@ -240,9 +240,9 @@ def _qwen3_vl_dataloader(dataset: str, **kwargs) -> MMDataLoader.Config:
 # samples; with global batch 8 over 8 ranks this gives ~26k * 3 / 8 ≈
 # 9750 steps, rounded to 10000.
 
-_TOTAL_STEPS = 10000
-_WARMUP_RATIO = 0.0174        # AutoVLA: 1.74% of total
-_LR_STEP_FREQ_RATIO = 0.0696  # AutoVLA: 6.96% of total (step-decay cadence)
+_TOTAL_STEPS = 2250  # 3 epochs over 24k nuScenes samples / GBS=32 ≈ 750 steps/epoch
+_WARMUP_RATIO = 0.0174        # AutoVLA: 1.74% of total → 39 steps at 2250
+_LR_STEP_FREQ_RATIO = 0.0696  # AutoVLA: 6.96% of total → 156 steps at 2250
 
 # Paper-aligned optimizer hyperparams (AutoVLA NeurIPS '25 §3.2):
 #   AdamW, beta1=0.9, beta2=0.999, eps=1e-8, weight_decay=0.01
