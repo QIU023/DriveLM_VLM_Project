@@ -221,7 +221,30 @@ class PlanningDataset(Dataset):
         require_full_future: bool = True,
         planning_cams: Optional[List[str]] = None,
         require_all_cams: bool = True,
+        projector_type: str = "linear",
+        resampler_num_latents: int = 64,
     ):
+        """nuScenes-planning dataset.
+
+        Visual projector compatibility
+        ------------------------------
+        ``projector_type`` (default ``"linear"``) is an informational flag
+        indicating which post-vision projector will be used downstream.
+        The dataset emits the SAME tokens regardless of projector_type --
+        any post-processor trim is the consumer's job:
+
+        * ``"linear"``       stock Qwen2.5-VL merger; ~140 placeholders per
+          frame at min/max_pixels=109760.
+        * ``"resampler"``    Flamingo-style Perceiver Resampler (see
+          ``scripts/perceiver_resampler_projector_hf.py``). Trims to
+          ``resampler_num_latents`` (default 64) per cam in the forward
+          shim (``forward_with_video_resampler_projector``); 3 cams ->
+          192 LM-input placeholders / sample.
+
+        We surface ``projector_type`` and ``resampler_num_latents`` on the
+        dataset so downstream consumers (logging, eval scripts) can
+        introspect the configured projector without re-parsing YAML.
+        """
         if not os.path.exists(infos_path):
             raise FileNotFoundError(f"Infos pkl not found: {infos_path}")
         with open(infos_path, "rb") as f:
@@ -242,6 +265,9 @@ class PlanningDataset(Dataset):
         self.num_future = int(num_future_waypoints)
         self.video_fps = float(video_fps)
         self.vla_loss_mode = vla_loss_mode
+        # Projector compatibility flag -- see __init__ docstring above.
+        self.projector_type = str(projector_type).lower()
+        self.resampler_num_latents = int(resampler_num_latents)
         # Multi-camera config. CAM_FRONT-only is the default and exactly
         # matches the pre-3cam dataset behavior (back-compat for existing
         # configs). With multiple cams, each cam is emitted as a separate
@@ -571,6 +597,14 @@ def build_planning_dataset(cfg: dict, processor, split: str = "train"):
     # a list (`planning_cams: CAM_FRONT_LEFT` -> ["CAM_FRONT_LEFT"]).
     if isinstance(planning_cams_cfg, str):
         planning_cams_cfg = [planning_cams_cfg]
+    # Projector compatibility flag (informational; see PlanningDataset
+    # docstring). Default "linear" preserves back-compat for existing configs.
+    projector_type = str(cfg.get("projector_type", "linear")).lower()
+    # resampler_num_latents: read from cfg['resampler']['num_latents'] (default
+    # 64). With 3 cams x 64 latents this produces 192 placeholders / sample
+    # at the LM input. Trim happens in forward_with_video_resampler_projector.
+    resampler_kwargs = cfg.get("resampler", {}) or {}
+    resampler_num_latents = int(resampler_kwargs.get("num_latents", 64))
     return PlanningDataset(
         infos_path=infos_path,
         nusc_root=nusc_root,
@@ -584,4 +618,6 @@ def build_planning_dataset(cfg: dict, processor, split: str = "train"):
         require_full_future=bool(cfg.get("planning_require_full_future", True)),
         planning_cams=planning_cams_cfg,
         require_all_cams=bool(cfg.get("planning_require_all_cams", True)),
+        projector_type=projector_type,
+        resampler_num_latents=resampler_num_latents,
     )
