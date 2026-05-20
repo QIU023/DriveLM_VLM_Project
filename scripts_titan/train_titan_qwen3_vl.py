@@ -57,7 +57,22 @@ from torchtitan.trainer import Trainer
 # ============================================================================
 
 # Verified 2026-05-20 against the HF model page (Qwen/Qwen3-VL-8B-Instruct).
-QWEN3_VL_8B_HF_ID = "Qwen/Qwen3-VL-8B-Instruct"
+#
+# We point at the locally-mirrored HF tree (assets/hf/Qwen3-VL-8B-Instruct)
+# rather than the Hub ID.  Rationale: with the Hub ID, AutoProcessor.from_
+# pretrained issues hundreds of HEAD requests per rank trying to refresh the
+# cache (processor_config.json -> 404, video_preprocessor_config.json -> 307
+# redirect loop, ...) — observed as a 15+ min hang during the v4 smoke.
+# Pointing at the local path bypasses all network I/O.  AutoProcessor
+# accepts an absolute path interchangeably with a Hub ID.
+#
+# The smoke launcher additionally exports HF_HUB_OFFLINE=1 +
+# TRANSFORMERS_OFFLINE=1 as a belt-and-braces guard against any code path
+# inside transformers/datasets that still tries to hit the Hub.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+QWEN3_VL_8B_HF_ID = os.path.join(
+    _REPO_ROOT, "assets", "hf", "Qwen3-VL-8B-Instruct"
+)
 
 # Image normalization for the Qwen3-VL vision tower.  Qwen3-VL switched from
 # OpenAI-CLIP mean/std (Qwen2.5-VL) to (0.5, 0.5, 0.5) / (0.5, 0.5, 0.5);
