@@ -49,6 +49,14 @@ val_batches: 20
 save_every: 100
 keep_latest_k: 3
 
+# Mid-training planning metrics (L2 + UniAD-port collision). Default to ON for
+# any planning run; light pass on val_batches=20 only (~25 s overhead). Set
+# val_full_eval=true to greedy-decode the entire 5119 val set (~3 min on
+# 8 GPU). val_greedy_max_new_tokens is enough for 1 start + 12 bins + 1 end.
+val_planning_l2: true
+val_full_eval: false
+val_greedy_max_new_tokens: 20
+
 # CAM_FRONT @ 1600x900 with min_pixels=max_pixels=109760 emits ~900 visual
 # tokens per frame -> 4 frames = ~3600 visual tokens; plus chat-template
 # overhead and the "Ego speed at current frame: X.XX m/s. " prompt preamble,

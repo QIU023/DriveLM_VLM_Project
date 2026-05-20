@@ -334,6 +334,19 @@ def collate_fn(batch):
         )
     if "image_name" in batch[0]:
         result["image_names"] = [item["image_name"] for item in batch]
+    # Planning-side eval metadata. Kept as plain Python lists / per-sample
+    # tensors so the validate() greedy-decode pass can compute L2 + collision
+    # mid-training. Absent when training on non-planning datasets.
+    if "_meta_waypoints" in batch[0]:
+        result["_meta_waypoints"] = [item["_meta_waypoints"] for item in batch]
+    if "_meta_valid_mask" in batch[0]:
+        result["_meta_valid_mask"] = [item["_meta_valid_mask"] for item in batch]
+    if "_meta_token" in batch[0]:
+        result["_meta_tokens"] = [item["_meta_token"] for item in batch]
+    if "_meta_prompt_len" in batch[0]:
+        result["_meta_prompt_lens"] = [int(item["_meta_prompt_len"]) for item in batch]
+    if "_meta_action_len" in batch[0]:
+        result["_meta_action_lens"] = [int(item["_meta_action_len"]) for item in batch]
     return result
 
 
@@ -707,17 +720,210 @@ def forward_with_video_xframe_compression(
     return outputs
 
 
+_META_KEYS_FOR_FORWARD = (
+    "_meta_waypoints", "_meta_valid_mask", "_meta_tokens",
+    "_meta_prompt_lens", "_meta_action_lens",
+)
+
+
+def _strip_meta(batch: dict) -> dict:
+    """Return a shallow copy of ``batch`` with planning eval meta keys removed.
+
+    The model forward must NOT see Python-list meta fields (only tensors); we
+    strip them here so callers can hand the cleaned dict straight to
+    ``forward_with_compression`` / ``forward_with_video_xframe_compression``.
+    """
+    out = {k: v for k, v in batch.items() if k not in _META_KEYS_FOR_FORWARD}
+    return out
+
+
+def _greedy_decode_l2_collision(
+    *,
+    model,
+    cached_batches: list,
+    val_dataset,
+    processor,
+    device,
+    traj_tok,
+    traj_cfg,
+    max_new_tokens: int = 20,
+):
+    """Second-pass greedy decode of trajectory tokens + L2/collision metrics.
+
+    For each cached batch:
+      1. Reconstruct prompt-only ``input_ids`` per sample by slicing
+         ``input_ids[:_meta_prompt_lens[j]]`` (this drops the action tokens
+         that were appended during training).
+      2. Left-pad each prompt to the batch max length (left-padding aligns
+         newly generated tokens at column ``prompt_len`` for every row).
+      3. Call ``model.generate(..., do_sample=False, num_beams=1)``.
+      4. Extract the new tokens, find the [<traj_start> ... <traj_end>] block,
+         dequantize to (Δx, Δy) metres via the trajectory tokenizer.
+      5. Look up cur/future infos by ``_meta_tokens[j]`` (via val_dataset)
+         and run the UniAD-port collision metric.
+      6. Append per-sample TemAvg L2, NoAvg L2, and 1/2/3 s collision flags
+         to the local accumulator dicts.
+
+    Returns ``(gd_temavg, gd_noavg, gd_coll)`` per-sample lists. Returns
+    empty dicts on any unrecoverable error so the legacy TF L2 pass still
+    surfaces useful numbers.
+    """
+    import math as _math
+    import numpy as _np
+
+    try:
+        from _planning_metric import compute_collision_per_sample as _coll_fn
+        from planning_eval import (
+            decode_waypoints as _decode_waypoints,
+            l2_temavg as _l2_temavg,
+            l2_noavg as _l2_noavg,
+            HORIZON_IDX as _HORIZON_IDX,
+        )
+    except ImportError as e:
+        print(f"[validate] greedy-decode disabled: cannot import planning helpers ({e})")
+        return ({k: [] for k in ("L2_1s", "L2_2s", "L2_3s", "L2_avg")},
+                {k: [] for k in ("L2_1s", "L2_2s", "L2_3s", "L2_avg")},
+                {k: [] for k in ("collision_1s", "collision_2s", "collision_3s", "collision_avg")})
+
+    gd_temavg = {k: [] for k in ("L2_1s", "L2_2s", "L2_3s", "L2_avg")}
+    gd_noavg = {k: [] for k in ("L2_1s", "L2_2s", "L2_3s", "L2_avg")}
+    gd_coll = {k: [] for k in ("collision_1s", "collision_2s", "collision_3s", "collision_avg")}
+
+    tokenizer = processor.tokenizer
+    pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
+    num_wp = traj_cfg.num_waypoints
+
+    # Token->base_idx lookup for future_infos. Mirrors PlanningDataset.tok2idx.
+    base_ds = val_dataset
+    # Walk through possible Accelerator-prepared wrappers if any (val_loader's
+    # dataset is the plain Dataset, but if caller passed something else fall back).
+    if hasattr(base_ds, "dataset"):
+        base_ds = base_ds.dataset  # type: ignore[attr-defined]
+
+    with torch.no_grad():
+        for batch_cpu in cached_batches:
+            prompt_lens = batch_cpu.get("_meta_prompt_lens")
+            tokens = batch_cpu.get("_meta_tokens")
+            waypoints = batch_cpu.get("_meta_waypoints")
+            valid_masks = batch_cpu.get("_meta_valid_mask")
+            if not (prompt_lens and tokens and waypoints and valid_masks):
+                continue
+            B = len(prompt_lens)
+            input_ids = batch_cpu["input_ids"]
+            attention_mask = batch_cpu["attention_mask"]
+            # Build prompt-only sequences and LEFT-pad to a common length.
+            prompts = [input_ids[j, :prompt_lens[j]] for j in range(B)]
+            attns = [attention_mask[j, :prompt_lens[j]] for j in range(B)]
+            max_pl = max(int(p.shape[0]) for p in prompts)
+            padded_ids = torch.full((B, max_pl), pad_id, dtype=input_ids.dtype)
+            padded_attn = torch.zeros((B, max_pl), dtype=attention_mask.dtype)
+            for j in range(B):
+                pl = prompts[j].shape[0]
+                padded_ids[j, max_pl - pl:] = prompts[j]
+                padded_attn[j, max_pl - pl:] = attns[j]
+            gen_inputs = {
+                "input_ids": padded_ids.to(device),
+                "attention_mask": padded_attn.to(device),
+            }
+            # Visual tensors come through unchanged — they index by
+            # video_grid_thw which is per-sample and the visual_pad token
+            # positions in the prompt are preserved.
+            for k in ("pixel_values_videos", "video_grid_thw", "second_per_grid_ts",
+                      "pixel_values", "image_grid_thw"):
+                if k in batch_cpu and isinstance(batch_cpu[k], torch.Tensor):
+                    gen_inputs[k] = batch_cpu[k].to(device)
+
+            try:
+                gen = model.generate(
+                    **gen_inputs,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=False,
+                    num_beams=1,
+                    pad_token_id=pad_id,
+                    use_cache=True,
+                )
+            except RuntimeError as e:
+                if "out of memory" in str(e):
+                    torch.cuda.empty_cache()
+                    continue
+                print(f"[validate] greedy generate failed: {e}")
+                continue
+            new_tokens = gen[:, max_pl:].cpu().tolist()
+
+            for j in range(B):
+                ids = new_tokens[j]
+                if pad_id in ids:
+                    cut = ids.index(pad_id)
+                    ids = ids[:cut]
+                pred_wp = _decode_waypoints(ids, traj_tok, num_wp)
+                gt_wp = waypoints[j].cpu().numpy() if isinstance(waypoints[j], torch.Tensor) else _np.asarray(waypoints[j])
+                valid = valid_masks[j].cpu().numpy() if isinstance(valid_masks[j], torch.Tensor) else _np.asarray(valid_masks[j])
+
+                t_temavg = _l2_temavg(pred_wp, gt_wp, valid)
+                t_noavg = _l2_noavg(pred_wp, gt_wp, valid)
+                for k in gd_temavg:
+                    if not _math.isnan(t_temavg[k]):
+                        gd_temavg[k].append(t_temavg[k])
+                for k in gd_noavg:
+                    if not _math.isnan(t_noavg[k]):
+                        gd_noavg[k].append(t_noavg[k])
+
+                # Collision (UniAD port). Skip silently when the dataset
+                # token isn't resolvable (shouldn't happen in normal flow).
+                try:
+                    base_idx = base_ds.tok2idx[tokens[j]]
+                    cur_info = base_ds.infos[base_idx]
+                    future_infos = base_ds._walk_future(base_idx)
+                    coll = _coll_fn(
+                        pred_wp_ego=pred_wp,
+                        gt_wp_ego=gt_wp,
+                        future_infos=future_infos,
+                        cur_info=cur_info,
+                        horizon_indices=_HORIZON_IDX,
+                    )
+                    # Honour valid mask (no collision recorded on padded futures)
+                    for hi, h_idx in enumerate(_HORIZON_IDX):
+                        if h_idx >= len(future_infos) or valid[h_idx] < 1e-6:
+                            coll[hi] = 0
+                    gd_coll["collision_1s"].append(int(coll[0]))
+                    gd_coll["collision_2s"].append(int(coll[1]))
+                    gd_coll["collision_3s"].append(int(coll[2]))
+                    gd_coll["collision_avg"].append(int(any(coll)))
+                except Exception as e:
+                    # Don't fail the whole validate over a missing-token edge.
+                    print(f"[validate] collision compute skipped for sample j={j}: {e}")
+                    continue
+    return gd_temavg, gd_noavg, gd_coll
+
+
 @torch.no_grad()
 def validate(model, val_loader, compress_method, compress_ratio, image_token_id, val_batches, device,
-             *, xframe_compressor=None, video_token_id=None, num_past_frames=None):
+             *, xframe_compressor=None, video_token_id=None, num_past_frames=None,
+             val_dataset=None, processor=None, accelerator=None,
+             planning_l2_enabled: bool = False,
+             greedy_max_new_tokens: int = 20):
     """Run validation for val_batches batches.
 
-    Returns ``(val_loss, val_acc, l2_dict)`` where ``l2_dict`` carries
-    teacher-forced L2 (metres) at horizons 1/2/3 s and the average over all
-    6 waypoints, decoded via the trajectory tokenizer's per-dim bin centres.
+    Returns ``(val_loss, val_acc, l2_dict)``.
 
-    ``l2_dict`` is an empty dict when L2 cannot be computed (xframe mode, or
-    no trajectory tokens found in the val batches).
+    ``l2_dict`` carries teacher-forced L2 (metres) at horizons 1/2/3 s
+    decoded via the trajectory tokenizer's per-dim bin centres.
+
+    When ``planning_l2_enabled`` is True AND the val dataset emits the
+    ``_meta_waypoints`` / ``_meta_prompt_lens`` hooks AND we are not in xframe
+    mode, a SECOND pass over the same batches runs greedy generate() and
+    augments ``l2_dict`` with the "real" planning metrics:
+
+      * ``L2_1s/2s/3s/avg`` under both TemAvg (VAD) and NoAvg (UniAD)
+        protocols, computed from autoregressively-generated bins (NOT
+        teacher-forced — the model has to predict its own previous bin).
+      * ``collision_1s/2s/3s/avg`` from the UniAD-port BEV overlap check
+        (ego footprint 4.084 m × 1.85 m, +0.5 m forward shift, future agent
+        boxes reframed to current ego frame).
+
+    The TF L2 metric (legacy keys ``L2_1s/2s/3s/avg`` ungeneric -> kept as
+    ``tf_L2_*``) is also preserved so the in-loop printout stays comparable
+    across runs.
     """
     # Build a CPU-side trajectory tokenizer so we can map bin token-ids back to
     # (Δx, Δy) metres. This mirrors the planning_eval.py decode path but works
@@ -739,18 +945,35 @@ def validate(model, val_loader, compress_method, compress_ratio, image_token_id,
     l2_n_batches = 0
     l2_n_samples = 0
     l2_skipped = (xframe_compressor is not None)
+
+    # Greedy-decode accumulator (filled below in the second pass).
+    # Each list is per-sample so cross-rank aggregation is exact.
+    gd_temavg = {k: [] for k in ("L2_1s", "L2_2s", "L2_3s", "L2_avg")}
+    gd_noavg = {k: [] for k in ("L2_1s", "L2_2s", "L2_3s", "L2_avg")}
+    gd_coll = {k: [] for k in ("collision_1s", "collision_2s", "collision_3s", "collision_avg")}
+
+    # Cached batches (kept on CPU) for the optional greedy-decode second pass —
+    # avoids reading the val dataloader twice with shuffle=False (cheap on the
+    # small val_batches=20 path; would be a memory hit on val_full_eval but
+    # batches are still released sample-by-sample as we move them back to GPU).
+    _cached_batches: list = []
+
     with torch.no_grad():
         for i, batch in enumerate(val_loader):
             if i >= val_batches:
                 break
+            # Stash a CPU copy of meta keys for the greedy-decode pass below.
+            if planning_l2_enabled and "_meta_prompt_lens" in batch:
+                _cached_batches.append({k: v for k, v in batch.items()})
             batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
             try:
+                fwd_batch = _strip_meta(batch)
                 if xframe_compressor is not None:
                     outputs = forward_with_video_xframe_compression(
-                        model, batch, xframe_compressor, video_token_id, num_past_frames,
+                        model, fwd_batch, xframe_compressor, video_token_id, num_past_frames,
                     )
                 else:
-                    outputs = forward_with_compression(model, batch, compress_method, compress_ratio, image_token_id)
+                    outputs = forward_with_compression(model, fwd_batch, compress_method, compress_ratio, image_token_id)
                 total_loss += outputs.loss.item()
                 count += 1
                 logits = outputs.logits[:, :-1, :]
@@ -809,6 +1032,32 @@ def validate(model, val_loader, compress_method, compress_ratio, image_token_id,
                     torch.cuda.empty_cache()
                     continue
                 raise
+
+    # ----------------------------------------------------------------------
+    # Pass 2: greedy generate -> dequantize -> L2 + collision (planning only)
+    # ----------------------------------------------------------------------
+    # Only run when:
+    #   * caller explicitly enabled it (planning_l2_enabled)
+    #   * not in xframe compression mode (the surgery there changes seq_len
+    #     and would break model.generate which slices off prompt by column)
+    #   * dataset emits per-sample meta (waypoints, valid_mask, token, prompt_len)
+    #   * processor is available (needed for pad_token_id + the eos token)
+    if (planning_l2_enabled
+            and xframe_compressor is None
+            and processor is not None
+            and val_dataset is not None
+            and _cached_batches):
+        gd_temavg, gd_noavg, gd_coll = _greedy_decode_l2_collision(
+            model=model,
+            cached_batches=_cached_batches,
+            val_dataset=val_dataset,
+            processor=processor,
+            device=device,
+            traj_tok=_traj_tok,
+            traj_cfg=_traj_cfg,
+            max_new_tokens=greedy_max_new_tokens,
+        )
+
     model.train()
     val_loss = total_loss / max(count, 1)
     val_acc = correct_tokens / max(total_tokens, 1)
@@ -816,12 +1065,80 @@ def validate(model, val_loader, compress_method, compress_ratio, image_token_id,
     l2_dict: dict = {}
     if not l2_skipped and l2_n_batches > 0:
         l2_dict = {
+            # Teacher-forced L2 (legacy). Kept under TF keys for back-compat
+            # with the existing tqdm.write line.
             "L2_1s": l2_1s_sum / l2_n_batches,
             "L2_2s": l2_2s_sum / l2_n_batches,
             "L2_3s": l2_3s_sum / l2_n_batches,
             "L2_avg": l2_avg_sum / l2_n_batches,
             "n_samples": l2_n_samples,
         }
+        l2_dict["tf_L2_1s"] = l2_dict["L2_1s"]
+        l2_dict["tf_L2_2s"] = l2_dict["L2_2s"]
+        l2_dict["tf_L2_3s"] = l2_dict["L2_3s"]
+        l2_dict["tf_L2_avg"] = l2_dict["L2_avg"]
+
+    # Cross-rank aggregate for greedy-decode metrics (per-sample lists). Each
+    # rank only saw its 1/world_size shard; gather_object collects them all.
+    if planning_l2_enabled and accelerator is not None and accelerator.num_processes > 1:
+        local_payload = {
+            "temavg": gd_temavg,
+            "noavg": gd_noavg,
+            "coll": gd_coll,
+        }
+        try:
+            gathered = accelerator.gather_for_metrics([local_payload], use_gather_object=True) \
+                if hasattr(accelerator, "gather_for_metrics") else None
+        except TypeError:
+            gathered = None
+        if gathered is None:
+            # Fallback: torch.distributed.gather_object (rank 0 receives).
+            import torch.distributed as dist
+            if dist.is_available() and dist.is_initialized():
+                world = accelerator.num_processes
+                bucket = [None] * world if accelerator.is_main_process else None
+                dist.gather_object(local_payload, bucket if accelerator.is_main_process else None, dst=0)
+                gathered = bucket if accelerator.is_main_process else []
+            else:
+                gathered = [local_payload]
+        # Merge across ranks (rank 0 only — others see empty lists).
+        m_temavg = {k: [] for k in gd_temavg}
+        m_noavg = {k: [] for k in gd_noavg}
+        m_coll = {k: [] for k in gd_coll}
+        for p in gathered or []:
+            if not p:
+                continue
+            for k, v in p.get("temavg", {}).items():
+                m_temavg[k].extend(v)
+            for k, v in p.get("noavg", {}).items():
+                m_noavg[k].extend(v)
+            for k, v in p.get("coll", {}).items():
+                m_coll[k].extend(v)
+        gd_temavg, gd_noavg, gd_coll = m_temavg, m_noavg, m_coll
+
+    if planning_l2_enabled and any(gd_temavg.values()):
+        import math as _math
+        def _mean_finite(xs):
+            xs2 = [float(x) for x in xs if x is not None and not _math.isnan(float(x))]
+            return float(sum(xs2) / len(xs2)) if xs2 else float("nan")
+        l2_dict.update({
+            # OVERWRITE L2_* with the greedy-decode numbers — these are the
+            # paper-comparable planning metric. The TF L2 is still available
+            # under tf_L2_*.
+            "L2_1s": _mean_finite(gd_temavg["L2_1s"]),
+            "L2_2s": _mean_finite(gd_temavg["L2_2s"]),
+            "L2_3s": _mean_finite(gd_temavg["L2_3s"]),
+            "L2_avg": _mean_finite(gd_temavg["L2_avg"]),
+            "noavg_L2_1s": _mean_finite(gd_noavg["L2_1s"]),
+            "noavg_L2_2s": _mean_finite(gd_noavg["L2_2s"]),
+            "noavg_L2_3s": _mean_finite(gd_noavg["L2_3s"]),
+            "noavg_L2_avg": _mean_finite(gd_noavg["L2_avg"]),
+            "collision_1s": _mean_finite(gd_coll["collision_1s"]),
+            "collision_2s": _mean_finite(gd_coll["collision_2s"]),
+            "collision_3s": _mean_finite(gd_coll["collision_3s"]),
+            "collision_avg": _mean_finite(gd_coll["collision_avg"]),
+            "n_greedy": len(gd_temavg["L2_avg"]),
+        })
     return val_loss, val_acc, l2_dict
 
 
@@ -899,6 +1216,12 @@ def main():
     parser.add_argument("--train-max-samples", type=int, default=None, help="Cap train dataset to first N samples (planning branch only)")
     parser.add_argument("--no-validate", action="store_true", help="Disable in-loop validation (smoke runs)")
     parser.add_argument("--no-final-save", action="store_true", help="Skip the post-training _save_model_and_state final dump (smoke runs)")
+    parser.add_argument("--val-full-eval", dest="val_full_eval", action="store_true",
+                        default=None,
+                        help="Greedy-decode the entire val set (~3 min on 8 GPU) instead "
+                             "of the light val_batches=20 pass. Overrides config.")
+    parser.add_argument("--no-val-planning-l2", dest="val_planning_l2_off", action="store_true",
+                        help="Disable the greedy-decode L2/collision pass even on planning runs.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Tier-2 VLA: load model + processor + dataset (1 sample), print "
                              "param counts and memory estimate, then exit. Does NOT train.")
@@ -939,6 +1262,10 @@ def main():
         cfg["train_max_samples"] = int(args.train_max_samples)
     if args.no_validate:
         cfg["val_every"] = 0
+    if args.val_full_eval is True:
+        cfg["val_full_eval"] = True
+    if args.val_planning_l2_off:
+        cfg["val_planning_l2"] = False
     min_pixels = cfg.get("min_pixels", 256 * 28 * 28)
     max_pixels = cfg.get("max_pixels", 512 * 28 * 28)
 
@@ -1377,6 +1704,8 @@ def main():
     )
 
     val_loader = None
+    if not use_planning:
+        val_dataset = None  # ensure name is defined for the validate() call site
     if use_planning:
         if val_every > 0 and val_dataset is not None:
             val_loader = DataLoader(
@@ -1687,24 +2016,44 @@ def main():
 
                 # Validation
                 if val_every > 0 and val_loader is not None and global_step % val_every == 0:
+                    # Greedy-decode planning metrics: opt-in for planning runs.
+                    # val_full_eval=true overrides val_batches and walks the
+                    # entire val loader (expensive — ~3 min on 8 GPU); otherwise
+                    # the standard light pass of `val_batches` micro-batches
+                    # gives ~12.5% sample coverage at +25 s overhead.
+                    _planning_l2 = use_planning and cfg.get("val_planning_l2", True)
+                    _val_full = bool(cfg.get("val_full_eval", False))
+                    _val_batches_eff = (10**9) if _val_full else val_batches
                     val_loss, val_acc, l2_dict = validate(
                         model, val_loader, compress_method, compress_ratio,
-                        image_token_id, val_batches, _device,
+                        image_token_id, _val_batches_eff, _device,
                         xframe_compressor=xframe_compressor,
                         video_token_id=video_token_id,
                         num_past_frames=int(cfg.get("planning_num_past_frames", 4)),
+                        val_dataset=val_dataset,
+                        processor=processor,
+                        accelerator=accelerator,
+                        planning_l2_enabled=_planning_l2,
+                        greedy_max_new_tokens=int(cfg.get("val_greedy_max_new_tokens", 20)),
                     )
                     if accelerator.is_main_process:
                         base = f"  [VAL] step={global_step} val_loss={val_loss:.4f} val_acc={val_acc:.4f}"
                         if xframe_compressor is not None:
                             tqdm.write(f"{base} L2=skipped(xframe)")
                         elif l2_dict:
-                            tqdm.write(
-                                f"{base} L2 avg={l2_dict['L2_avg']:.3f} "
-                                f"(1s={l2_dict['L2_1s']:.3f} "
-                                f"2s={l2_dict['L2_2s']:.3f} "
-                                f"3s={l2_dict['L2_3s']:.3f})"
-                            )
+                            line = (f"{base} L2 avg={l2_dict['L2_avg']:.3f} "
+                                    f"(1s={l2_dict['L2_1s']:.3f} "
+                                    f"2s={l2_dict['L2_2s']:.3f} "
+                                    f"3s={l2_dict['L2_3s']:.3f})")
+                            if "collision_avg" in l2_dict:
+                                line += (f" coll avg={l2_dict['collision_avg']:.4f} "
+                                         f"(1s={l2_dict['collision_1s']:.4f} "
+                                         f"2s={l2_dict['collision_2s']:.4f} "
+                                         f"3s={l2_dict['collision_3s']:.4f}) "
+                                         f"n_greedy={l2_dict.get('n_greedy', 0)}")
+                            if "tf_L2_avg" in l2_dict and "n_greedy" in l2_dict:
+                                line += f" tf_L2_avg={l2_dict['tf_L2_avg']:.3f}"
+                            tqdm.write(line)
                         else:
                             tqdm.write(f"{base} L2=skipped(no_traj_tokens)")
                     if args.wandb and accelerator.is_main_process:
@@ -1717,6 +2066,11 @@ def main():
                                 "val_l2_2s": l2_dict["L2_2s"],
                                 "val_l2_3s": l2_dict["L2_3s"],
                             })
+                            for k in ("collision_1s", "collision_2s",
+                                      "collision_3s", "collision_avg",
+                                      "noavg_L2_avg", "tf_L2_avg"):
+                                if k in l2_dict:
+                                    log_payload[f"val_{k}"] = l2_dict[k]
                         wandb.log(log_payload, step=global_step)
 
                 if args.max_steps and global_step >= args.max_steps:
