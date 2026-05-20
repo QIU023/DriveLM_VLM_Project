@@ -1,0 +1,26 @@
+base_config: nuscenes_planning_full.yaml
+
+# ============================================================================
+# Phase B + cross-frame compression: nuScenes planning, 8 past frames @ 2Hz,
+# temporal mean-pool compressor (R3 8-frame ablation).
+# ============================================================================
+# Compressor: scripts.compressors.temporal_pool.TemporalMeanPoolCompressor
+#   - input (B, T_post, N, D) from vision tower
+#   - mean over T_post -> (B, N, D)
+#   - zero learnable parameters
+# At 8 past frames, video_grid_thw becomes (T_pre=4, H_pre=16, W_pre=30)
+# (T_pre = num_frames / temporal_patch_size = 8 / 2 = 4). After spatial merge
+# the vision tower emits 4 * 8 * 15 = 480 tokens; the compressor collapses time
+# to give (1, 120, 2048) and the LM sees 120 video tokens.
+
+experiment: nusc_planning_8f_meanpool
+
+planning_num_past_frames: 8
+
+cross_frame_compressor:
+  name: temporal_pool
+  kwargs:
+    pool_type: mean
+
+# Disk discipline (user 2026-05-19): keep last 2 ckpts only.
+keep_latest_k: 2

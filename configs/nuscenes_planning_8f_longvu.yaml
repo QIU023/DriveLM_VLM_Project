@@ -1,0 +1,26 @@
+base_config: nuscenes_planning_full.yaml
+
+# ============================================================================
+# Phase B + cross-frame compression: nuScenes planning, 8 past frames @ 2Hz,
+# LongVU adaptive frame-prune compressor (R5 8-frame ablation).
+# ============================================================================
+# Compressor: scripts.compressors.longvu.LongVUCompressor
+#   - per-frame redundancy score from consecutive-frame cosine similarity
+#   - per-token importance = L2 norm
+#   - fixed output budget = N (matches per-temporal-group spatial count, 120)
+# Zero learnable params (similarity_metric=cosine), so xframe optimizer rows
+# are empty no-ops. To enable learnable similarity, set similarity_metric:
+# learned + embed_dim: 2048.
+
+experiment: nusc_planning_8f_longvu
+
+planning_num_past_frames: 8
+
+cross_frame_compressor:
+  name: longvu
+  kwargs:
+    similarity_metric: cosine
+    importance_score: norm
+
+# Disk discipline (user 2026-05-19): keep last 2 ckpts only.
+keep_latest_k: 2
