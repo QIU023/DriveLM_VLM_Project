@@ -41,6 +41,12 @@ max_length: 8192
 # has plenty headroom without recompute cost; only re-enable on OOM.
 activation_checkpointing: false
 gradient_checkpointing: false
+
+# Throughput: AC off + GPU=6-11 GB / 32 GB headroom = grad_accum=4 was waste.
+# Override base's LBS=1 × grad_accum=4 → LBS=4 × grad_accum=1, same GBS=32,
+# ~4x faster wallclock (1 forward instead of 4 per opt step).
+batch_size: 4
+grad_accum_steps: 1
 #
 # Ratio-scaled schedule (memory feedback_paper_hyperparam_audit_gate
 # Expansion 2): paper AutoVLA used warmup=500 / 28750 = 1.74% and
