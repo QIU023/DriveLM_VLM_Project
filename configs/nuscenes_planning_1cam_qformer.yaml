@@ -1,0 +1,84 @@
+base_config: nuscenes_planning_full.yaml  # 1-cam (CAM_FRONT-only) baseline
+
+# ============================================================================
+# Track A.1 (1-cam pivot): Q-Former-64 projector + 1-cam × 4f
+# ============================================================================
+# Pivot from the 3-cam variant: 3-cam fusion didn't yield paper-level gains at
+# our data scale, so the A.1/A.2/A.3 ablation series is being re-anchored on
+# 1-cam to compare against A.0 = R1' (Linear, 1-cam × 4f, L2 0.642).
+#
+# Same forward path as configs/nuscenes_planning_3cam_qformer_projector.yaml;
+# only the cam-count + step counts + max_length headroom differ.
+#
+# Sample count: ~21830 useable train samples (inherits the 1-cam filter from
+# nuscenes_planning_full.yaml). At global_bs=32 (LBS=4 × grad_accum=1 ×
+# FSDP=8) -> ~683 opt steps / epoch -> ~2050 steps over 3 epochs.
+#
+# Token budget: 1 cam × 64 queries = 64 LM-input visual tokens (down from
+# ~900 baseline) + ~600 text/traj/chat-template -> easily under 4096
+# max_length inherited from the 1-cam base.
+
+experiment: nuscenes_planning_1cam_qformer_3b_full_sft
+
+# ---- Projector switch -----------------------------------------------------
+# train_lora.py routes the planning forward through
+# forward_with_video_qformer_projector when projector_type=qformer.
+projector_type: qformer
+qformer:
+  # vit_dim: post-merger features are at lm_dim=2048 for Qwen2.5-VL-3B.
+  vit_dim: 2048
+  lm_dim: 2048
+  # internal_dim DECOUPLED from lm_dim to bound param count (~80-130M target).
+  # BLIP-2-base uses 768; we use 1024 for driving-scene headroom.
+  internal_dim: 1024
+  # 64 queries per cam (BLIP-2-base: 32). 1 cam -> 64 LM-input tokens / sample.
+  num_queries: 64
+  # 6 layers (BLIP-2-base: 12) — halved because we train from scratch on
+  # ~22K nuScenes samples vs BLIP-2's 129M caption pairs.
+  num_layers: 6
+  # head_dim = internal_dim / n_heads = 1024 / 8 = 128.
+  n_heads: 8
+  # ffn_mult=4 matches BLIP-2.
+  ffn_mult: 4
+  layer_norm_eps: 1.0e-6
+  dropout: 0.0
+
+# NO cross_frame_compressor — Q-Former here is the projector, not a temporal
+# compressor (mutually exclusive; the trainer raises if both are set).
+
+# ---- Memory / throughput rules (matched to 3cam_full overrides) ----------
+# AC off (memory rule): 3B + 1-cam × 4f on 32GB cards has plenty headroom
+# without recompute cost; only re-enable on OOM. AC + 1-cam is wasted recompute.
+activation_checkpointing: false
+gradient_checkpointing: false
+
+# Throughput: with AC off + 1-cam (lighter than 3cam), grad_accum=4 was waste.
+# Override base's LBS=1 × grad_accum=4 -> LBS=4 × grad_accum=1, same GBS=32,
+# ~4x faster wallclock (1 forward instead of 4 per opt step).
+batch_size: 4
+grad_accum_steps: 1
+
+# Reliability rule: ckpt every ~30 min wallclock. At ~5-8 s/step on
+# Qwen2.5-VL-3B FSDP=8 + 1-cam × 4f + Q-Former-64, save_every=50 ≈ 4-7
+# min/ckpt -> max recovery window ≤ 7 min.
+save_every: 50
+val_every: 50
+keep_latest_k: 2
+
+# ---- Ratio-scaled schedule (paper-hyperparam audit gate) -----------------
+# AutoVLA paper used warmup=500 / 28750 = 1.74% and decay_freq=2000 / 28750
+# = 6.96%. Our 3-epoch 1-cam run = ~2050 steps, so apply the SAME ratios:
+# warmup=36 (1.74%), lr_step_freq=143 (6.96%). Do NOT copy paper absolutes
+# — at 24% warmup on 2050 steps the model never finishes warmup.
+warmup_steps: 36
+lr_step_freq: 143
+
+# ---- Mid-training planning metrics (from train_lora L2 val merge) --------
+# val_planning_l2=true triggers the greedy-decode L2 + UniAD-collision pass
+# alongside the legacy teacher-forced L2. NOTE: the greedy pass is internally
+# skipped when qformer_projector is active (model.generate after placeholder
+# trim is not yet validated), so this run will report teacher-forced L2 only.
+# Re-evaluate after A.1 lands.
+val_planning_l2: true
+val_full_eval: false
+val_greedy_max_new_tokens: 20

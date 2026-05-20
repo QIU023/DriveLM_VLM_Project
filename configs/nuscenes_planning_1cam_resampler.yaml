@@ -1,0 +1,64 @@
+base_config: nuscenes_planning_full.yaml  # 1-cam (CAM_FRONT-only) baseline
+
+# ============================================================================
+# Track A.3 (1-cam pivot): Perceiver Resampler-64 projector + 1-cam × 4f
+# ============================================================================
+# Pivot from the 3-cam variant: 3-cam fusion didn't yield paper-level gains
+# at our data scale, so the A.1/A.2/A.3 ablation series is being re-anchored
+# on 1-cam to compare against A.0 = R1' (Linear, 1-cam × 4f, L2 0.642).
+#
+# Same forward path as configs/nuscenes_planning_3cam_resampler.yaml
+# (which lives on the resampler_hf_port branch; merge before launching A.3);
+# only the cam-count + step counts + max_length headroom differ.
+#
+# Sample count: ~21830 useable train samples. At global_bs=32 (LBS=4 ×
+# grad_accum=1 × FSDP=8) -> ~683 opt steps / epoch -> ~2050 steps over 3 epochs.
+#
+# Token budget: 1 cam × 64 latents = 64 LM-input visual tokens / sample.
+# Plus ~600 text/traj/chat-template -> easily under 4096 max_length.
+
+experiment: nuscenes_planning_1cam_resampler_3b_full_sft
+
+# ---- Projector switch -----------------------------------------------------
+# train_lora.py routes the planning forward through
+# forward_with_video_resampler_projector when projector_type=resampler.
+projector_type: resampler
+
+resampler:
+  # in_features matches post-merger Qwen2.5-VL output (== lm_dim for 3B).
+  in_features: 2048
+  lm_dim: 2048
+  # Internal width DECOUPLED from lm_dim to hit 80-110M param target.
+  internal_dim: 1024
+  num_latents: 64    # 64 per cam; 1 cam -> 64 LM-input tokens / sample
+  num_layers: 6      # Flamingo paper uses 6
+  n_heads: 8         # head_dim = 128 (internal_dim 1024 / 8)
+  ffn_mult: 2        # FFN hidden = 2048 (2x internal_dim)
+  layer_norm_eps: 1.0e-6
+  # nn.Embedding(t_max, in_features). 4 frames in our config; 32 is
+  # saturated with headroom for long-horizon (8f/16f) variants.
+  t_max: 32
+
+# ---- Memory / throughput rules (matched to 3cam_full overrides) ----------
+# AC off (memory rule): 3B + 1-cam × 4f on 32GB cards has plenty headroom.
+activation_checkpointing: false
+gradient_checkpointing: false
+
+# Throughput: LBS=4 × grad_accum=1, same GBS=32 as base, ~4x faster wallclock.
+batch_size: 4
+grad_accum_steps: 1
+
+# Reliability rule: ckpt every ~30 min wallclock. save_every=50 ≈ 4-7 min/ckpt.
+save_every: 50
+val_every: 50
+keep_latest_k: 2
+
+# ---- Ratio-scaled schedule (paper-hyperparam audit gate) -----------------
+# Same 1.74%/6.96% AutoVLA ratios applied to our ~2050 total steps.
+warmup_steps: 36
+lr_step_freq: 143
+
+# ---- Mid-training planning metrics (from train_lora L2 val merge) --------
+val_planning_l2: true
+val_full_eval: false
+val_greedy_max_new_tokens: 20

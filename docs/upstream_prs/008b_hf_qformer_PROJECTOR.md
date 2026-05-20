@@ -1,10 +1,12 @@
 # PR 008b — HF Accelerate Qwen2.5-VL Q-Former PROJECTOR (Track A.1, REDO)
 
 **Repo**: QIU023/DriveLM_VLM_Project (this fork)
-**Branch**: `qformer_hf_projector_port` (off `qwen25_vl_video_vla`)
+**Branch**: `qformer_hf_projector_port` -> merged into `qwen25_vl_video_vla` (2026-05-20)
 **Status**: Drafted locally + CPU smoke-tested. **Multi-GPU GPU training not yet run.** Pre-submission gate:
-  1. GPU smoke (next-agent task — boot the 3cam_qformer_projector config, verify forward + projector grad sync under FSDP=8).
-  2. Track A.1 full SFT validation (~2.2K steps on nuScenes planning 3-cam × 4f; A/B vs the linear-projector baseline + A.2/A.3 siblings at matched compute).
+  1. GPU smoke (next-agent task — boot the 1-cam qformer config, verify forward + projector grad sync under FSDP=8).
+  2. Track A.1 full SFT validation (~2050 steps on nuScenes planning **1-cam × 4f**; A/B vs the A.0 linear-projector baseline @ L2 0.642).
+
+**1-cam pivot (2026-05-20)**: User redefined Track A. The fusion ablation series (A.1/A.2/A.3) now runs at **1-cam × 4f** instead of 3-cam, anchored on A.0 = R1' (Linear, 1-cam × 4f, L2 0.642). 3-cam fusion did not yield paper-level gains at our data scale, and the 1-cam baseline gives a cleaner comparison surface. The 3-cam config (`configs/nuscenes_planning_3cam_qformer_projector.yaml`) is retained for future revisit; **the launch target is now `configs/nuscenes_planning_1cam_qformer.yaml`**.
 
 **Supersedes**: [008_hf_qformer_projector.md](008_hf_qformer_projector.md). PR 008's `qformer_hf_port` branch wired the Q-Former into the `cross_frame_compressor` registry path; that conflated two distinct ablation axes. See "Architectural delta vs 008" below.
 
@@ -14,11 +16,11 @@ Stock HF Qwen2.5-VL's vision-to-LM projector is a fixed in-encoder `PatchMerger`
 
 We want a **swap-in alternative projector** that compresses visual context to a **fixed 64-token / item budget** via a BLIP-2-style Querying Transformer (Q-Former). 64 learnable queries cross-attend the per-item visual features and produce a fixed-length output, regardless of input length. Net: ~22x token-budget compression vs baseline at 3 cams (192 tokens vs 1680).
 
-This is the first member of our fusion-mechanism comparison (A.0/A.1/A.2/A.3):
-* **A.0** = stock linear baseline (~1680 tokens, 0 extra params)
-* **A.1** = Q-Former 64 queries / item (~192 tokens / sample at 3 cams, ~22x compression, ~90M params at internal_dim=1024) — **this PR**
-* **A.2** = PixelShuffle 2x + Linear (~420 tokens / sample, ~4x compression, ~17M params) — PR 009
-* **A.3** = Perceiver Resampler 64 latents / item (~192 tokens / sample, ~22x compression, Flamingo-style with temporal pos) — PR 010
+This is the first member of our fusion-mechanism comparison (A.0/A.1/A.2/A.3). **Per the 2026-05-20 1-cam pivot, all four members run at 1-cam × 4f:**
+* **A.0** = stock linear baseline @ 1-cam × 4f (~560 LM-input visual tokens, 0 extra params, L2 0.642)
+* **A.1** = Q-Former 64 queries @ 1-cam (64 LM-input visual tokens / sample, ~9x compression, ~90M params at internal_dim=1024) — **this PR**, launch config `configs/nuscenes_planning_1cam_qformer.yaml`
+* **A.2** = PixelShuffle 2x + Linear @ 1-cam (~140 LM-input tokens / sample, ~4x compression, ~17M params) — PR 009 / `configs/nuscenes_planning_1cam_pixelshuffle.yaml`
+* **A.3** = Perceiver Resampler 64 latents @ 1-cam (~64 LM-input tokens / sample, ~9x compression, Flamingo-style with temporal pos) — PR 010 / `configs/nuscenes_planning_1cam_resampler.yaml`
 
 Q-Former's selling point vs PixelShuffle: aggressive fixed-budget compression (constant KV size at deploy) and learnable spatial pooling (queries can specialise to scene-relevant regions). Vs Resampler: simpler — no temporal pos, no latent self-attn — so the A.1/A.3 A/B isolates the contribution of temporal positional encoding + latent self-attn at matched 64-latent / item budget.
 
@@ -87,9 +89,21 @@ Total diff: **~890 LOC, 2 new + 1 modified scripts file, 1 new + 1 modified PR d
 
 ## Pre-submission gate (must pass before opening upstream PR)
 
-- [ ] **GPU smoke**: launch `configs/nuscenes_planning_3cam_qformer_projector.yaml` for 4 steps with `--no-validate`; confirm forward + projector grad flow, no shape-mismatch asserts.
-- [ ] **Track A.1 full SFT validation**: 3-epoch run; compare loss curves + downstream L2 vs A.0 / A.2 / A.3.
-- [ ] **A/B at deploy**: with ~22x reduced placeholder count the LM context shrinks from ~2300 -> ~800 tokens — measure KV-cache size + TTFT at TRT-export to confirm the deploy win.
+- [ ] **GPU smoke**: launch `configs/nuscenes_planning_1cam_qformer.yaml` for 4 steps with `--no-validate`; confirm forward + projector grad flow, no shape-mismatch asserts. **(1-cam pivot: replaces 3cam_qformer_projector.yaml as the smoke target.)**
+- [ ] **Track A.1 full SFT validation**: 3-epoch run on the 1-cam config (~2050 opt steps at GBS=32); compare loss curves + downstream L2 vs A.0 = R1' (L2 0.642).
+- [ ] **A/B at deploy**: with ~9x reduced placeholder count at 1-cam (~560 -> 64 visual tokens) the LM context shrinks meaningfully — measure KV-cache size + TTFT at TRT-export to confirm the deploy win.
+
+## A.1 launch (1-cam, intended next step)
+
+```bash
+# From /workspace/DriveLM_VLM_Project on branch qwen25_vl_video_vla
+accelerate launch \
+  --config_file accelerate_configs/fsdp_8gpu.yaml \
+  scripts/train_lora.py \
+  --config configs/nuscenes_planning_1cam_qformer.yaml
+```
+
+Expected schedule: ~2050 opt steps (3 epochs × ~683 steps/epoch at GBS=32), `save_every=50` -> ~41 checkpoints + 41 val passes, `keep_latest_k=2` -> peak disk = 2 × ~6 GB LM ckpt + ~360 MB projector ≈ 13 GB steady. Warmup 36 steps (1.74%), LR-decay every 143 steps (6.96%) with `lr_step_gamma=0.98` inherited from `gb200_vla.yaml`.
 
 ## Static test (already passed, CPU)
 
