@@ -1,0 +1,190 @@
+# Qwen3-VL-8B (dense) + PixelShuffle 2x + Linear projector nuScenes
+# planning SFT — FSDP-only 8-rank, 3-cam x 4-frame, max_length=8192 variant.
+#
+# This is the A.2 entry in the fusion-mechanism school comparison:
+#   A.0 Linear (stock Qwen3-VL PatchMerger)   -> qwen3_vl_8b_planning_fsdp_3cam.toml
+#   A.1 Q-Former-64 (learnable query pool)    -> qwen3_vl_8b_planning_fsdp_3cam_qformer.toml (sibling agent)
+#   A.2 PixelShuffle 2x + Linear              -> THIS FILE
+#   A.3 Perceiver Resampler                   -> TBD
+#
+# torchtitan's CURRENT ConfigManager loads the Trainer.Config via
+#   --module <python-module-path> --config <factory-function-name>
+# (see torchtitan/config/manager.py:_load_config). TOML files are NOT
+# directly consumed by torchtitan trunk. This file is therefore a
+# *human-readable record* of the exact factory + CLI overrides that
+# produce the run we're committing to. The same values are baked into
+# `scripts_titan/train_titan_qwen3_vl.py::qwen3_vl_8b_planning_fsdp_3cam_pixelshuffle`;
+# this TOML exists so that reviewers can diff a single hyperparameter
+# manifest without reading Python.
+#
+# Why PixelShuffle here?
+# ----------------------
+# PixelShuffle is the LLaVA-NeXT / InternVL deterministic compressor:
+# rearrange every 2x2 spatial block into one token with 4x channel dim,
+# then project to LM dim with a single Linear. Properties vs Q-Former:
+#   * Zero learnable query parameters (the only learnable piece is the
+#     post-shuffle Linear). Param count: ~67M at the post-merger wiring,
+#     ~19M at the pre-merger wiring (see
+#     torchtitan_qwen25/torchtitan/models/qwen3_vl/pixelshuffle_projector.py).
+#   * Deterministic compression — every output token is a fixed linear
+#     combination of a known 2x2 spatial neighbourhood. No softmax, no
+#     cross-attention.
+#   * Cheap forward: just reshape + matmul.
+#
+# Token budget (per-sample, THIS wiring — post-merger PixelShuffle):
+#   In-encoder PatchMerger emits ~140 tokens / cam / frame (= ~1680 for
+#   3-cam x 4-frame). PixelShuffle 2x then compresses another 4x to ~420
+#   tokens... ON the post-merger grid that's already at lm_dim=4096.
+#   Effective compression vs raw ViT patches: (2x2 merger) * (2x2 shuffle)
+#   = 16x. Final visual token count: ~105 (NOT the ~420 stated in the
+#   LLaVA-NeXT-style spec, which assumes the in-encoder merger is BYPASSED
+#   and the projector consumes raw ViT features at vit_dim=1152). Reaching
+#   the canonical 4x compression target (i.e. ~420 LM-input tokens) is a
+#   follow-up plumbing change tracked in
+#   docs/upstream_prs/006_torchtitan_qwen3_vl_pixelshuffle.md.
+#
+# Open issues (also in the 006 PR doc):
+#   * DeepStack interaction: the current wiring drops DeepStack on the
+#     pixelshuffle path because DeepStack's mask is computed at the
+#     *post-merger* grid (which we then compress further); the compressed
+#     positions don't line up with the post-merger ones. Either compress
+#     DeepStack the same way, or drop it entirely for this variant.
+#   * Dataset/collator must emit exactly ``floor((t*h*w / merger_unit) /
+#     shuffle_unit)`` <|image_pad|> placeholders per visual item for the
+#     scatter step to line up. The default 3-cam x 4-frame collator emits
+#     the post-merger count (~420 per item); we need to divide by another
+#     4 (= shuffle_unit) on the dataset side. This is the next-agent task.
+#
+# To launch the run (CPU build of model graph, GPU training):
+#
+#   torchrun --nproc-per-node=8 --no-python /usr/bin/python3 \
+#       -m torchtitan.train \
+#       --module scripts_titan.train_titan_qwen3_vl \
+#       --config qwen3_vl_8b_planning_fsdp_3cam_pixelshuffle
+#
+# Smoke / pressure runs: pass `--training.steps 4 --checkpoint.no-enable`.
+
+[meta]
+model_family       = "Qwen3-VL"
+model_size         = "8B"
+model_hf_id        = "Qwen/Qwen3-VL-8B-Instruct"
+hf_assets_path     = "assets/hf/Qwen3-VL-8B-Instruct"
+dataset            = "nuscenes_planning_3cam_4f_seqlen8k_pixelshuffle"
+loss_mode          = "answer_and_traj"
+recipe_origin      = "AutoVLA paper recipe @ 4-frame video horizon + LLaVA-NeXT-style PixelShuffle projector"
+variant_note       = "3-cam x 4f, seq_len=8192, projector_type=pixelshuffle (ratio=2)"
+
+[model]
+spec_module        = "torchtitan.models.qwen3_vl"
+flavor             = "8B-pixelshuffle"  # see torchtitan_qwen25/torchtitan/models/qwen3_vl/__init__.py::_8b_pixelshuffle
+vocab_size         = 151936
+dim                = 4096
+n_layers           = 36
+n_heads            = 32
+n_kv_heads         = 8
+head_dim           = 128
+hidden_dim         = 12288
+qk_norm            = true
+weight_tying       = false
+rope_theta         = 5e6
+mrope_section      = [24, 20, 20]
+# Switchable projector — "pixelshuffle" instantiates
+# Qwen3VLPixelShufflePlusLinearProjector on top of the in-encoder
+# PatchMerger (NOTE: the in-encoder PatchMerger still runs; see the open
+# issue at the top of this file re: bypassing it for the canonical 4x
+# compression target).
+projector_type     = "pixelshuffle"
+
+[model.vision_encoder]
+# Identical to the baseline; the PixelShuffle projector does not change the ViT.
+dim                     = 1152
+ffn_dim                 = 4304
+n_layers                = 27
+n_heads                 = 16
+patch_size              = 16
+temporal_patch_size     = 2
+spatial_merge_size      = 2
+out_hidden_size         = 4096
+deepstack_visual_indices = [8, 16, 24]
+num_position_embeddings = 2304
+
+[model.pixelshuffle]
+# See torchtitan_qwen25/torchtitan/models/qwen3_vl/pixelshuffle_projector.py.
+# Defaults in __init__.py::_8b_pixelshuffle().
+shuffle_ratio       = 2
+# in_features = vision_encoder.out_hidden_size = 4096 (post-merger path);
+# switching to 1152 would consume raw ViT features (pre-merger path).
+in_features         = 4096
+lm_dim              = 4096
+# Approximate param count: ~67M at the post-merger path (4 * 4096 * 4096
+# + 4096 bias = 67_112_960). Compared to A.1 Q-Former-64's ~1.2B and A.0
+# linear baseline's existing PatchMerger, this is the lightest learnable
+# projector in the school.
+approx_param_count  = "~67M"
+
+[training]
+local_batch_size       = 1
+seq_len                = 8192
+steps                  = 10000
+mixed_precision_param  = "bfloat16"
+mixed_precision_reduce = "float32"
+
+[optimizer]
+lr                 = 2e-5         # same AutoVLA recipe as baseline; revisit if PixelShuffle Linear needs warmup-LR boost
+
+[lr_scheduler]
+warmup_steps       = 174
+decay_ratio        = 1.0
+decay_type         = "linear"
+min_lr_factor      = 0.1
+lr_step_freq       = 696
+
+[parallelism]
+data_parallel_shard_degree = -1
+tensor_parallel_degree     = 1
+context_parallel_degree    = 1
+pipeline_parallel_degree   = 1
+
+[activation_checkpoint]
+mode = "full"
+
+[checkpoint]
+enable               = true
+interval             = 1000
+keep_latest_k        = 2
+export_dtype         = "bfloat16"
+last_save_model_only = false
+
+[vision_tower]
+# Vision tower frozen as in the baseline; only LM + PixelShuffle Linear
+# train. Unlike Q-Former, the PixelShuffle path adds ~67M new params
+# (the post-shuffle Linear) — much less risk of quality collapse from
+# from-scratch initialisation than Q-Former's ~1.2B.
+freeze = true
+
+[dataloader]
+image_mean          = [0.5, 0.5, 0.5]
+image_std           = [0.5, 0.5, 0.5]
+patch_size          = 16
+temporal_patch_size = 2
+spatial_merge_size  = 2
+max_images_per_batch = 128
+min_pixels          = 65536
+max_pixels          = 16777216
+
+[dataset.nuscenes_planning_3cam_4f_seqlen8k_pixelshuffle]
+infos_path           = "data/uniad_infos/nuscenes_infos_temporal_train.pkl"
+nusc_root            = "data/nuscenes"
+max_length           = 8192
+num_past_frames      = 4
+num_future_waypoints = 6
+video_fps            = 2.0
+planning_cams        = ["CAM_FRONT", "CAM_FRONT_LEFT", "CAM_FRONT_RIGHT"]
+require_full_future  = true
+require_all_cams     = true
+# Open issue: the collator must emit ``floor((t*h*w / merger_unit) /
+# shuffle_unit)`` <|image_pad|> placeholders per visual item for the
+# scatter step in ``Qwen3VLModel._scatter_vision_embeds`` to line up with
+# the compressed vision tokens. With the default 3-cam x 4-frame nuScenes
+# settings this is roughly ~105 per item. The wiring change is a
+# follow-up; see docs/upstream_prs/006_torchtitan_qwen3_vl_pixelshuffle.md.

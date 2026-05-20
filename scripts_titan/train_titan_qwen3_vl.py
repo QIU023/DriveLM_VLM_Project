@@ -239,14 +239,19 @@ def _build_trainer_config(
     seq_len: int = 4096,
     total_steps: int = _TOTAL_STEPS,
     max_length: int | None = None,
+    model_flavor: str = "8B",
 ) -> Trainer.Config:
     """Shared Trainer.Config builder used by all variants.
 
     Per-variant differences are passed in via `parallelism`, `dataset_name`,
-    `planning_cams`, `seq_len`, and `max_length`; the rest of the recipe
-    is identical.  `max_length` controls per-sample token cap inside the
-    dataset (used to right-size truncation); `seq_len` is torchtitan's
-    batch sequence length (collator pads to this).  These should agree.
+    `planning_cams`, `seq_len`, `max_length`, and `model_flavor`; the rest
+    of the recipe is identical.  `max_length` controls per-sample token
+    cap inside the dataset (used to right-size truncation); `seq_len` is
+    torchtitan's batch sequence length (collator pads to this).  These
+    should agree.  `model_flavor` selects the Qwen3-VL config from
+    ``torchtitan.models.qwen3_vl.qwen3_vl_configs`` — e.g. "8B" for the
+    stock linear baseline, "8B-pixelshuffle" for the LLaVA-NeXT-style
+    deterministic compressor.
     """
     overrides = _common_overrides()
     overrides["planning_cams"] = planning_cams
@@ -264,10 +269,10 @@ def _build_trainer_config(
         tokenizer=MultiModalTokenizer.Config(**QWEN3_VL_SPECIAL_TOKENS),
         metrics=MetricsProcessor.Config(log_freq=10),
         # *** Native upstream Qwen3-VL-8B spec — no subclass, no lossy
-        # adapter.  model_registry("8B") returns the fully-built ModelSpec
+        # adapter.  model_registry(flavor) returns the fully-built ModelSpec
         # with parallelize_qwen3_vl + pipeline_qwen3_vl +
         # Qwen3VLStateDictAdapter wired up. ***
-        model_spec=model_registry("8B"),
+        model_spec=model_registry(model_flavor),
         dataloader=_qwen3_vl_dataloader(dataset_name),
         optimizer=OptimizersContainer.Config(
             # AutoVLA recipe for 4-8 frame video horizon.
@@ -429,6 +434,72 @@ def qwen3_vl_8b_planning_fsdp_3cam() -> Trainer.Config:
     )
 
 
+def qwen3_vl_8b_planning_fsdp_3cam_pixelshuffle() -> Trainer.Config:
+    """FSDP-8 3-cam x 4-frame nuScenes planning with a PixelShuffle + Linear
+    projector (A.2 in the fusion-mechanism school comparison).
+
+    Same recipe as ``qwen3_vl_8b_planning_fsdp_3cam`` except the vision
+    projector is swapped for a deterministic LLaVA-NeXT-style space-to-depth
+    + Linear compressor (see
+    torchtitan_qwen25/torchtitan/models/qwen3_vl/pixelshuffle_projector.py).
+
+    Rationale: the fusion-mechanism school comparison plots quality vs
+    token-budget at five projector points:
+      A.0 Linear (stock Qwen3-VL PatchMerger, ~1680 tokens)
+      A.1 Q-Former-64                          (~64   tokens)
+      A.2 PixelShuffle 2x + Linear  <-- THIS RECIPE
+      A.3 Perceiver Resampler
+    A.2 sits between A.0 and A.1 in compression ratio, contributes
+    *zero* learnable query parameters (vs Q-Former's 1-1.2B), and is
+    deterministic — every output token is a fixed linear combo of a
+    known 2x2 spatial neighbourhood.
+
+    Token budget (per-sample, this wiring):
+      The in-encoder PatchMerger still runs (2x2 merge), then this
+      projector PixelShuffles another 2x2. Total compression vs raw
+      ViT patches: 16x. For the 3-cam x 4-frame nuScenes planning
+      input (~1680 raw ViT tokens) this gives ~105 LM-input tokens,
+      NOT the ~420 stated in the LLaVA-NeXT-style spec (which assumes
+      we BYPASS the in-encoder merger). Reaching the canonical 4x
+      compression target requires a follow-up plumbing change to feed
+      raw ViT features through this projector; see
+      ``docs/upstream_prs/006_torchtitan_qwen3_vl_pixelshuffle.md``.
+
+    Open issues (also in the 006 PR doc):
+      * DeepStack interaction: the current wiring drops DeepStack on
+        the pixelshuffle path because DeepStack's mask is computed at
+        the *post-merger* grid (which we then compress further); the
+        compressed positions don't line up. Production wiring is the
+        next-agent task — either compress DeepStack the same way, or
+        drop DeepStack entirely for this variant. The wiring currently
+        skips DeepStack injection when ``projector_type='pixelshuffle'``.
+      * Edge-case grids: PixelShuffle 2x requires (h, w) even at the
+        post-merger grid. The Qwen3-VL collator pads to multiples of
+        ``patch_size * spatial_merge_size = 32``, so post-merger
+        ``(h, w)`` are always >=1; even-ness is verified at forward
+        time and the projector raises ``ValueError`` if violated.
+
+    Hyperparams: identical to ``qwen3_vl_8b_planning_fsdp_3cam`` (LR 2e-5,
+    AutoVLA warmup 1.74%, step-decay-via-linear @ 6.96% cadence, 10k
+    steps). The only delta from the baseline is the ``model_flavor`` and
+    a unique ``dataset_name`` so the cache key doesn't collide.
+    """
+    return _build_trainer_config(
+        dataset_name="nuscenes_planning_3cam_4f_seqlen8k_pixelshuffle",
+        planning_cams=["CAM_FRONT", "CAM_FRONT_LEFT", "CAM_FRONT_RIGHT"],
+        local_batch_size=1,
+        seq_len=8192,
+        max_length=8192,
+        parallelism=ParallelismConfig(
+            data_parallel_shard_degree=-1,
+            tensor_parallel_degree=1,
+            context_parallel_degree=1,
+            pipeline_parallel_degree=1,
+        ),
+        model_flavor="8B-pixelshuffle",
+    )
+
+
 # ============================================================================
 # CPU-only smoke (config build only — no model materialization).
 # ============================================================================
@@ -439,11 +510,16 @@ if __name__ == "__main__":
         ("qwen3_vl_8b_planning_fsdp", qwen3_vl_8b_planning_fsdp),
         ("qwen3_vl_8b_planning_fsdp_1cam_8f", qwen3_vl_8b_planning_fsdp_1cam_8f),
         ("qwen3_vl_8b_planning_fsdp_3cam", qwen3_vl_8b_planning_fsdp_3cam),
+        (
+            "qwen3_vl_8b_planning_fsdp_3cam_pixelshuffle",
+            qwen3_vl_8b_planning_fsdp_3cam_pixelshuffle,
+        ),
         ("qwen3_vl_8b_planning_fsdp_tp", qwen3_vl_8b_planning_fsdp_tp),
     ]:
         cfg = fn()
         print(f"=== {name} ===")
         print("  Model spec:", cfg.model_spec.name, cfg.model_spec.flavor)
+        print("  Projector type:", getattr(cfg.model_spec.model, "projector_type", "n/a"))
         print("  LR:", cfg.optimizer.lr)
         print("  Warmup steps:", cfg.lr_scheduler.warmup_steps)
         print("  Total steps:", cfg.training.steps)
