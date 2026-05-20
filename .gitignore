@@ -175,3 +175,8 @@ checkpoints*/
 .vscode/
 .vast/
 *.nfs*
+
+# Agent worktree isolation
+.worktrees/
+assets/hf/
+logs/*.LAZY*_KILLED
