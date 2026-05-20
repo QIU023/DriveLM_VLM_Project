@@ -28,6 +28,25 @@ For temporal endpoints (less than 3 prev / 6 future available), we:
   - history: pad backward with the earliest available frame's image
   - future:  emit zero waypoints for missing steps AND mark them invalid in a
              returned mask so eval can skip them.
+
+Placeholder-count alignment (Track A.2 / PixelShuffle projector)
+----------------------------------------------------------------
+This module ALWAYS emits the uncompressed ``<|video_pad|>`` count produced by
+Qwen2.5-VL's processor (~140 placeholders per cam in our 3-cam × 4f config,
+i.e. ~420 placeholders / sample for 3 cams).
+
+When ``projector_type: pixelshuffle`` is active, the trainer
+(``forward_with_pixelshuffle_projector`` in ``scripts/train_lora.py``) trims
+the placeholders IN-FLIGHT down to ``N_post // 4`` per item (~35 / cam,
+~105 / sample for 3 cams). This is intentional:
+
+  * Dataloader stays the same across baseline / pixelshuffle / Q-Former /
+    perceiver — only the trainer's forward routing changes.
+  * Eval + smoke + val all share one pkl + one processor; we don't need
+    projector-specific dataset variants.
+  * The placeholder trim is symmetric with
+    ``forward_with_video_xframe_compression`` which already does the same
+    thing for the cross-frame compressors.
 """
 from __future__ import annotations
 

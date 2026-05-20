@@ -707,9 +707,259 @@ def forward_with_video_xframe_compression(
     return outputs
 
 
+# --------------- PixelShuffle + Linear projector (Track A.2) ---------------
+
+
+def forward_with_pixelshuffle_projector(
+    model,
+    batch,
+    projector,
+    video_token_id: int,
+    merge_size: int = 2,
+):
+    """Forward pass with a stacked PixelShuffle 2x projector on top of
+    Qwen2.5-VL's in-encoder ``PatchMerger``.
+
+    The HF Qwen2.5-VL flow already applies the in-encoder ``PatchMerger`` (2x2
+    spatial merge -> 4x token reduction) inside ``get_video_features``; the
+    output is ``(total_post_tokens, lm_dim)`` flattened across all video items
+    in the batch. We add a PixelShuffle 2x on top:
+
+      1. Monkey-patch ``inner.get_video_features`` so the model.forward call
+         routes through us. We:
+           a. Call the original encoder under no_grad (vision tower is
+              frozen -- same convention as the xframe compressor path).
+           b. Split the flat ``(total_post_tokens, D)`` tensor into per-item
+              chunks using ``video_grid_thw`` (post-merger units).
+           c. Stack same-shape items into one projector batch (the dataset
+              guarantees identical (t, h_post, w_post) per sample in the
+              current 3-cam config; mixed-resolution batches require grouping
+              which we don't handle here).
+           d. Run PixelShuffle + Linear -> ``(B_items, t*(h/2)*(w/2), lm_dim)``.
+           e. Re-split per-item back into a list of compressed tensors.
+      2. Trim ``<|video_pad|>`` placeholders in input_ids / attention_mask /
+         labels: each video item drops from ``N_post`` to ``N_post // 4``
+         placeholders, in placeholder order. With 3 cams x 4 frames at
+         ~140 post-merger tokens / frame = ~1680 total placeholders, the
+         trimmed total is ~420 placeholders / sample.
+      3. Rebuild ``video_grid_thw`` so the model's internal masked_scatter
+         sees the compressed token count: keep ``t`` unchanged, halve
+         ``h_pre`` and ``w_pre`` (== quarter the per-item token count).
+      4. Run model.forward -- the patched ``get_video_features`` injects our
+         compressed embeds; the model scatters them into the (trimmed)
+         ``<|video_pad|>`` slots.
+
+    Param grad: ``projector.proj.weight`` (and bias) are the only learnable
+    PixelShuffle params; they are added to the optimizer by main() the same
+    way ``xframe_compressor`` params are.
+
+    Args:
+        model: PEFT-wrapped Qwen2_5_VL model.
+        batch: collated batch dict from the planning dataset.
+        projector: ``Qwen2VLPixelShufflePlusLinearProjector`` instance.
+        video_token_id: ``<|video_pad|>`` token id.
+        merge_size: in-encoder spatial merge size (Qwen2.5-VL: 2).
+    """
+    batch.pop("image_names", None)
+
+    base = get_base_model(model)
+    device = batch["input_ids"].device
+
+    pv = batch["pixel_values_videos"]
+    grid = batch["video_grid_thw"]  # (num_items, 3) - pre-merger units
+    if grid.dim() == 1:
+        grid = grid.unsqueeze(0)
+
+    num_items = grid.shape[0]
+
+    # Post-merger per-item token counts.
+    t_per_item = grid[:, 0].tolist()
+    h_post = (grid[:, 1] // merge_size).tolist()
+    w_post = (grid[:, 2] // merge_size).tolist()
+    n_post_per_item = [t_per_item[i] * h_post[i] * w_post[i] for i in range(num_items)]
+    n_post_total = sum(n_post_per_item)
+
+    # PixelShuffle requires identical (t, h_post, w_post) across items in the
+    # batch so we can stack them into one projector call. The 3-cam x 4-frame
+    # nuScenes dataloader satisfies this by construction (planning_cams emit
+    # one clip per cam at identical resolution).
+    first_thw = (t_per_item[0], h_post[0], w_post[0])
+    for i in range(num_items):
+        if (t_per_item[i], h_post[i], w_post[i]) != first_thw:
+            raise RuntimeError(
+                f"PixelShuffle projector requires identical post-merger "
+                f"(t, h, w) across all items in the batch. Item {i}="
+                f"{(t_per_item[i], h_post[i], w_post[i])} != "
+                f"item 0={first_thw}. For mixed-resolution batches, group by "
+                f"shape and run the projector per group (not implemented)."
+            )
+    t0, h0, w0 = first_thw
+    r = projector.shuffle_ratio
+    if h0 % r != 0 or w0 % r != 0:
+        raise RuntimeError(
+            f"PixelShuffle ratio {r} requires post-merger (h, w) to be even; "
+            f"got ({h0}, {w0}). Qwen2.5-VL's collator pads images to multiples "
+            f"of patch_size * spatial_merge_size = 28, so (h_post, w_post) "
+            f"should be >=2 and even; check min/max_pixels in the config."
+        )
+
+    # Per-item compressed token count after PixelShuffle.
+    n_compressed_per_item = t0 * (h0 // r) * (w0 // r)
+
+    # ---- 1. Build trimmed input_ids / attention_mask / labels --------------
+    # Per LM sample: walk the placeholder positions for each video item in
+    # order (item k owns the k-th contiguous block of ``<|video_pad|>``
+    # tokens). For each item, KEEP the first ``n_compressed_per_item``
+    # placeholders, DROP the rest.
+    input_ids = batch["input_ids"]
+    attn_mask = batch["attention_mask"]
+    labels = batch["labels"]
+    B_lm = input_ids.shape[0]
+
+    # Items-per-sample. The dataset emits one video item per cam, and all
+    # samples in a batch share the same cam list, so:
+    items_per_sample = num_items // B_lm
+    if items_per_sample * B_lm != num_items:
+        raise RuntimeError(
+            f"video_grid_thw num_items={num_items} not divisible by LM "
+            f"batch size B_lm={B_lm}; items_per_sample is non-uniform."
+        )
+
+    new_ids_list, new_mask_list, new_lab_list = [], [], []
+    for b in range(B_lm):
+        ids = input_ids[b]
+        msk = attn_mask[b]
+        lab = labels[b]
+        vid_pos = (ids == video_token_id).nonzero(as_tuple=True)[0]
+        n_vid = len(vid_pos)
+        if n_vid == 0:
+            new_ids_list.append(ids)
+            new_mask_list.append(msk)
+            new_lab_list.append(lab)
+            continue
+        # Expected uncompressed placeholders for this sample.
+        expected_uncompressed = items_per_sample * n_post_per_item[b * items_per_sample]
+        if n_vid != expected_uncompressed:
+            raise RuntimeError(
+                f"sample {b}: found {n_vid} video-pad tokens but expected "
+                f"{expected_uncompressed} ({items_per_sample} items x "
+                f"{n_post_per_item[b * items_per_sample]} post-merger tokens). "
+                f"max_length truncation may have eaten visual placeholders."
+            )
+        # Compute the set of placeholder indices to DROP. Per item k of
+        # items_per_sample, the k-th contiguous run of placeholders
+        # contributes positions [k*N_post .. (k+1)*N_post); we keep the
+        # first n_compressed_per_item of those and drop the rest.
+        drop_positions = []
+        for k in range(items_per_sample):
+            item_start = k * n_post_per_item[b * items_per_sample + k]
+            item_end = item_start + n_post_per_item[b * items_per_sample + k]
+            keep_until = item_start + n_compressed_per_item
+            drop_positions.extend(vid_pos[keep_until:item_end].tolist())
+        if drop_positions:
+            keep = torch.ones(len(ids), dtype=torch.bool, device=device)
+            keep[torch.tensor(drop_positions, device=device)] = False
+            new_ids_list.append(ids[keep])
+            new_mask_list.append(msk[keep])
+            new_lab_list.append(lab[keep])
+        else:
+            new_ids_list.append(ids)
+            new_mask_list.append(msk)
+            new_lab_list.append(lab)
+
+    # Pad to common length.
+    max_len = max(t.shape[0] for t in new_ids_list)
+    for i in range(B_lm):
+        pad = max_len - new_ids_list[i].shape[0]
+        if pad > 0:
+            new_ids_list[i] = torch.cat([
+                new_ids_list[i],
+                torch.zeros(pad, dtype=new_ids_list[i].dtype, device=device),
+            ])
+            new_mask_list[i] = torch.cat([
+                new_mask_list[i],
+                torch.zeros(pad, dtype=new_mask_list[i].dtype, device=device),
+            ])
+            new_lab_list[i] = torch.cat([
+                new_lab_list[i],
+                torch.full((pad,), -100, dtype=new_lab_list[i].dtype, device=device),
+            ])
+    new_input_ids = torch.stack(new_ids_list)
+    new_attn_mask = torch.stack(new_mask_list)
+    new_labels = torch.stack(new_lab_list)
+
+    # ---- 2. New video_grid_thw: halve h_pre and w_pre per item ----------
+    # ``video_grid_thw`` is in pre-merger units, so to encode an N_post/4
+    # post-merger token count we halve the spatial axes (h_pre, w_pre).
+    new_grid = grid.clone()
+    new_grid[:, 1] = grid[:, 1] // r
+    new_grid[:, 2] = grid[:, 2] // r
+
+    # ---- 3. Monkey-patch get_video_features to inject compressed embeds --
+    inner = base.model  # Qwen2_5_VLModel
+    _orig_get_video_features = inner.get_video_features
+
+    class _FakeVisOut:
+        def __init__(self, t):
+            self.pooler_output = t
+
+    def _patched_get_video_features(_pv, _grid):  # noqa: ARG001
+        # Run original encoder under no_grad (vision tower frozen).
+        with torch.no_grad():
+            real = _orig_get_video_features(pv, grid)
+            embeds = real.pooler_output
+            if isinstance(embeds, (tuple, list)):
+                embeds = torch.cat([e for e in embeds], dim=0)
+            embeds = embeds.detach()
+        if embeds.shape[0] != n_post_total:
+            raise RuntimeError(
+                f"vision pooler_output rows {embeds.shape[0]} != expected "
+                f"post-merger total {n_post_total}"
+            )
+        D = embeds.shape[-1]
+        # Split per-item into (num_items, t0*h0*w0, D). All items share the
+        # same shape (asserted above), so we can stack directly.
+        per_item = embeds.view(num_items, t0 * h0 * w0, D)
+        # Build a per-item grid_thw_post tensor for the projector.
+        grid_thw_post_local = torch.tensor(
+            [[t0, h0, w0]] * num_items,
+            dtype=torch.long, device=embeds.device,
+        )
+        # Cast to projector dtype before forward (vision tower may run at a
+        # different dtype than the projector). The projector's Linear
+        # determines the dtype of the gradient path.
+        proj_dtype = next(projector.parameters()).dtype
+        compressed = projector(
+            per_item.to(proj_dtype),
+            grid_thw_post=grid_thw_post_local,
+        )  # (num_items, n_compressed_per_item, D)
+        if compressed.shape != (num_items, n_compressed_per_item, D):
+            raise RuntimeError(
+                f"projector output {tuple(compressed.shape)} != expected "
+                f"({num_items}, {n_compressed_per_item}, {D})"
+            )
+        # Return per-item tensors as a list (the caller does torch.cat).
+        per_sample_compressed = [compressed[i] for i in range(num_items)]
+        return _FakeVisOut(per_sample_compressed)
+
+    inner.get_video_features = _patched_get_video_features
+    try:
+        outputs = model(
+            input_ids=new_input_ids,
+            attention_mask=new_attn_mask,
+            labels=new_labels,
+            pixel_values_videos=pv,        # passed through (patch ignores it)
+            video_grid_thw=new_grid,
+        )
+    finally:
+        inner.get_video_features = _orig_get_video_features
+    return outputs
+
+
 @torch.no_grad()
 def validate(model, val_loader, compress_method, compress_ratio, image_token_id, val_batches, device,
-             *, xframe_compressor=None, video_token_id=None, num_past_frames=None):
+             *, xframe_compressor=None, video_token_id=None, num_past_frames=None,
+             pixelshuffle_projector=None):
     """Run validation for val_batches batches.
 
     Returns ``(val_loss, val_acc, l2_dict)`` where ``l2_dict`` carries
@@ -738,14 +988,18 @@ def validate(model, val_loader, compress_method, compress_ratio, image_token_id,
     l2_1s_sum = l2_2s_sum = l2_3s_sum = l2_avg_sum = 0.0
     l2_n_batches = 0
     l2_n_samples = 0
-    l2_skipped = (xframe_compressor is not None)
+    l2_skipped = (xframe_compressor is not None) or (pixelshuffle_projector is not None)
     with torch.no_grad():
         for i, batch in enumerate(val_loader):
             if i >= val_batches:
                 break
             batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
             try:
-                if xframe_compressor is not None:
+                if pixelshuffle_projector is not None:
+                    outputs = forward_with_pixelshuffle_projector(
+                        model, batch, pixelshuffle_projector, video_token_id,
+                    )
+                elif xframe_compressor is not None:
                     outputs = forward_with_video_xframe_compression(
                         model, batch, xframe_compressor, video_token_id, num_past_frames,
                     )
@@ -1269,6 +1523,65 @@ def main():
                 f"learnable variants only after wiring DDP / FSDP wrap for the compressor."
             )
 
+    # ============ PixelShuffle + Linear projector (Track A.2) ============
+    # When `projector_type: pixelshuffle` is set in cfg we build the
+    # PixelShuffle projector and route the planning forward through
+    # `forward_with_pixelshuffle_projector`. Projector params are added to the
+    # optimizer the same way `xframe_compressor` params are. The projector is
+    # mutually exclusive with `cross_frame_compressor` (different token-budget
+    # mechanisms).
+    pixelshuffle_projector = None
+    projector_type = str(cfg.get("projector_type", "linear")).lower()
+    if projector_type == "pixelshuffle":
+        if xframe_compressor is not None:
+            raise ValueError(
+                "Cannot combine projector_type=pixelshuffle with "
+                "cross_frame_compressor; pick one token-budget mechanism."
+            )
+        try:
+            from scripts.pixelshuffle_projector_hf import (  # noqa: E402
+                Qwen2VLPixelShufflePlusLinearProjector,
+            )
+        except ImportError:
+            from pixelshuffle_projector_hf import (  # type: ignore  # noqa: E402
+                Qwen2VLPixelShufflePlusLinearProjector,
+            )
+        ps_cfg = cfg.get("pixelshuffle", {}) or {}
+        # Resolve LM hidden dim (= post-merger in_features for Qwen2.5-VL).
+        try:
+            lm_dim_default = int(model.config.text_config.hidden_size)
+        except Exception:
+            lm_dim_default = int(ps_cfg.get("lm_dim", 2048))
+        pixelshuffle_projector = Qwen2VLPixelShufflePlusLinearProjector(
+            in_features=int(ps_cfg.get("in_features") or lm_dim_default),
+            lm_dim=int(ps_cfg.get("lm_dim") or lm_dim_default),
+            shuffle_ratio=int(ps_cfg.get("shuffle_ratio", 2)),
+        )
+        pixelshuffle_projector = pixelshuffle_projector.to(
+            device=accelerator.device, dtype=compute_dtype,
+        )
+        n_proj = sum(p.numel() for p in pixelshuffle_projector.parameters())
+        n_proj_train = sum(p.numel() for p in pixelshuffle_projector.parameters() if p.requires_grad)
+        accelerator.print(
+            f"[pixelshuffle] Built projector "
+            f"in={pixelshuffle_projector.in_features} "
+            f"lm={pixelshuffle_projector.lm_dim} "
+            f"r={pixelshuffle_projector.shuffle_ratio}: "
+            f"{n_proj_train}/{n_proj} trainable params "
+            f"({n_proj/1e6:.2f}M)"
+        )
+        # Same FSDP caveat as xframe_compressor: projector lives OUTSIDE the
+        # FSDP wrap so per-rank gradients are not cross-rank-reduced. Acceptable
+        # at our current single-node FSDP=8 setup ONLY if we run with a
+        # gradient all-reduce shim, OR we accept rank-local updates (the same
+        # caveat already documented for xframe).
+        if n_proj_train > 0 and _is_distributed_env:
+            accelerator.print(
+                f"[pixelshuffle] WARNING: projector has {n_proj_train} "
+                f"trainable params under distributed launch; cross-rank "
+                f"gradient sync is NOT wired. Same caveat as xframe."
+            )
+
     gpu_mem = torch.cuda.memory_allocated() / 1024**3
     accelerator.print(f"GPU memory after model load (pre-shard): {gpu_mem:.2f} GB")
 
@@ -1431,6 +1744,8 @@ def main():
     _opt_params = list(model.parameters())
     if xframe_compressor is not None:
         _opt_params = _opt_params + list(xframe_compressor.parameters())
+    if pixelshuffle_projector is not None:
+        _opt_params = _opt_params + list(pixelshuffle_projector.parameters())
     optimizer = torch.optim.AdamW(_opt_params, lr=lr, weight_decay=0.01)
 
     lr_schedule = str(cfg.get("lr_schedule", "cosine"))
@@ -1572,7 +1887,11 @@ def main():
 
             try:
                 with accelerator.accumulate(model):
-                    if xframe_compressor is not None:
+                    if pixelshuffle_projector is not None:
+                        outputs = forward_with_pixelshuffle_projector(
+                            model, batch, pixelshuffle_projector, video_token_id,
+                        )
+                    elif xframe_compressor is not None:
                         outputs = forward_with_video_xframe_compression(
                             model, batch, xframe_compressor, video_token_id,
                             int(cfg.get("planning_num_past_frames", 4)),
@@ -1693,10 +2012,13 @@ def main():
                         xframe_compressor=xframe_compressor,
                         video_token_id=video_token_id,
                         num_past_frames=int(cfg.get("planning_num_past_frames", 4)),
+                        pixelshuffle_projector=pixelshuffle_projector,
                     )
                     if accelerator.is_main_process:
                         base = f"  [VAL] step={global_step} val_loss={val_loss:.4f} val_acc={val_acc:.4f}"
-                        if xframe_compressor is not None:
+                        if pixelshuffle_projector is not None:
+                            tqdm.write(f"{base} L2=skipped(pixelshuffle)")
+                        elif xframe_compressor is not None:
                             tqdm.write(f"{base} L2=skipped(xframe)")
                         elif l2_dict:
                             tqdm.write(
