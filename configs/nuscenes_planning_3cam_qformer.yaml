@@ -1,0 +1,97 @@
+base_config: nuscenes_planning_3cam_full.yaml
+
+# ============================================================================
+# Phase B+ / Track A.1: nuScenes planning, 3-CAMERA × 4-frame +
+# BLIP-2-style Q-Former projector (64 learnable queries cross-attending
+# the per-frame visual features). Aggressive ~26x token-budget compression
+# at the LM boundary.
+# ============================================================================
+# Inherits the full hyperparam stack from nuscenes_planning_3cam_full and
+# ONLY toggles the visual-token projector:
+#
+#   Baseline (3cam_full):     visual = patch_merger(2x2)
+#                             -> ~140 post-merger tokens/frame × 4f × 3cams
+#                                = ~1680 LM-visible visual tokens / sample.
+#   This config (qformer):    visual = patch_merger(2x2) + 64-query Q-Former
+#                             -> 64 LM-visible tokens / sample (~26x compression).
+#
+# Net deltas vs 3cam_full:
+#   * +1 BLIP-2-style Q-Former projector (Qwen2VLQFormerProjector) ≈ ~90M params
+#     at internal_dim=1024, num_layers=6, num_queries=64, post-merger entry
+#     (vit_dim=lm_dim=2048). Param count breakdown is in the projector's
+#     module docstring.
+#   * 26x fewer <|video_pad|> placeholders at the LM boundary
+#     (~1680 -> 64), which directly drops KV-cache size + TTFT on edge
+#     deploy. This is a deployment-efficiency trade, NOT a fusion-mechanism
+#     research comparison: from-scratch Q-Former on ~24K nuScenes samples
+#     will lose to the pretrained Qwen2.5-VL linear projection at the same
+#     token budget. We expect L2 to regress vs the 3cam_full baseline; the
+#     win is on inference cost, not on the open-loop L2 number.
+#   * NO change to AutoVLA hyperparams (lr, schedule, warmup, gbs, epochs).
+#
+# The forward path:
+#   1. ``model.visual`` (Qwen2.5-VL vision encoder + PatchMerger) runs under
+#      no_grad and emits (total_post_tokens, lm_dim=2048) — exactly as in the
+#      stock baseline.
+#   2. ``forward_with_video_xframe_compression`` (scripts/train_lora.py;
+#      shared with VTM / LongVU) monkey-patches ``get_video_features`` to:
+#         a. per-item reshape (B, T_post, N, 2048)  where T_post = num_cams
+#            (each cam is one "frame" in this xframe-compressor view),
+#         b. flatten via Q-Former forward_4d ((B, T*N, 2048) cross-attn),
+#         c. return (B, 64, 2048) compressed visual tokens,
+#      then trims (B*T*N - 64) of the ``<|video_pad|>`` placeholders per
+#      item and rebuilds video_grid_thw with (1, h_pre, w_pre) such that
+#      (h/2)*(w/2) == 64.
+#
+# Reference: scripts/qformer_projector_hf.py (HF Accelerate port of
+# torchtitan ``Qwen3VLQFormerProjector`` at SHA 5ee6380 after the
+# internal_dim / lm_dim decoupling fix).
+# Open issues + design rationale: docs/upstream_prs/008_hf_qformer_projector.md
+
+experiment: nuscenes_planning_3cam_3b_full_sft_qformer
+
+# ---- Projector switch -----------------------------------------------------
+# We wire the Q-Former through the existing `cross_frame_compressor`
+# registry (which is what VTM and LongVU also use). The existing
+# `forward_with_video_xframe_compression` shim picks up the compressor
+# instance's `target_tokens=64` and handles the placeholder trim + scatter
+# without any new train_lora.py code path. We do NOT use the
+# `projector_type:` knob here because that path is reserved for projectors
+# that need a different forward shim (pixelshuffle / resampler).
+cross_frame_compressor:
+  name: qformer
+  kwargs:
+    # vit_dim = post-merger entry point dim = LM hidden_size for Qwen2.5-VL-3B.
+    # Default 2048 here matches model.config.text_config.hidden_size for 3B
+    # (use 3584 for the 7B model, 4096 for the 8B). The Q-Former runs
+    # DOWNSTREAM of Qwen2.5-VL's in-encoder linear merger.
+    vit_dim: 2048
+    lm_dim: 2048
+    # internal_dim decoupled from lm_dim (BLIP-2 design): bounds param count
+    # to ~80-130M instead of growing with lm_dim. See paper-audit table in
+    # docs/upstream_prs/008_hf_qformer_projector.md for the cited deltas
+    # vs BLIP-2-base (768 / 32q / 12L).
+    internal_dim: 1024
+    num_queries: 64
+    num_layers: 6
+    n_heads: 8
+    ffn_mult: 4
+    layer_norm_eps: 1.0e-6
+    # from-scratch on 24K samples -> dropout typically hurts.
+    dropout: 0.0
+
+# ---- Placeholder-count alignment -----------------------------------------
+# Qwen2.5-VL's processor emits one <|video_pad|> per post-merger token, so
+# at min_pixels=max_pixels=109760 and per-cam 4-frame clips we get ~140
+# placeholders per video block (each cam is one block). The Q-Former
+# emits exactly 64 compressed tokens TOTAL (NOT per-block) for the whole
+# 3-cam × 4f input, so the xframe forward shim trims ~1616 placeholders
+# per sample (from ~1680 down to 64). See the planning_dataset docstring
+# for the "trim happens in trainer, not dataset" rationale.
+
+# ---- Disk discipline -----------------------------------------------------
+# Same cadence as 3cam_full; the extra ~90M projector params add ~180MB
+# bf16 to each checkpoint (negligible vs the 3B LM at 6 GB bf16).
+save_every: 50
+val_every: 50
+keep_latest_k: 2

@@ -99,6 +99,7 @@ def make_compressor(name: str, **kwargs: Any) -> CrossFrameCompressor:
 from . import temporal_pool  # noqa: E402,F401  (registers TemporalMeanPoolCompressor)
 from . import vtm  # noqa: E402,F401  (registers VTMCompressor)
 from . import longvu  # noqa: E402,F401  (registers LongVUCompressor)
+from . import qformer  # noqa: E402,F401  (registers QFormerCompressor — HF port)
 
 __all__ = [
     "CrossFrameCompressor",
