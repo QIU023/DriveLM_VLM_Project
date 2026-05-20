@@ -543,6 +543,11 @@ class PlanningDataset(Dataset):
         result["_meta_waypoints"] = torch.tensor(wp, dtype=torch.float32)
         result["_meta_valid_mask"] = torch.tensor(valid_mask, dtype=torch.float32)
         result["_meta_token"] = info["token"]
+        # Index of the first action token (==`<traj_start>`) inside input_ids.
+        # Slicing `input_ids[:_meta_prompt_len]` recovers the prompt-only chunk
+        # used for greedy decode in mid-training validation.
+        result["_meta_prompt_len"] = int(action_insert_start)
+        result["_meta_action_len"] = int(len(action_tokens))
         return result
 
 
