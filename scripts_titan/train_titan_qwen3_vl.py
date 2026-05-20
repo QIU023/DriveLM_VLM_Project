@@ -49,6 +49,7 @@ from torchtitan.config import (
 from torchtitan.hf_datasets import DatasetConfig
 from torchtitan.hf_datasets.multimodal.mm_datasets import MM_DATASETS, MMDataLoader
 from torchtitan.models.qwen3_vl import QWEN3_VL_SPECIAL_TOKENS, model_registry
+from torchtitan.tools.logging import logger
 from torchtitan.trainer import Trainer
 
 
@@ -243,6 +244,22 @@ _TOTAL_STEPS = 10000
 _WARMUP_RATIO = 0.0174        # AutoVLA: 1.74% of total
 _LR_STEP_FREQ_RATIO = 0.0696  # AutoVLA: 6.96% of total (step-decay cadence)
 
+# Paper-aligned optimizer hyperparams (AutoVLA NeurIPS '25 §3.2):
+#   AdamW, beta1=0.9, beta2=0.999, eps=1e-8, weight_decay=0.01
+# torchtitan's OptimizersContainer.Config defaults to (0.9, 0.95, 0.1) which is
+# the LM-pretrain default; we override here so the SFT continued-fine-tune
+# matches AutoVLA exactly.  See docs/2026-05-20_track_a0_hyperparam_audit.md
+# rows 1 and 6.
+_BETA1 = 0.9
+_BETA2 = 0.999
+_WEIGHT_DECAY = 0.01
+
+# Paper-aligned global batch size (AutoVLA: 32 = 4 GPU x 8 grad-accum on 8xA100):
+#   per-rank LBS=1 x FSDP=8 x grad_accum=4 = 32 effective.  torchtitan
+#   automatically derives grad_accum = global_batch_size /
+#   (local_batch_size * dp_degree); see torchtitan/trainer.py:343.
+_GLOBAL_BATCH_SIZE = 32
+
 
 def _warmup_steps(total: int = _TOTAL_STEPS) -> int:
     return max(1, int(round(total * _WARMUP_RATIO)))
@@ -250,6 +267,61 @@ def _warmup_steps(total: int = _TOTAL_STEPS) -> int:
 
 def _lr_step_freq(total: int = _TOTAL_STEPS) -> int:
     return max(1, int(round(total * _LR_STEP_FREQ_RATIO)))
+
+
+# ============================================================================
+# Vision-tower freeze (paper-aligned: AutoVLA §3.2, DriveVLM, Video-LLaVA all
+# freeze the pretrained vision encoder during planning SFT).  See
+# docs/2026-05-20_track_a0_hyperparam_audit.md row 12.
+# ============================================================================
+
+
+def _freeze_vision_encoder(model) -> int:
+    """Set ``requires_grad=False`` on every Qwen3VLVisionEncoder parameter.
+
+    Called from inside our wrapped ``parallelize_fn`` so the freeze is
+    applied to the post-parallelize model (DTensors / FSDP-sharded
+    tensors).  ``OptimizersContainer._build_param_groups`` then naturally
+    excludes the frozen params from the optimizer (it filters
+    ``param.requires_grad``).
+
+    Returns:
+        Number of vision-encoder parameters frozen (for logging).
+    """
+    if not hasattr(model, "vision_encoder") or model.vision_encoder is None:
+        # PP middle/last stages do not own the vision encoder; this is a
+        # no-op there.
+        return 0
+
+    n_frozen = 0
+    for p in model.vision_encoder.parameters():
+        if p.requires_grad:
+            p.requires_grad_(False)
+        n_frozen += p.numel()
+    return n_frozen
+
+
+def _wrap_parallelize_with_vision_freeze(parallelize_fn):
+    """Return a wrapped ``parallelize_fn`` that freezes the vision tower
+    after the original parallelization runs.  The wrapper preserves the
+    keyword-only signature expected by ``Trainer`` (see
+    torchtitan/trainer.py:398) and is idempotent.
+    """
+
+    def _wrapped(model, **kwargs):
+        out = parallelize_fn(model, **kwargs)
+        # ``parallelize_qwen3_vl`` returns the same nn.Module it was passed
+        # (in-place wrap), but be defensive in case upstream changes that.
+        target = out if isinstance(out, type(model)) else model
+        n_frozen = _freeze_vision_encoder(target)
+        if n_frozen:
+            logger.info(
+                f"Vision tower frozen: {n_frozen:,} parameters "
+                f"set requires_grad=False (AutoVLA-aligned SFT recipe)."
+            )
+        return out
+
+    return _wrapped
 
 
 # ============================================================================
@@ -309,6 +381,14 @@ def _build_trainer_config(
         overrides["max_length"] = int(max_length)
     _register_nuscenes_dataset(dataset_name, overrides)
 
+    # Get the native Qwen3-VL ModelSpec, then wrap its parallelize_fn so
+    # the vision tower gets frozen after parallelization (paper-aligned
+    # SFT recipe — see docs/2026-05-20_track_a0_hyperparam_audit.md row 12).
+    model_spec = model_registry(model_flavor)
+    model_spec.parallelize_fn = _wrap_parallelize_with_vision_freeze(
+        model_spec.parallelize_fn
+    )
+
     return Trainer.Config(
         # HF assets path: torchtitan's CheckpointManager reads
         # `<hf_assets_path>/tokenizer/` for the tokenizer at startup, and
@@ -321,12 +401,17 @@ def _build_trainer_config(
         # *** Native upstream Qwen3-VL-8B spec — no subclass, no lossy
         # adapter.  model_registry("8B") returns the fully-built ModelSpec
         # with parallelize_qwen3_vl + pipeline_qwen3_vl +
-        # Qwen3VLStateDictAdapter wired up. ***
-        model_spec=model_registry(model_flavor),
+        # Qwen3VLStateDictAdapter wired up.  parallelize_fn is wrapped above
+        # to add a post-parallelize vision-tower freeze step. ***
+        model_spec=model_spec,
         dataloader=_qwen3_vl_dataloader(dataset_name),
         optimizer=OptimizersContainer.Config(
             # AutoVLA recipe for 4-8 frame video horizon.
             lr=2e-5,
+            # Paper-aligned (AutoVLA §3.2 / audit doc rows 1, 6):
+            beta1=_BETA1,
+            beta2=_BETA2,
+            weight_decay=_WEIGHT_DECAY,
         ),
         lr_scheduler=LRSchedulersContainer.Config(
             # Warmup is RATIO-scaled to total steps per MEMORY.md
@@ -343,6 +428,9 @@ def _build_trainer_config(
         ),
         training=TrainingConfig(
             local_batch_size=local_batch_size,
+            # Paper-aligned global batch size (AutoVLA = 32; audit row 7).
+            # torchtitan auto-derives grad_accum = GBS / (LBS * dp_degree).
+            global_batch_size=_GLOBAL_BATCH_SIZE,
             seq_len=seq_len,
             steps=total_steps,
             mixed_precision_param="bfloat16",
