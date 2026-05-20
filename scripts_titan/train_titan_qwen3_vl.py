@@ -239,6 +239,7 @@ def _build_trainer_config(
     seq_len: int = 4096,
     total_steps: int = _TOTAL_STEPS,
     max_length: int | None = None,
+    model_flavor: str = "8B",
 ) -> Trainer.Config:
     """Shared Trainer.Config builder used by all variants.
 
@@ -264,10 +265,11 @@ def _build_trainer_config(
         tokenizer=MultiModalTokenizer.Config(**QWEN3_VL_SPECIAL_TOKENS),
         metrics=MetricsProcessor.Config(log_freq=10),
         # *** Native upstream Qwen3-VL-8B spec — no subclass, no lossy
-        # adapter.  model_registry("8B") returns the fully-built ModelSpec
-        # with parallelize_qwen3_vl + pipeline_qwen3_vl +
-        # Qwen3VLStateDictAdapter wired up. ***
-        model_spec=model_registry("8B"),
+        # adapter.  model_registry("<flavor>") returns the fully-built
+        # ModelSpec with parallelize_qwen3_vl + pipeline_qwen3_vl +
+        # Qwen3VLStateDictAdapter wired up.  Switchable flavor lets
+        # variants ("8B-perceiver-resampler", ...) pick a projector. ***
+        model_spec=model_registry(model_flavor),
         dataloader=_qwen3_vl_dataloader(dataset_name),
         optimizer=OptimizersContainer.Config(
             # AutoVLA recipe for 4-8 frame video horizon.
@@ -429,6 +431,57 @@ def qwen3_vl_8b_planning_fsdp_3cam() -> Trainer.Config:
     )
 
 
+def qwen3_vl_8b_planning_fsdp_3cam_resampler() -> Trainer.Config:
+    """FSDP-8 3-cam x 4-frame nuScenes planning with a Perceiver Resampler projector.
+
+    Same recipe as ``qwen3_vl_8b_planning_fsdp_3cam`` except the vision
+    projector is swapped for a 64-latent, 6-layer, temporal-aware
+    Perceiver Resampler (Flamingo-style; see
+    torchtitan_qwen25/torchtitan/models/qwen3_vl/perceiver_resampler_projector.py).
+
+    Rationale: this is part of the fusion-mechanism school comparison
+    (A.0 Linear vs A.1 Q-Former vs A.2 PixelShuffle vs **A.3 Perceiver
+    Resampler**, this factory). The Resampler's defining feature is a
+    learnable per-frame temporal positional embedding added to the KV
+    side of the cross-attention; for our 3-cam x 4f video VLA task this
+    inductive bias should help the latents pool over the temporal axis
+    more cleanly than Q-Former (which sees the input as a flat token
+    set).
+
+    The resampler pools the ~1680-token 3-cam x 4-frame visual sequence
+    into 64 fixed LM-dim tokens (~26x compression at the LM input
+    boundary). At deploy time this matches the Q-Former's KV-cache
+    footprint; the comparison is about quality at fixed token budget,
+    not about deployment efficiency.
+
+    Open issues (see docs/upstream_prs/007_torchtitan_qwen3_vl_resampler.md):
+      * The in-encoder 2x2 spatial merger still runs before the
+        Resampler, compounding compression. Pre-vs-post-merger as
+        Resampler input is the natural next ablation.
+      * Dataset/collator must emit exactly 64 <|image_pad|> placeholders
+        per visual item for the scatter step in
+        ``Qwen3VLModel._scatter_vision_embeds`` to line up. This is a
+        next-agent task -- shared open issue with the Q-Former sibling.
+      * Multi-cam temporal-index assignment: currently every cam shares
+        the same temporal-pos slots (cam-A frame-0 == cam-B frame-0 ==
+        temporal_pos[0]). Per-cam offset is an A/B for a future PR.
+    """
+    return _build_trainer_config(
+        dataset_name="nuscenes_planning_3cam_4f_seqlen8k_resampler",
+        planning_cams=["CAM_FRONT", "CAM_FRONT_LEFT", "CAM_FRONT_RIGHT"],
+        local_batch_size=1,
+        seq_len=8192,
+        max_length=8192,
+        parallelism=ParallelismConfig(
+            data_parallel_shard_degree=-1,
+            tensor_parallel_degree=1,
+            context_parallel_degree=1,
+            pipeline_parallel_degree=1,
+        ),
+        model_flavor="8B-perceiver-resampler",
+    )
+
+
 # ============================================================================
 # CPU-only smoke (config build only — no model materialization).
 # ============================================================================
@@ -439,11 +492,19 @@ if __name__ == "__main__":
         ("qwen3_vl_8b_planning_fsdp", qwen3_vl_8b_planning_fsdp),
         ("qwen3_vl_8b_planning_fsdp_1cam_8f", qwen3_vl_8b_planning_fsdp_1cam_8f),
         ("qwen3_vl_8b_planning_fsdp_3cam", qwen3_vl_8b_planning_fsdp_3cam),
+        (
+            "qwen3_vl_8b_planning_fsdp_3cam_resampler",
+            qwen3_vl_8b_planning_fsdp_3cam_resampler,
+        ),
         ("qwen3_vl_8b_planning_fsdp_tp", qwen3_vl_8b_planning_fsdp_tp),
     ]:
         cfg = fn()
         print(f"=== {name} ===")
         print("  Model spec:", cfg.model_spec.name, cfg.model_spec.flavor)
+        print(
+            "  Projector type:",
+            getattr(cfg.model_spec.model, "projector_type", "n/a"),
+        )
         print("  LR:", cfg.optimizer.lr)
         print("  Warmup steps:", cfg.lr_scheduler.warmup_steps)
         print("  Total steps:", cfg.training.steps)
