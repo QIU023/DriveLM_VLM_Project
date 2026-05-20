@@ -238,14 +238,20 @@ def _build_trainer_config(
     parallelism: ParallelismConfig,
     seq_len: int = 4096,
     total_steps: int = _TOTAL_STEPS,
+    max_length: int | None = None,
 ) -> Trainer.Config:
-    """Shared Trainer.Config builder used by all three variants.
+    """Shared Trainer.Config builder used by all variants.
 
     Per-variant differences are passed in via `parallelism`, `dataset_name`,
-    and `planning_cams`; the rest of the recipe is identical.
+    `planning_cams`, `seq_len`, and `max_length`; the rest of the recipe
+    is identical.  `max_length` controls per-sample token cap inside the
+    dataset (used to right-size truncation); `seq_len` is torchtitan's
+    batch sequence length (collator pads to this).  These should agree.
     """
     overrides = _common_overrides()
     overrides["planning_cams"] = planning_cams
+    if max_length is not None:
+        overrides["max_length"] = int(max_length)
     _register_nuscenes_dataset(dataset_name, overrides)
 
     return Trainer.Config(
@@ -381,6 +387,48 @@ def qwen3_vl_8b_planning_fsdp_tp() -> Trainer.Config:
     )
 
 
+def qwen3_vl_8b_planning_fsdp_3cam() -> Trainer.Config:
+    """FSDP-only 8-rank 3-cam x 4-frame nuScenes planning with generous
+    seq_len headroom (max_length=8192).
+
+    Visual context: CAM_FRONT + CAM_FRONT_LEFT + CAM_FRONT_RIGHT, 4 frames
+    each @ 2 Hz.  AutoVLA-aligned forward-arc set.  ``require_all_cams=True``
+    drops samples that are missing any of the three cam files on disk
+    (the streaming-extract path for FL/FR is the gating factor; see
+    scripts/stream_extract_nuscenes_3cam.sh).
+
+    Token budget (per-sample):
+      Each cam emits ~140 visual tokens / frame after Qwen3-VL's 2x2
+      spatial merger + 2-frame temporal merger.  3 cams * 4 frames * 140 =
+      ~1680 visual tokens; +chat-template / ego-speed preamble / multi-cam
+      labels / 14-token trajectory block / assistant wrapper => ~2.0-2.3k
+      tokens.  We pick max_length=seq_len=8192 to leave generous headroom
+      for per-frame token-count drift, future longer prompts, and any
+      vision-tower stride variation between Qwen3-VL builds.
+
+    Hyperparams: identical to qwen3_vl_8b_planning_fsdp (LR 2e-5, AutoVLA
+    warmup 1.74%, step-decay-via-linear @ 6.96% cadence, 10k steps).
+    The only deltas vs that factory are dataset_name and seq_len/max_length.
+
+    Parallelism: FSDP=8 mesh (no TP, no PP, no CP) — start simplest.  CP
+    stays at 1 (vision-attached CP open problem); PP stays at 1 (Agent B
+    pressure-test ongoing).
+    """
+    return _build_trainer_config(
+        dataset_name="nuscenes_planning_3cam_4f_seqlen8k",
+        planning_cams=["CAM_FRONT", "CAM_FRONT_LEFT", "CAM_FRONT_RIGHT"],
+        local_batch_size=1,
+        seq_len=8192,
+        max_length=8192,
+        parallelism=ParallelismConfig(
+            data_parallel_shard_degree=-1,  # All ranks FSDP-shard.
+            tensor_parallel_degree=1,
+            context_parallel_degree=1,
+            pipeline_parallel_degree=1,
+        ),
+    )
+
+
 # ============================================================================
 # CPU-only smoke (config build only — no model materialization).
 # ============================================================================
@@ -390,6 +438,7 @@ if __name__ == "__main__":
     for name, fn in [
         ("qwen3_vl_8b_planning_fsdp", qwen3_vl_8b_planning_fsdp),
         ("qwen3_vl_8b_planning_fsdp_1cam_8f", qwen3_vl_8b_planning_fsdp_1cam_8f),
+        ("qwen3_vl_8b_planning_fsdp_3cam", qwen3_vl_8b_planning_fsdp_3cam),
         ("qwen3_vl_8b_planning_fsdp_tp", qwen3_vl_8b_planning_fsdp_tp),
     ]:
         cfg = fn()
