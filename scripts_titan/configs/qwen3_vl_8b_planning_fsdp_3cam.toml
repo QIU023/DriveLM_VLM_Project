@@ -45,6 +45,10 @@ variant_note       = "3-cam x 4f with seq_len=max_length=8192 headroom"
 # We don't redefine dims here; ConfigManager pulls them from model_registry("8B").
 spec_module        = "torchtitan.models.qwen3_vl"
 flavor             = "8B"
+# Vision-to-LM projector. "linear" = stock Qwen3-VL PatchMerger (this file).
+# See qwen3_vl_8b_planning_fsdp_3cam_qformer.toml for the 64-query
+# Q-Former alternative (token-budget compressor for TRT deployment).
+projector_type     = "linear"
 vocab_size         = 151936
 dim                = 4096
 n_layers           = 36
