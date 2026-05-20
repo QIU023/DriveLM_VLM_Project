@@ -36,6 +36,15 @@ max_length: 8192
 
 # Keep AutoVLA-aligned hyperparams (lr, schedule, epochs, gbs) unchanged from
 # the base 1-cam config; the only training-side delta is visual context.
+#
+# Ratio-scaled schedule (memory feedback_paper_hyperparam_audit_gate
+# Expansion 2): paper AutoVLA used warmup=500 / 28750 = 1.74% and
+# decay_freq=2000 / 28750 = 6.96%. Our 3-epoch run = 2243 steps, so apply
+# the SAME ratios: warmup=39 (1.74%), lr_step_freq=156 (6.96%). Do NOT
+# copy paper absolutes — at 22% warmup the model never finishes warmup
+# before training ends.
+warmup_steps: 39
+lr_step_freq: 156
 
 # Reliability rule (memory feedback_ckpt_interval_half_hour): ckpt every
 # ~30 min wallclock. At ~5-8 s/step on Qwen2.5-VL-3B FSDP=8 + 3-cam × 4f,
