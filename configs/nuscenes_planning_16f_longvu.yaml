@@ -20,6 +20,10 @@ planning_num_past_frames: 16
 # LLaVA-Video / Apollo convention at 16-32 frames.
 learning_rate: 1.0e-5
 
+# Ratio-scaled schedule (2026-05-20): see 8f configs for derivation.
+warmup_steps: 39
+lr_step_freq: 156
+
 cross_frame_compressor:
   name: longvu
   kwargs:

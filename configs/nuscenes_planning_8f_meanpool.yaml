@@ -17,6 +17,15 @@ experiment: nusc_planning_8f_meanpool
 
 planning_num_past_frames: 8
 
+# Ratio-scaled schedule (2026-05-20): R1' chain copied AutoVLA absolutes
+# (warmup=500, lr_step_freq=2000) without scaling to our 2243-step run.
+# Paper ratios: warmup 500/28750=1.74%, decay 2000/28750=6.96%.
+# Applied to our total: warmup 39, lr_step_freq 156 -> ~14 decay events
+# matching paper's 14 decays. Without this, 22% of training is sub-peak
+# warmup and step-decay never fires.
+warmup_steps: 39
+lr_step_freq: 156
+
 cross_frame_compressor:
   name: temporal_pool
   kwargs:
