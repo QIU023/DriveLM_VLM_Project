@@ -439,7 +439,11 @@ def _build_trainer_config(
         parallelism=parallelism,
         checkpoint=CheckpointManager.Config(
             enable=True,
-            interval=1000,
+            # Memory rule feedback_ckpt_interval_half_hour: interval x step_time
+            # ~= 30 min wall-clock. With ~35-40s/step under FSDP=4 x TP=2 +
+            # grad_accum=8, interval=50 ≈ 30-33 min per save. ≤ 30 min recovery
+            # window on crash. Never use torchtitan default (1000 = ~10 h).
+            interval=50,
             last_save_model_only=False,
             export_dtype="bfloat16",
             keep_latest_k=2,
