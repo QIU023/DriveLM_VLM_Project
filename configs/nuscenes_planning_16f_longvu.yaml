@@ -16,6 +16,10 @@ experiment: nusc_planning_16f_longvu
 
 planning_num_past_frames: 16
 
+# Long-video LR scaling (2026-05-20): 2e-5 -> 1e-5 per LLaVA-NeXT-Video /
+# LLaVA-Video / Apollo convention at 16-32 frames.
+learning_rate: 1.0e-5
+
 cross_frame_compressor:
   name: longvu
   kwargs:
