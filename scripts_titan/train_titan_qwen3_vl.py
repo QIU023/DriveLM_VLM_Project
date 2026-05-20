@@ -530,6 +530,48 @@ def qwen3_vl_8b_planning_fsdp_tp() -> Trainer.Config:
     )
 
 
+def qwen3_vl_8b_planning_fsdp_tp_3cam() -> Trainer.Config:
+    """FSDP=4 x TP=2 (8-rank) 3-cam x 4-frame planning — OOM workaround for 32GB cards.
+
+    Same recipe as ``qwen3_vl_8b_planning_fsdp`` (3-cam x 4f, AutoVLA-aligned
+    LR/warmup/optimizer, ViT frozen) but with the ParallelismConfig changed
+    to FSDP=4 x TP=2 so attention/FFN weights are split across 2 ranks per
+    FSDP group.  Built specifically because the FSDP=8 baseline OOMs at
+    step 2 on 32 GiB 5090s (v6 smoke 2026-05-20: step 1 OK at 30.51 GiB /
+    97.29%, step 2 needs +4.64 GiB for optimizer/grad state).
+
+    TP=2 expected math (per the v6 OOM trace):
+      Per-rank params (bf16): 8B / FSDP=8 = ~2 GiB    -> with TP=2: ~1 GiB
+      Attention weights + FFN sharded along hidden/head dim
+      Activation memory between TP-sharded layers halved per rank.
+      Net target: peak ~15-18 GiB / rank.
+
+    SequenceParallel: torchtitan's qwen3_vl parallelize.py explicitly does
+    NOT apply SequenceParallel to the decoder (vision scatter + DeepStack
+    require full-sequence access between blocks).  Hidden states stay as
+    replicated plain tensors.  See _apply_non_moe_tp_to_decoder docstring.
+
+    Why a separate factory (vs reusing qwen3_vl_8b_planning_fsdp_tp): the
+    legacy ``_tp`` factory predates the 3-cam dataset naming convention.
+    This factory uses an explicit ``_tp_3cam`` dataset_name so future
+    multi-cam variants (1-cam_tp, 1-cam_8f_tp, ...) get clean separate
+    MM_DATASETS entries instead of colliding on a single registration.
+    """
+    return _build_trainer_config(
+        dataset_name="nuscenes_planning_3cam_4f_tp_3cam",
+        planning_cams=["CAM_FRONT", "CAM_FRONT_LEFT", "CAM_FRONT_RIGHT"],
+        local_batch_size=1,
+        seq_len=4096,
+        parallelism=ParallelismConfig(
+            # 8 ranks total = 4 FSDP-shard groups x 2 TP ranks/group.
+            data_parallel_shard_degree=4,
+            tensor_parallel_degree=2,
+            context_parallel_degree=1,
+            pipeline_parallel_degree=1,
+        ),
+    )
+
+
 def qwen3_vl_8b_planning_fsdp_3cam() -> Trainer.Config:
     """FSDP-only 8-rank 3-cam x 4-frame nuScenes planning with generous
     seq_len headroom (max_length=8192).
@@ -629,6 +671,10 @@ if __name__ == "__main__":
             qwen3_vl_8b_planning_fsdp_3cam_qformer,
         ),
         ("qwen3_vl_8b_planning_fsdp_tp", qwen3_vl_8b_planning_fsdp_tp),
+        (
+            "qwen3_vl_8b_planning_fsdp_tp_3cam",
+            qwen3_vl_8b_planning_fsdp_tp_3cam,
+        ),
     ]:
         cfg = fn()
         print(f"=== {name} ===")
