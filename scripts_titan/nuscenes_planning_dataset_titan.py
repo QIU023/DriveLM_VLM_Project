@@ -93,14 +93,31 @@ QWEN3_VL_IMAGE_STD = (0.5, 0.5, 0.5)
 # torchtitan/models/qwen3_vl/config_registry._qwen3_vl_dataloader).
 QWEN3_VL_PATCH_SIZE = 16
 QWEN3_VL_SPATIAL_MERGE_SIZE = 2
-# Qwen3-VL HF processor default pixel budget for video frames; matches
-# what the HF AutoProcessor uses internally when computing the
-# <|video_pad|> token count, so our pre-patchify (T,H,W,C) tensor agrees
-# with input_ids that the same processor returns.  These values are also
-# the defaults in torchtitan's stock _qwen3_vl_dataloader, so the
-# downstream MultiModalCollator's patcher consumes a matching grid.
-QWEN3_VL_VIDEO_MIN_PIXELS = 65536
-QWEN3_VL_VIDEO_MAX_PIXELS = 16777216
+QWEN3_VL_TEMPORAL_PATCH_SIZE = 2
+
+# Per-frame pixel budget for ``process_video`` (image-mode smart_resize).
+# We pick 294,912 px (≈384x704 at 9:16 aspect) so that 3-cam * 4-frame
+# samples emit ~528 visual tokens per cam after the 2x2 spatial merger
+# (2 temporal patches * 12 * 22), giving ~1584 visual tokens total per
+# sample -- comfortably within the 8192 seq_len cap of the 3-cam config.
+#
+# The HF Qwen3VLVideoProcessor uses a *volumetric* budget (size.longest_
+# _edge), checking ``t_bar * h_bar * w_bar <= max_pixels`` where t_bar =
+# ceil(num_frames / temporal_factor) * temporal_factor = num_frames here
+# (4 past frames, temporal_factor=2 -> t_bar=4).  We therefore set the HF
+# processor's budget to ``QWEN3_VL_IMAGE_MAX_PIXELS * num_frames`` so the
+# resize geometry agrees with ours frame-for-frame.  Without this, HF's
+# smart_resize lands at 896x1600 (default budget 25M) while ours lands
+# at a smaller resolution -- causing the <|video_pad|> placeholder count
+# in input_ids to disagree with the patch count emitted by
+# MultiModalCollator (observed in smoke v5 as "Number of vision placeholder
+# tokens (8101) does not match number of vision tokens (8400)").
+QWEN3_VL_IMAGE_MIN_PIXELS = 16 * 16  # 256 px (one merged token)
+QWEN3_VL_IMAGE_MAX_PIXELS = 294_912  # 4 * (32 * 32) * 72 = 384x704-ish
+# HF video-processor shortest/longest edge (volumetric in (t, h, w))
+QWEN3_VL_VIDEO_MIN_PIXELS = 4096        # HF lower bound; never binding here
+# QWEN3_VL_VIDEO_MAX_PIXELS is computed per-sample as
+# ``QWEN3_VL_IMAGE_MAX_PIXELS * num_frames`` (see _build_sample).
 
 
 def _pil_frames_to_uint8_thwc(frames: list[Image.Image]) -> torch.Tensor:
@@ -271,11 +288,35 @@ class NuScenesPlanningDatasetTitan(IterableDataset):
             )
             for clip in clips_pil
         ]
+        # The HF Qwen3VLVideoProcessor's smart_resize uses a volumetric
+        # (t * h * w) budget controlled by ``size.longest_edge``.  We force
+        # it to use the same per-frame resolution as torchtitan's
+        # ``process_video`` (below) by setting longest_edge to
+        # ``QWEN3_VL_IMAGE_MAX_PIXELS * t_bar`` where t_bar = ceil(num_frames
+        # /temporal_factor) * temporal_factor.  This guarantees the
+        # <|video_pad|> count baked into ``input_ids`` here matches the
+        # patch count emitted by MultiModalCollator from our (T,H,W,C)
+        # tensor downstream.  Without this alignment the model's
+        # _scatter_vision_embeds raises e.g. "Number of vision placeholder
+        # tokens (8101) does not match number of vision tokens (8400)".
+        num_frames = max((len(c) for c in clips_pil), default=1)
+        t_bar = (
+            ((num_frames + QWEN3_VL_TEMPORAL_PATCH_SIZE - 1)
+             // QWEN3_VL_TEMPORAL_PATCH_SIZE) * QWEN3_VL_TEMPORAL_PATCH_SIZE
+        )
+        hf_video_max_pixels = int(QWEN3_VL_IMAGE_MAX_PIXELS * t_bar)
+        hf_video_min_pixels = int(QWEN3_VL_VIDEO_MIN_PIXELS)
         inputs = self.processor(
             text=[text],
             videos=clips_pil,
             video_metadata=metadata,
             return_tensors="pt",
+            videos_kwargs={
+                "size": {
+                    "longest_edge": hf_video_max_pixels,
+                    "shortest_edge": hf_video_min_pixels,
+                },
+            },
         )
         input_ids = inputs["input_ids"].squeeze(0)
 
@@ -348,8 +389,8 @@ class NuScenesPlanningDatasetTitan(IterableDataset):
                 video_uint8,
                 patch_size=QWEN3_VL_PATCH_SIZE,
                 merge_size=QWEN3_VL_SPATIAL_MERGE_SIZE,
-                min_pixels=QWEN3_VL_VIDEO_MIN_PIXELS,
-                max_pixels=QWEN3_VL_VIDEO_MAX_PIXELS,
+                min_pixels=QWEN3_VL_IMAGE_MIN_PIXELS,
+                max_pixels=QWEN3_VL_IMAGE_MAX_PIXELS,
                 image_mean=self.image_mean,
                 image_std=self.image_std,
             )  # (T, H', W', C) float32, H' and W' multiples of 32
