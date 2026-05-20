@@ -210,7 +210,7 @@ def _common_overrides() -> dict:
         # HF assets — same canonical path as torchtitan's stock 8B config.
         "hf_id": QWEN3_VL_8B_HF_ID,
         "infos_path": os.path.join(
-            repo_root, "data_processed", "nuscenes_infos_temporal_train.pkl"
+            repo_root, "data", "uniad_infos", "nuscenes_infos_temporal_train.pkl"
         ),
         "nusc_root": os.path.join(repo_root, "data", "nuscenes"),
         # Processor is resolved lazily inside _nuscenes_loader().
