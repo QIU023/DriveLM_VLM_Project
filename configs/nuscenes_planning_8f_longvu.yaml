@@ -16,6 +16,10 @@ experiment: nusc_planning_8f_longvu
 
 planning_num_past_frames: 8
 
+# Ratio-scaled schedule (2026-05-20): see 8f_meanpool config for derivation.
+warmup_steps: 39
+lr_step_freq: 156
+
 cross_frame_compressor:
   name: longvu
   kwargs:

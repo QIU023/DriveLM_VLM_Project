@@ -20,10 +20,13 @@ planning_num_past_frames: 16
 
 # Long-video LR scaling (2026-05-20): paper convention drops LR from 2e-5
 # (Video-LLaVA 8f, AutoVLA 4f) to 1e-5 at 16-32 frames. Sources:
-# LLaVA-NeXT-Video, LLaVA-Video, Apollo all use 1e-5 at 16-32f. Keep
-# schedule (step-decay x0.98/2000) and warmup-500 from base unchanged;
-# only the peak is rescaled.
+# LLaVA-NeXT-Video, LLaVA-Video, Apollo all use 1e-5 at 16-32f.
 learning_rate: 1.0e-5
+
+# Ratio-scaled schedule (2026-05-20): see 8f configs for derivation.
+# AutoVLA ratios warmup 1.74% / decay 6.96% applied to 2243 total steps.
+warmup_steps: 39
+lr_step_freq: 156
 
 cross_frame_compressor:
   name: temporal_pool
