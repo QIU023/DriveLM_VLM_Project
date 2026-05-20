@@ -14,14 +14,31 @@ Next steps split into two parallel tracks:
 1. **Track L (Long-video compression ablation)** — finish ablation matrix
    {mean-pool, VTM, LongVU} × {8 frames} on R1' baseline. Drop 16 / 32-frame
    single-cam ablation as not paper-realistic for our scale.
-2. **Track P (5D Parallelism on Qwen2.5-VL)** — adapt torchtitan's `qwen3_vl`
-   → Qwen2.5-VL via subclass, add PP + CP support (PR-able to torchtitan
-   upstream). 3 sub-agents working in parallel on CPU-only code; smoke later
-   in authorised 10-20 min GPU windows between ablation configs.
+2. **Track P (5D Parallelism on Qwen3-VL-8B native)** — use torchtitan's
+   native `qwen3_vl` (dense 8B) with Agent B's PP wiring + Agent C's CP wiring
+   (text-only). **No subclass; no Qwen2.5-VL porting.** Vision-CP is an
+   industry-wide open problem — see `2026-05-20_vision_cp_open_problem.md`.
+   Production VLA scale is hit via FSDP + TP + PP + pre-LM compression (the
+   SOTA workaround).
 
-After both tracks converge, do **"production-scale" AD VLA training**:
-**3-cam × 16-frame uncompressed via CP** — matches rumored XPeng/Tesla
-production VLA visual scale, infeasible without CP due to attention memory.
+**Direction change 2026-05-20 ~12:00Z** — abandon Qwen2.5-VL subclass approach
+(Agent A): state-dict adapter was lossy for the vision tower (RMSNorm vs
+LayerNorm, gated MLP, windowed attention). Switching to **Qwen3-VL-8B dense
+from HF pretrained**, since torchtitan natively supports it and 8B is
+production-scale (matches DriveVLM 7B, exceeds AutoVLA 3B).
+
+**Direction change 2026-05-20 ~13:00Z (Track A focus)** — split into:
+- **Track A (committed, all in)**: Qwen3-VL-8B AD VLA on nuScenes planning,
+  parallelism **F+T+P+SP**. Vision-CP is industry open problem, NOT pursued.
+  MoE/EP NOT pursued (Tesla/Wayve/LiAuto AD prod is dense, not MoE — earlier
+  claim "prod is MoE" retracted).
+- **Track B (doc only, not run)**: CP demo on pure-text task + EP demo on
+  Qwen3-30B-A3B MoE. Recorded in `docs/upstream_prs/004_*.md` and the
+  vision-CP open-problem writeup for completeness; **no GPU spent on them**.
+
+Track A target: **Qwen3-VL-8B, 3-cam × {4f raw, 16f + best-compressor}**,
+FSDP + TP + PP + SP. Compressor choice driven by 8f single-cam ablation
+winner (mean-pool / VTM / LongVU).
 
 ## Why dropped 32-frame single-cam ablation
 
@@ -75,6 +92,12 @@ demo target is multi-cam (3-cam × 8-16 frames), NOT single-cam × 128 frames.
 ### Dropped from earlier plan
 
 - 16-frame and 32-frame **single-cam** ablation — not paper-realistic
+- **(confirmed 2026-05-20)** 16-frame single-cam compression runs (mean-pool /
+  VTM / LongVU) — **dropped**. 8f three-way (mean-pool / VTM / LongVU) is
+  enough to pick the compressor winner; 16f single-cam is not paper-realistic
+  (DriveVLM 8-cam, AutoVLA 3-cam; nobody does 1-cam × 16f). Saves ~9h GPU for
+  Track A. Configs `configs/nuscenes_planning_16f_*.yaml` left in tree as
+  reference but not launched.
 - R1' v2 (warmup-corrected 4-frame retrain) — empirical R1' was already
   paper-grade despite over-warmup; not worth 2.5 h GPU to repeat for
   marginal improvement
@@ -83,6 +106,12 @@ demo target is multi-cam (3-cam × 8-16 frames), NOT single-cam × 128 frames.
 - PP for 3B Qwen2.5-VL — unnecessary; PP value-add is at 8B+ or multi-node.
   Agent B work remains valuable as PR-able torchtitan upstream contribution
   but won't be used in our specific run
+- **MoE / EP demo (Qwen3-30B-A3B)** — was previously listed as 5D coverage;
+  retracted because (a) AD prod (Tesla, Wayve, LiAuto) is dense, not MoE,
+  and (b) MoE routing adds latency variance unfit for on-vehicle inference.
+  Recorded in upstream_prs/004 as Track B doc.
+- **CP-on-AD-VLA** — vision-CP is industry open problem; not solved here.
+  See `docs/2026-05-20_vision_cp_open_problem.md`.
 
 ## Architecture decisions
 
