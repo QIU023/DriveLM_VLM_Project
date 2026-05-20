@@ -105,13 +105,34 @@ def _resolve_processor(hf_id: str):
 
 
 def _nuscenes_loader(path: str, **kwargs):
-    """Construct the NuScenesPlanningDatasetTitan.
+    """Construct the NuScenesPlanningDatasetTitan, wrapped as HF IterableDataset.
 
     Called by torchtitan's HuggingFaceMultiModalDataset.__init__ as
     `dataset_loader(path)`.  We pull the keyword overrides from the
     module-level registry, resolve the HF processor lazily, and instantiate
     the IterableDataset.
+
+    torchtitan's HuggingFaceMultiModalDataset wraps the returned dataset
+    with ``datasets.distributed.split_dataset_by_node``, which requires a
+    HF ``datasets.IterableDataset`` (not a plain ``torch.utils.data.
+    IterableDataset``).  We therefore wrap our underlying torch
+    IterableDataset with ``datasets.IterableDataset.from_generator`` so
+    the HF helper can introspect ``_distributed``/``_ex_iterable`` and
+    apply per-rank sharding via ``StepExamplesIterable``.
+
+    Sharding contract: our underlying dataset is built with
+    dp_rank=0/dp_world_size=1 (no internal sharding) and HF's
+    split_dataset_by_node handles per-rank slicing externally.  For
+    world_size>1 with a single-shard generator, HF uses
+    StepExamplesIterable which keeps 1/world_size examples per rank
+    (each rank's generator yields all samples; non-owning ones are
+    discarded).  This is correct but reads all source frames on every
+    rank — a future optimisation is to pass ``gen_kwargs={"shards":
+    [...]}`` so HF can shard ranges instead.  For the world_size=1
+    smoke this has no effect.
     """
+    from datasets import IterableDataset as HFIterableDataset
+
     from .nuscenes_planning_dataset_titan import NuScenesPlanningDatasetTitan
 
     overrides = _NUSCENES_DATASET_OVERRIDES.get(path)
@@ -131,7 +152,25 @@ def _nuscenes_loader(path: str, **kwargs):
     # Build the dataset, dropping our own bookkeeping keys.
     ds_kwargs = {k: v for k, v in overrides.items() if k not in ("hf_id",)}
     ds_kwargs["processor"] = processor
-    return NuScenesPlanningDatasetTitan(**ds_kwargs)
+    inner_ds = NuScenesPlanningDatasetTitan(**ds_kwargs)
+
+    # Wrap as a HF streaming IterableDataset so torchtitan's
+    # split_dataset_by_node (which expects the HF surface area —
+    # ``_distributed``/``_ex_iterable``/``_info``/...) accepts it.  We
+    # pass ``features=None`` so HF stays lazy and doesn't try to
+    # introspect our heterogeneous dict (input_ids LongTensor, labels
+    # LongTensor, positions LongTensor, pixel_values_videos
+    # list[Tensor]); the schema isn't used because torchtitan's
+    # sample_processor is a passthrough.
+    def _gen():
+        # Re-yield through the inner dataset's __iter__.  Captured by
+        # closure; from_generator wraps this as a fresh generator on
+        # every iteration, so each epoch starts from the beginning of
+        # ``inner_ds.__iter__`` (which itself loops infinitely when
+        # ``infinite=True``).
+        yield from inner_ds
+
+    return HFIterableDataset.from_generator(_gen)
 
 
 def _nuscenes_passthrough_processor(sample, **kwargs):
