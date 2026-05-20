@@ -36,6 +36,12 @@ max_length: 8192
 
 # Keep AutoVLA-aligned hyperparams (lr, schedule, epochs, gbs) unchanged from
 # the base 1-cam config; the only training-side delta is visual context.
+
+# Reliability rule (memory feedback_ckpt_interval_half_hour): ckpt every
+# ~30 min wallclock. At ~5-8 s/step on Qwen2.5-VL-3B FSDP=8 + 3-cam × 4f,
+# save_every=50 ≈ 4-7 min/ckpt → max recovery window ≤ 7 min.
+save_every: 50
+val_every: 50
 # Ckpt cadence — keep_latest_k=2 to mind disk (3-cam ckpts are the same size
 # as 1-cam since vision tower is frozen and not saved, but be tighter anyway).
 keep_latest_k: 2
