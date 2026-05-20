@@ -1,0 +1,72 @@
+base_config: nuscenes_planning_3cam_full.yaml
+
+# ============================================================================
+# Track A.1 (REDO): Q-Former-64 projector (BLIP-2-style, projector replacement)
+# ============================================================================
+# Extends the 3-cam full SFT recipe by swapping the stock Qwen2.5-VL linear
+# PatchMerger for a 64-query BLIP-2-style Q-Former. **This is a projector
+# replacement** — i.e. a member of the fusion-mechanism ablation set
+# (A.0 linear / A.1 Q-Former / A.2 PixelShuffle / A.3 Resampler).
+#
+# IT IS NOT A CROSS-FRAME COMPRESSOR. The earlier branch `qformer_hf_port`
+# (commit 6442e63) wired Q-Former into the `cross_frame_compressor` registry
+# path; that was methodologically wrong because cross-frame compression
+# (VTM / LongVU / mean-pool) is a SEPARATE ablation axis from fusion
+# mechanism. This redo on branch `qformer_hf_projector_port` supersedes 008.
+#
+# Deltas vs A.3 (Resampler-64):
+#   1. NO temporal positional encoding (Q-Former has no per-frame embed).
+#   2. NO latent self-attention. Each block is just
+#      cross_attn(queries <- visual) + FFN.
+#   3. Cross-attn KV input dim == LM hidden dim (post-merger entry); the
+#      Resampler uses the same convention.
+#
+# Forward path:
+#   1. ``model.visual`` (Qwen2.5-VL vision encoder + PatchMerger) runs under
+#      no_grad and emits (total_post_tokens, lm_dim=2048) — exactly as in the
+#      stock baseline.
+#   2. ``forward_with_video_qformer_projector`` (scripts/train_lora.py)
+#      monkey-patches ``get_video_features`` to splice in:
+#         a. per-item reshape (num_items, t*h_post*w_post, 2048),
+#         b. per-item Q-Former forward -> (1, 64, 2048),
+#      then trims placeholders from ~140 per cam down to 64 per cam, and
+#      rebuilds video_grid_thw as (1, h_pre, w_pre) with h_post * w_post = 64.
+#
+# Token budget: 192 LM-input visual tokens (3 cams * 64) vs ~1680 baseline,
+# ~8.75x compression.
+
+experiment: nuscenes_planning_3cam_3b_qformer_projector_sft
+
+# Wire the Q-Former projector. train_lora.py routes the planning forward
+# through forward_with_video_qformer_projector when projector_type=qformer.
+projector_type: qformer
+
+qformer:
+  # vit_dim: post-merger features are at lm_dim=2048 for Qwen2.5-VL-3B.
+  # The trainer auto-resolves this from model.config.text_config.hidden_size
+  # when not specified; pinning explicitly here for paper-audit clarity.
+  vit_dim: 2048
+  lm_dim: 2048
+  # internal_dim DECOUPLED from lm_dim to bound param count (~80-130M target).
+  # BLIP-2-base uses 768; we use 1024 for driving-scene headroom.
+  internal_dim: 1024
+  # 64 queries per cam (BLIP-2-base: 32). 3 cams -> 192 LM-input tokens / sample.
+  num_queries: 64
+  # 6 layers (BLIP-2-base: 12) — halved because we train from scratch on
+  # ~24K nuScenes samples vs BLIP-2's 129M caption pairs.
+  num_layers: 6
+  # head_dim = internal_dim / n_heads = 1024 / 8 = 128 (ViT-base default at
+  # width=1024).
+  n_heads: 8
+  # ffn_mult=4 matches BLIP-2.
+  ffn_mult: 4
+  layer_norm_eps: 1.0e-6
+  dropout: 0.0
+
+# NO cross_frame_compressor entry — Q-Former here is the projector, not a
+# temporal compressor. These two registries are mutually exclusive (the
+# trainer raises if both are set).
+
+# Token budget: 192 LM-input visual tokens (down from ~1680 with linear)
+# + ~600 text/traj/chat-template -> well under 8192 max_length inherited
+# from 3cam_full base.

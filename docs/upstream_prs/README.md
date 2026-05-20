@@ -12,6 +12,8 @@ result, reviewer hints, and local refs.
 | 002 | pytorch/torchtitan | Qwen3-VL PP wiring (DeepStack-aware, vision-pinned stage 0) | drafted locally |
 | 003 | pytorch/torchtitan | Qwen3-VL CP wiring (text-only path; vision raises NotImplementedError) | drafted locally |
 | 004 | (research note, not PR) | Vision-CP open problem in VLM training | doc only |
+| 008  | QIU023/DriveLM_VLM_Project | HF Q-Former wired as cross_frame_compressor (Track A.1) | **DEPRECATED** — branch `qformer_hf_port`; superseded by 008b (wrong ablation axis: conflated fusion mechanism with cross-frame compression) |
+| 008b | QIU023/DriveLM_VLM_Project | HF Q-Former as PROJECTOR replacement (Track A.1 redo) | drafted locally + CPU smoke; pending GPU SFT; branch `qformer_hf_projector_port` |
 
 ## Conventions
 
