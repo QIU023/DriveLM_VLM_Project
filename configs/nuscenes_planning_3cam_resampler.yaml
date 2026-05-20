@@ -1,0 +1,40 @@
+base_config: nuscenes_planning_3cam_full.yaml
+
+# ============================================================================
+# Track A.3: Perceiver Resampler-64 projector (Flamingo-style, temporal-aware)
+# ============================================================================
+# Extends the 3-cam full SFT recipe by swapping the stock Qwen2.5-VL linear
+# PatchMerger for a 64-latent Perceiver Resampler with per-frame temporal
+# positional encoding. Temporal-aware sibling of the Q-Former (Track A.1).
+#
+# Deltas vs Q-Former:
+#   1. Latent self-attention per block (Q-Former skips inter-latent attn).
+#   2. Learnable per-frame temporal_pos[F] embedding added to KV BEFORE
+#      every cross-attention. Cams share T (cam-A f0 == cam-B f0 ==
+#      temporal_pos[0]), so 3 cams * 4 frames -> 4 distinct temporal indices.
+
+experiment: nuscenes_planning_3cam_3b_resampler_sft
+
+# Wire the resampler projector. train_lora.py routes the planning forward
+# through forward_with_video_resampler_projector when projector_type=resampler.
+projector_type: resampler
+
+resampler:
+  # in_features matches post-merger Qwen2.5-VL output (== lm_dim for 3B).
+  in_features: 2048
+  lm_dim: 2048
+  # Internal width DECOUPLED from lm_dim to hit 80-110M param target.
+  # internal_dim=1024 (half of lm_dim) gives ~90M; internal_dim=2048 ~330M.
+  internal_dim: 1024
+  num_latents: 64    # 64 per cam; 3 cams -> 192 LM-input tokens / sample
+  num_layers: 6      # Flamingo paper uses 6
+  n_heads: 8         # head_dim = 128 (internal_dim 1024 / 8)
+  ffn_mult: 2        # FFN hidden = 2048 (2x internal_dim)
+  layer_norm_eps: 1.0e-6
+  # nn.Embedding(t_max, in_features). 4 frames in our config; 32 is
+  # saturated with headroom for long-horizon (8f/16f) variants.
+  t_max: 32
+
+# Token budget: 192 LM-input visual tokens (down from ~1680 with linear)
+# + ~600 text/traj/chat-template -> well under 8192 max_length inherited
+# from 3cam_full base.
