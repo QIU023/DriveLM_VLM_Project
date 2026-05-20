@@ -78,6 +78,9 @@ from trajectory_tokenizer import (  # type: ignore  # noqa: E402
 from torchtitan.hf_datasets.multimodal.utils.video import (  # noqa: E402
     process_video,
 )
+from torchtitan.hf_datasets.multimodal.utils.image import (  # noqa: E402
+    smart_resize as _titan_smart_resize,
+)
 
 
 # Default image normalisation for the torchtitan vision pipeline.
@@ -269,54 +272,82 @@ class NuScenesPlanningDatasetTitan(IterableDataset):
         text = self.processor.apply_chat_template(
             proc_messages, tokenize=False, add_generation_prompt=False
         )
-        # 5. Tokenize TEXT-ONLY (no images): we ignore the processor's
-        # vision pipeline.  apply_chat_template has already inserted the
-        # <|vision_start|><|video_pad|>*N<|vision_end|> spans, but the
-        # number of <|video_pad|> tokens needs to match what torchtitan's
-        # collator will produce when it patchifies our videos.  To keep
-        # the contract intact, we run the FULL processor here (text + vid
-        # pixel tensors that we discard) but only keep input_ids; this
-        # guarantees the per-video <|video_pad|> count matches.
+        # 5. Pre-resize the PIL clips with EXACTLY the same smart_resize
+        # geometry that step 10's ``process_video`` will apply, THEN feed
+        # them to the HF processor.  This makes the <|video_pad|> count
+        # the processor bakes into ``input_ids`` agree by construction
+        # with the patch count the MultiModalCollator will emit from
+        # step 10's (T, H', W', C) tensor.
+        #
+        # Why this (option-c) over a pure ``videos_kwargs={"size": ...}``
+        # override (the earlier e842eba approach):
+        #   * The HF Qwen3VLVideoProcessor's volumetric ``longest_edge``
+        #     budget vs torchtitan's per-frame ``max_pixels`` budget are
+        #     numerically equal only when num_frames=t_bar (which is true
+        #     for our 4-frame past-window setting).  Pre-resizing to the
+        #     SAME (H', W') decoupled this from the volumetric/per-frame
+        #     algorithm choice, so any future change to one budget cannot
+        #     drift the other.
+        #   * It also drops one round of bicubic resampling inside the
+        #     processor (HF resizes from 900x1600 down to 384x704; we now
+        #     resize once before the processor sees the frames so HF
+        #     finds the dims already round-multiples of 32 and skips its
+        #     own resize).  Marginal latency win; main reason is robustness.
+        num_frames = max((len(c) for c in clips_pil), default=1)
+        factor = QWEN3_VL_PATCH_SIZE * QWEN3_VL_SPATIAL_MERGE_SIZE  # 32
+
+        # Determine the target (H', W') once from the first frame of the
+        # first cam (all cams' frames are aligned to a single (h0, w0)
+        # upstream in ``_pil_frames_to_uint8_thwc``, and each cam clip
+        # shares a single (height, width) within the same scene).
+        h0 = clips_pil[0][0].height
+        w0 = clips_pil[0][0].width
+        target_h, target_w = _titan_smart_resize(
+            h0,
+            w0,
+            factor=factor,
+            min_pixels=QWEN3_VL_IMAGE_MIN_PIXELS,
+            max_pixels=QWEN3_VL_IMAGE_MAX_PIXELS,
+        )
+
+        resized_clips_pil: list[list[Image.Image]] = []
+        for clip in clips_pil:
+            resized_clip: list[Image.Image] = []
+            for frame in clip:
+                if frame.mode != "RGB":
+                    frame = frame.convert("RGB")
+                if (frame.height, frame.width) != (target_h, target_w):
+                    # PIL.Image.resize takes (width, height); BICUBIC matches
+                    # torchvision.v2's BICUBIC used in process_video.
+                    frame = frame.resize(
+                        (target_w, target_h), Image.BICUBIC
+                    )
+                resized_clip.append(frame)
+            resized_clips_pil.append(resized_clip)
+
+        # 5b. Tokenize via the FULL processor on the PRE-RESIZED clips: the
+        # processor's smart_resize is now a no-op (target_h % factor == 0
+        # and target_w % factor == 0 by construction), so its internal
+        # grid_thw matches step 10's patch grid exactly.  We discard the
+        # processor's video pixel tensors and only keep input_ids; the
+        # pixel tensors will be re-emitted from step 10 below using the
+        # same (target_h, target_w) geometry.
         from transformers.video_utils import VideoMetadata  # local import
         metadata = [
             VideoMetadata(
                 total_num_frames=len(clip),
                 fps=2.0,
                 frames_indices=list(range(len(clip))),
-                height=clip[0].height,
-                width=clip[0].width,
+                height=target_h,
+                width=target_w,
             )
-            for clip in clips_pil
+            for clip in resized_clips_pil
         ]
-        # The HF Qwen3VLVideoProcessor's smart_resize uses a volumetric
-        # (t * h * w) budget controlled by ``size.longest_edge``.  We force
-        # it to use the same per-frame resolution as torchtitan's
-        # ``process_video`` (below) by setting longest_edge to
-        # ``QWEN3_VL_IMAGE_MAX_PIXELS * t_bar`` where t_bar = ceil(num_frames
-        # /temporal_factor) * temporal_factor.  This guarantees the
-        # <|video_pad|> count baked into ``input_ids`` here matches the
-        # patch count emitted by MultiModalCollator from our (T,H,W,C)
-        # tensor downstream.  Without this alignment the model's
-        # _scatter_vision_embeds raises e.g. "Number of vision placeholder
-        # tokens (8101) does not match number of vision tokens (8400)".
-        num_frames = max((len(c) for c in clips_pil), default=1)
-        t_bar = (
-            ((num_frames + QWEN3_VL_TEMPORAL_PATCH_SIZE - 1)
-             // QWEN3_VL_TEMPORAL_PATCH_SIZE) * QWEN3_VL_TEMPORAL_PATCH_SIZE
-        )
-        hf_video_max_pixels = int(QWEN3_VL_IMAGE_MAX_PIXELS * t_bar)
-        hf_video_min_pixels = int(QWEN3_VL_VIDEO_MIN_PIXELS)
         inputs = self.processor(
             text=[text],
-            videos=clips_pil,
+            videos=resized_clips_pil,
             video_metadata=metadata,
             return_tensors="pt",
-            videos_kwargs={
-                "size": {
-                    "longest_edge": hf_video_max_pixels,
-                    "shortest_edge": hf_video_min_pixels,
-                },
-            },
         )
         input_ids = inputs["input_ids"].squeeze(0)
 
@@ -374,17 +405,18 @@ class NuScenesPlanningDatasetTitan(IterableDataset):
                         labels[bin_x_pos] = -100
                         labels[bin_y_pos] = -100
 
-        # 10. Convert PIL clips to (T, H, W, C) tensors, smart-resize to
-        # the Qwen3-VL grid (multiples of patch_size*merge_size = 32),
-        # and normalize via torchtitan's shared `process_video` helper.
-        # The smart-resize pixel budget matches the HF Qwen3-VL processor
-        # so the per-video <|video_pad|> count baked into ``input_ids``
-        # (step 5 above) agrees with the patch grid the MultiModalCollator
-        # produces from this tensor.  Without this resize, nuScenes
-        # frames (900x1600) fail the patch reshape because 900 % 32 != 0.
+        # 10. Convert PRE-RESIZED PIL clips to (T, H', W', C) tensors and
+        # normalize via torchtitan's shared `process_video` helper.  The
+        # clips have already been smart-resized to (target_h, target_w) in
+        # step 5 above (both multiples of factor=patch_size*merge_size=32),
+        # so process_video's internal smart_resize is a no-op here; it
+        # just runs uint8 -> float32 normalization + channel-last permute.
+        # By using the same PIL frames the HF processor saw in step 5b, we
+        # guarantee the patch count emitted from this tensor agrees
+        # bit-for-bit with the <|video_pad|> count in ``input_ids``.
         pixel_values_videos: list[torch.Tensor] = []
-        for clip in clips_pil:
-            video_uint8 = _pil_frames_to_uint8_thwc(clip)  # (T, H, W, C) uint8
+        for clip in resized_clips_pil:
+            video_uint8 = _pil_frames_to_uint8_thwc(clip)  # (T, H', W', C) uint8
             video = process_video(
                 video_uint8,
                 patch_size=QWEN3_VL_PATCH_SIZE,
