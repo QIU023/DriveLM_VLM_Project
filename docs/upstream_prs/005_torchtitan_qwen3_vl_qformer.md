@@ -18,11 +18,11 @@ This is **explicitly a token-budget vs L2 tradeoff for deployment**, not a fusio
 
 | File | Change | LOC (approx) |
 |---|---|---|
-| `torchtitan_qwen25/torchtitan/models/qwen3_vl/qformer_projector.py` | **new** — `Qwen3VLQFormerProjector` module + supporting `_QFormerBlock` / `_QFormerCrossAttention` / `_QFormerFFN` building blocks; full Configurable wiring; CPU-safe SDPA attention path with optional KV padding mask | +330 |
-| `torchtitan_qwen25/torchtitan/models/qwen3_vl/__init__.py` | add `Qwen3VLQFormerProjector` import + export; new `_vl_qformer_config(...)` helper; new `_8b_qformer()` config factory; registered as `"8B-qformer"` flavor; `dataclasses` import | +60 / -1 |
-| `torchtitan_qwen25/torchtitan/models/qwen3_vl/model.py` | add `projector_type: str = "linear"` and `qformer: Qwen3VLQFormerProjector.Config | None = None` to `Qwen3VLModel.Config`; switch in `__init__` to instantiate `self.qformer_projector` when `projector_type == "qformer"`; raises on bad value | +30 |
+| `torchtitan_qwen25/torchtitan/models/qwen3_vl/qformer_projector.py` | **new** — `Qwen3VLQFormerProjector` module + supporting `_QFormerBlock` / `_QFormerCrossAttention` / `_QFormerFFN` building blocks; full Configurable wiring; CPU-safe SDPA attention path with optional KV padding mask. Internal width decoupled from `lm_dim` via `internal_dim` (default 1024); final `out_proj: internal_dim -> lm_dim` lifts the output. | +355 |
+| `torchtitan_qwen25/torchtitan/models/qwen3_vl/__init__.py` | add `Qwen3VLQFormerProjector` import + export; new `_vl_qformer_config(...)` helper with `internal_dim=1024`, `n_heads=8` defaults; new `_8b_qformer()` config factory; registered as `"8B-qformer"` flavor; `dataclasses` import | +65 / -1 |
+| `torchtitan_qwen25/torchtitan/models/qwen3_vl/model.py` | add `projector_type: str = "linear"` and `qformer: Qwen3VLQFormerProjector.Config \| None = None` to `Qwen3VLModel.Config`; switch in `__init__` to instantiate `self.qformer_projector` when `projector_type == "qformer"`; wire Q-Former into `_get_vision_embeds` so it consumes the encoder's `merged_embeds` + valid mask and emits `(num_items * num_queries, lm_dim)`; raises on bad value | +55 |
 | `torchtitan_qwen25/torchtitan/models/qwen3_vl/parallelize.py` | extend `parallelize_qwen3_vl` to FSDP-wrap `model.qformer_projector` as its own unit on the same `dp_mesh` as the vision encoder | +25 |
-| `torchtitan_qwen25/tests/unit_tests/test_qformer_projector.py` | **new** — 6-case CPU unit test: production shape, post-merger shape, padding-mask shape + finiteness, gradient flow on tiny config, num_queries invariance vs input length, param-count ballpark guard | +180 |
+| `torchtitan_qwen25/tests/unit_tests/test_qformer_projector.py` | **new** — 8-case CPU unit test: production shape, post-merger shape, padding-mask shape + finiteness, gradient flow on tiny config (with internal_dim != lm_dim), num_queries invariance vs input length, param-count guard (80M-120M for post-merger; ~80M for pre-merger), internal_dim-vs-lm_dim decoupling check | +220 |
 | `scripts_titan/train_titan_qwen3_vl.py` | add `model_flavor: str = "8B"` parameter to `_build_trainer_config`; new `qwen3_vl_8b_planning_fsdp_3cam_qformer()` factory using `model_flavor="8B-qformer"`; smoke loop covers the new factory | +50 / -1 |
 | `scripts_titan/configs/qwen3_vl_8b_planning_fsdp_3cam.toml` | annotate baseline with `projector_type = "linear"` for diff symmetry vs the Q-Former TOML | +5 |
 | `scripts_titan/configs/qwen3_vl_8b_planning_fsdp_3cam_qformer.toml` | **new** — full hyperparam manifest for the Q-Former variant with rationale, `[model.qformer]` section, and dataset key rename | +130 |
@@ -42,7 +42,7 @@ Total diff: **~940 LOC, 3 new files, 6 modified files**.
 
 - **FSDP-wrapped as its own unit.** The projector is a sibling FSDP unit to the vision encoder (same `dp_mesh`). It is NOT bundled into the vision encoder's single `fully_shard` call because (a) the vision encoder still emits DeepStack features that go to the LM independently, and (b) keeping it as a separate unit simplifies future PP cuts.
 
-- **Param-count source-of-truth in the unit test.** `test_param_count_ballpark` measures and asserts the real count rather than relying on docstring estimates. At the production config (`in_features=4096`, `lm_dim=4096`, `num_queries=64`, `num_layers=6`, `n_heads=16`, `ffn_mult=4`) the measured count is **~1.2B** (FFN-dominated: 2 * 4096 * 16384 ≈ 134M per layer * 6 = 805M). At `in_features=1152` (pre-merger), it drops to ~1.06B.
+- **Param-count source-of-truth in the unit test.** `test_param_count_guard` measures and asserts the real count rather than relying on docstring estimates. At the production config (`internal_dim=1024`, `lm_dim=4096`, `in_features=4096`, `num_queries=64`, `num_layers=6`, `n_heads=8`, `ffn_mult=4`) the measured count is **~117.6M** — matching BLIP-2 scale. At `in_features=1152` (pre-merger), it drops to ~81.4M. The `internal_dim` decoupling from `lm_dim` (introduced as the fix for the original 1.21B blow-up) is what bounds the count to this BLIP-2-shaped envelope; without it, FFN at `lm_dim=4096` dominates (2 * 4096 * 16384 ≈ 134M per layer × 6 = 805M).
 
 ## Reviewer hints
 
@@ -54,13 +54,13 @@ Total diff: **~940 LOC, 3 new files, 6 modified files**.
 
 1. **Pre- vs post-merger Q-Former input.** Currently the Q-Former consumes the post-merger encoder output (`in_features=4096`). This means the vision signal is compressed twice — once by `PatchMerger` (2x2 spatial merge -> 4x reduction) and once by the Q-Former (~26x reduction). For nuScenes front-cam data the 4x spatial merge may already discard useful detail before Q-Former pooling. Pre-merger Q-Former (`in_features=1152`, encoder bypasses the merger) is the more aggressive but potentially higher-quality option. To switch: feed pre-merger features into `qformer_projector` and update `_8b_qformer()` to set `in_features=1152`. Requires either skipping `self.vision_encoder.merger` in the model's forward or exposing a `return_premerge=True` flag on the encoder.
 
-2. **Collator/tokenizer placeholder count.** `Qwen3VLModel._scatter_vision_embeds` asserts `num_placeholder_tokens == num_vision_tokens`. With the Q-Former path every visual item produces exactly `num_queries=64` tokens at the LM input, so the prompt / chat-template must emit exactly 64 `<|image_pad|>` placeholders per image and 64 `<|video_pad|>` placeholders per video (regardless of T x H x W). This wiring lives outside the model in `MMDataLoader` / `NuScenesPlanningDatasetTitan` and is a **next-agent task**. Without it the GPU smoke will trip the placeholder-count assert immediately.
+2. **Collator/tokenizer placeholder count.** `Qwen3VLModel._scatter_vision_embeds` asserts `num_placeholder_tokens == num_vision_tokens`. With the Q-Former path every visual item produces exactly `num_queries=64` tokens at the LM input (wired in `Qwen3VLModel._get_vision_embeds` — when `qformer_projector` is set the merged ViT features are routed through it and the output is flattened to `num_items * 64`), so the prompt / chat-template must emit exactly 64 `<|image_pad|>` placeholders per image and 64 `<|video_pad|>` placeholders per video (regardless of T x H x W). This wiring lives outside the model in `MMDataLoader` / `NuScenesPlanningDatasetTitan` and is a **next-agent task**. Without it the GPU smoke will trip the placeholder-count assert immediately. *Model-side status*: Q-Former is now invoked in `_get_vision_embeds` and emits the contracted `(num_items * num_queries, dim)` shape; the remaining work is on the dataset side. DeepStack features are intentionally NOT routed through the Q-Former (they encode spatial detail that the 64-query pooling would destroy) — this means the LM still expects the *original* (post-merger) DeepStack token count at vision positions for the DeepStack add-paths; reconciling that with the 64-placeholder change is part of the dataset task.
 
 3. **MRoPE 3D positions for compressed tokens.** `_compute_mrope_freqs` currently builds 3D `(T, H, W)` positions per visual placeholder. After Q-Former compression the 64 query tokens no longer correspond to a spatial grid — they are global pooled features. We need to decide: (a) treat each query as a "text-like" 1D position (simplest), or (b) keep a synthetic 8x8 grid (matches `num_queries=64`). Option (a) is the BLIP-2 convention.
 
 4. **TP / CP for Q-Former.** Not done in this PR. Q-Former is small (~1.2B at 4096 dim) so TP within Q-Former is unlikely to be a memory win unless the FFN scales. CP on the query side is straightforward (queries are short) but on the KV side requires re-thinking — punt to a separate PR.
 
-5. **Param-count vs spec target.** The original spec targeted ~80-120M params for the Q-Former. At `lm_dim=4096` and `num_layers=6` with a 4x FFN expansion the measured count is **~1.2B** — geometrically unavoidable at this dim (each layer alone has 4 * 4096^2 ≈ 67M in q/o projections and 2 * 4 * 4096^2 ≈ 134M in FFN). To hit the original 80-120M target, either: (a) shrink `num_layers` to 1-2 with `ffn_mult=4`, or (b) keep 6 layers but use `ffn_mult=1` (~460M) and a narrower internal dim (would require an extra `lm_dim_internal` config field). Recommended path for v2: add an `internal_dim` field decoupling Q-Former width from `lm_dim`, then project to `lm_dim` at the output. Out of scope for this PR.
+5. **Param-count vs spec target. [RESOLVED — torchtitan commit `5ee6380`]** The original spec targeted ~80-120M params for the Q-Former. The first cut implicitly used `internal_dim = lm_dim = 4096`, which gave ~1.21B params (FFN-dominated: 2 * 4096 * 16384 ≈ 134M per layer × 6 = 805M). **Resolved by decoupling `internal_dim` from `lm_dim`** — Q-Former now operates at `internal_dim=1024` (BLIP-2-base uses 768) with `n_heads=8`, `ffn_mult=4`, `num_layers=6`, and a final `out_proj: 1024 -> 4096` lifts the output to LM width. Measured param counts: **117.6M at the production post-merger config** (`in_features=4096`) and **81.4M at the pre-merger variant** (`in_features=1152`) — both within the BLIP-2 envelope. The `Qwen3VLQFormerProjector.Config.internal_dim` field carries the new dimension; `_vl_qformer_config()` defaults it to 1024. Guard is in `tests/unit_tests/test_qformer_projector.py::test_param_count_guard` (80M < count < 120M).
 
 ## Pre-submission gate (must pass before opening upstream PR)
 
@@ -72,10 +72,9 @@ Total diff: **~940 LOC, 3 new files, 6 modified files**.
 
 ```text
 cd /workspace/DriveLM_VLM_Project && \
-  PYTHONPATH=torchtitan_qwen25:. /usr/bin/python3 \
-    -m unittest torchtitan_qwen25.tests.unit_tests.test_qformer_projector -v
-# Ran 6 tests in 22.961s
-# OK
+  PYTHONPATH=torchtitan_qwen25:. /usr/bin/python3 -m pytest \
+    torchtitan_qwen25/tests/unit_tests/test_qformer_projector.py -v
+# 8 passed in 5.93s   (post param-count fix; was 6 tests / 22.961s pre-fix)
 ```
 
 And factory build:
