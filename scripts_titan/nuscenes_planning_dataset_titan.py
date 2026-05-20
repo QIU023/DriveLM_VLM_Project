@@ -69,6 +69,16 @@ from trajectory_tokenizer import (  # type: ignore  # noqa: E402
     TrajectoryTokenizerConfig,
 )
 
+# torchtitan's shared video preprocessing utility — uses smart_resize to
+# round (H, W) to multiples of patch_size * merge_size (32 for Qwen3-VL)
+# while keeping the pixel area within [min_pixels, max_pixels].  This is
+# what the stock cc12m/obelics LLaVA-style datasets call, so we share it
+# here instead of rolling our own.  Without this resize, nuScenes images
+# (900x1600) fail `vision_to_patches` because 900 % 32 != 0.
+from torchtitan.hf_datasets.multimodal.utils.video import (  # noqa: E402
+    process_video,
+)
+
 
 # Default image normalisation for the torchtitan vision pipeline.
 # Qwen3-VL switched from OpenAI-CLIP mean/std (Qwen2.5-VL) to (0.5,0.5,0.5)
@@ -78,33 +88,41 @@ from trajectory_tokenizer import (  # type: ignore  # noqa: E402
 QWEN3_VL_IMAGE_MEAN = (0.5, 0.5, 0.5)
 QWEN3_VL_IMAGE_STD = (0.5, 0.5, 0.5)
 
+# Vision-token geometry.  Must agree with the dataloader/collator config
+# (see scripts_titan/train_titan_qwen3_vl.py:_qwen3_vl_dataloader and
+# torchtitan/models/qwen3_vl/config_registry._qwen3_vl_dataloader).
+QWEN3_VL_PATCH_SIZE = 16
+QWEN3_VL_SPATIAL_MERGE_SIZE = 2
+# Qwen3-VL HF processor default pixel budget for video frames; matches
+# what the HF AutoProcessor uses internally when computing the
+# <|video_pad|> token count, so our pre-patchify (T,H,W,C) tensor agrees
+# with input_ids that the same processor returns.  These values are also
+# the defaults in torchtitan's stock _qwen3_vl_dataloader, so the
+# downstream MultiModalCollator's patcher consumes a matching grid.
+QWEN3_VL_VIDEO_MIN_PIXELS = 65536
+QWEN3_VL_VIDEO_MAX_PIXELS = 16777216
 
-def _pil_to_thwc_float(frames: list[Image.Image]) -> torch.Tensor:
-    """Convert a list of PIL frames into a single (T, H, W, C) float32
-    tensor in the [0, 1] range.  Assumes all frames have identical (H, W);
-    we resize to the first frame's size if not."""
+
+def _pil_frames_to_uint8_thwc(frames: list[Image.Image]) -> torch.Tensor:
+    """Convert a list of PIL frames to a (T, H, W, C) uint8 tensor.
+
+    Frames are aligned to the first frame's (H, W) via PIL bilinear
+    resize if any mismatch occurs.  The output is uint8 (not normalized
+    or rescaled) because `process_video` expects raw uint8 input and
+    will do smart_resize + dtype scaling + normalize itself.
+    """
     if not frames:
         raise ValueError("empty frames list")
     h0, w0 = frames[0].height, frames[0].width
     arrs = []
     for f in frames:
+        if f.mode != "RGB":
+            f = f.convert("RGB")
         if (f.height, f.width) != (h0, w0):
             f = f.resize((w0, h0), Image.BILINEAR)
         arrs.append(np.asarray(f, dtype=np.uint8))  # (H, W, C)
     stacked = np.stack(arrs, axis=0)  # (T, H, W, C)
-    out = torch.from_numpy(stacked).to(torch.float32) / 255.0
-    return out
-
-
-def _normalise_thwc(
-    video: torch.Tensor,
-    mean: tuple[float, float, float] = QWEN3_VL_IMAGE_MEAN,
-    std: tuple[float, float, float] = QWEN3_VL_IMAGE_STD,
-) -> torch.Tensor:
-    """In-place-ish normalisation of a (T, H, W, C) float [0,1] tensor."""
-    m = torch.tensor(mean, dtype=video.dtype).view(1, 1, 1, 3)
-    s = torch.tensor(std, dtype=video.dtype).view(1, 1, 1, 3)
-    return (video - m) / s
+    return torch.from_numpy(stacked)  # uint8
 
 
 class NuScenesPlanningDatasetTitan(IterableDataset):
@@ -315,12 +333,26 @@ class NuScenesPlanningDatasetTitan(IterableDataset):
                         labels[bin_x_pos] = -100
                         labels[bin_y_pos] = -100
 
-        # 10. Convert PIL clips to (T, H, W, C) float tensors and
-        # normalise.  torchtitan's MultiModalCollator will patchify these.
+        # 10. Convert PIL clips to (T, H, W, C) tensors, smart-resize to
+        # the Qwen3-VL grid (multiples of patch_size*merge_size = 32),
+        # and normalize via torchtitan's shared `process_video` helper.
+        # The smart-resize pixel budget matches the HF Qwen3-VL processor
+        # so the per-video <|video_pad|> count baked into ``input_ids``
+        # (step 5 above) agrees with the patch grid the MultiModalCollator
+        # produces from this tensor.  Without this resize, nuScenes
+        # frames (900x1600) fail the patch reshape because 900 % 32 != 0.
         pixel_values_videos: list[torch.Tensor] = []
         for clip in clips_pil:
-            video = _pil_to_thwc_float(clip)
-            video = _normalise_thwc(video, self.image_mean, self.image_std)
+            video_uint8 = _pil_frames_to_uint8_thwc(clip)  # (T, H, W, C) uint8
+            video = process_video(
+                video_uint8,
+                patch_size=QWEN3_VL_PATCH_SIZE,
+                merge_size=QWEN3_VL_SPATIAL_MERGE_SIZE,
+                min_pixels=QWEN3_VL_VIDEO_MIN_PIXELS,
+                max_pixels=QWEN3_VL_VIDEO_MAX_PIXELS,
+                image_mean=self.image_mean,
+                image_std=self.image_std,
+            )  # (T, H', W', C) float32, H' and W' multiples of 32
             pixel_values_videos.append(video)
 
         positions = torch.arange(input_ids.shape[0], dtype=torch.long)

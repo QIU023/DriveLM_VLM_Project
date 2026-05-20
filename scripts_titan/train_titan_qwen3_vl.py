@@ -278,6 +278,7 @@ def _build_trainer_config(
     seq_len: int = 4096,
     total_steps: int = _TOTAL_STEPS,
     max_length: int | None = None,
+    model_flavor: str = "8B",
 ) -> Trainer.Config:
     """Shared Trainer.Config builder used by all variants.
 
@@ -306,7 +307,7 @@ def _build_trainer_config(
         # adapter.  model_registry("8B") returns the fully-built ModelSpec
         # with parallelize_qwen3_vl + pipeline_qwen3_vl +
         # Qwen3VLStateDictAdapter wired up. ***
-        model_spec=model_registry("8B"),
+        model_spec=model_registry(model_flavor),
         dataloader=_qwen3_vl_dataloader(dataset_name),
         optimizer=OptimizersContainer.Config(
             # AutoVLA recipe for 4-8 frame video horizon.
@@ -468,6 +469,48 @@ def qwen3_vl_8b_planning_fsdp_3cam() -> Trainer.Config:
     )
 
 
+def qwen3_vl_8b_planning_fsdp_3cam_qformer() -> Trainer.Config:
+    """FSDP-8 3-cam x 4-frame nuScenes planning with a Q-Former projector.
+
+    Same recipe as ``qwen3_vl_8b_planning_fsdp_3cam`` except the vision
+    projector is swapped for a 64-query, 6-layer Q-Former (see
+    torchtitan_qwen25/torchtitan/models/qwen3_vl/qformer_projector.py).
+
+    Rationale: token-budget compression for TRT deployment, NOT a
+    fusion-mechanism research comparison. The Q-Former pools the
+    ~1680-token 3-cam x 4-frame visual sequence into 64 fixed LM-dim
+    tokens, giving a ~26x reduction in vision context length at the
+    LM input boundary. This directly shrinks TRT KV-cache footprint
+    and time-to-first-token at deploy time. Quality is expected to
+    underperform the stock pretrained-aligned linear projector on 24K
+    SFT samples; the trade-off is intentional.
+
+    Open issues (see docs/upstream_prs/005_torchtitan_qwen3_vl_qformer.md):
+      * The in-encoder 2x2 spatial merger still runs before Q-Former,
+        compounding compression. Likely fine for nuScenes (front cams are
+        low-information dense) but worth A/B-ing pre-vs-post-merger as
+        Q-Former input.
+      * Dataset/collator must emit exactly 64 <|image_pad|> placeholders
+        per visual item for the scatter step in
+        ``Qwen3VLModel._scatter_vision_embeds`` to line up. This is a
+        next-agent task.
+    """
+    return _build_trainer_config(
+        dataset_name="nuscenes_planning_3cam_4f_seqlen8k_qformer",
+        planning_cams=["CAM_FRONT", "CAM_FRONT_LEFT", "CAM_FRONT_RIGHT"],
+        local_batch_size=1,
+        seq_len=8192,
+        max_length=8192,
+        parallelism=ParallelismConfig(
+            data_parallel_shard_degree=-1,
+            tensor_parallel_degree=1,
+            context_parallel_degree=1,
+            pipeline_parallel_degree=1,
+        ),
+        model_flavor="8B-qformer",
+    )
+
+
 # ============================================================================
 # CPU-only smoke (config build only — no model materialization).
 # ============================================================================
@@ -478,11 +521,16 @@ if __name__ == "__main__":
         ("qwen3_vl_8b_planning_fsdp", qwen3_vl_8b_planning_fsdp),
         ("qwen3_vl_8b_planning_fsdp_1cam_8f", qwen3_vl_8b_planning_fsdp_1cam_8f),
         ("qwen3_vl_8b_planning_fsdp_3cam", qwen3_vl_8b_planning_fsdp_3cam),
+        (
+            "qwen3_vl_8b_planning_fsdp_3cam_qformer",
+            qwen3_vl_8b_planning_fsdp_3cam_qformer,
+        ),
         ("qwen3_vl_8b_planning_fsdp_tp", qwen3_vl_8b_planning_fsdp_tp),
     ]:
         cfg = fn()
         print(f"=== {name} ===")
         print("  Model spec:", cfg.model_spec.name, cfg.model_spec.flavor)
+        print("  Projector type:", getattr(cfg.model_spec.model, "projector_type", "n/a"))
         print("  LR:", cfg.optimizer.lr)
         print("  Warmup steps:", cfg.lr_scheduler.warmup_steps)
         print("  Total steps:", cfg.training.steps)
