@@ -65,3 +65,12 @@ val_every: 50
 # Ckpt cadence — keep_latest_k=2 to mind disk (3-cam ckpts are the same size
 # as 1-cam since vision tower is frozen and not saved, but be tighter anyway).
 keep_latest_k: 2
+
+# Mid-training planning metrics (L2_1s/2s/3s/avg + UniAD-port collision).
+# Enabled by default: greedy-decodes the same `val_batches=20` micro-batches
+# the loss/acc path already consumes. ~25 s extra wallclock per val on
+# 8 GPU FSDP (~12.5% of the 5119 val samples). Set val_full_eval=true for the
+# full ~3 min sweep; only worth it at end-of-training.
+val_planning_l2: true
+val_full_eval: false
+val_greedy_max_new_tokens: 20
