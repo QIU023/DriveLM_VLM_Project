@@ -16,12 +16,22 @@ tokens, decodes to (Δx, Δy) waypoints, then computes:
 Output: a JSON file matching the AutoVLA/UniAD/VAD table format so it's drop-in
 for paper comparison.
 
+Modes:
+  - Single-GPU: `python scripts/planning_eval.py --ckpt ... --batch-size 4`
+    Falls back to a plain loop over rank 0 only.
+  - Multi-GPU data-parallel: launch with
+      torchrun --nproc_per_node=8 scripts/planning_eval.py --ckpt ... --batch-size 4
+    Each rank loads the same ckpt, processes its 1/world_size shard of val
+    infos, and rank 0 aggregates via `dist.gather_object`. ~25-30x speedup
+    over the original single-GPU bs=1 path on 8x 5090.
+
 Notes:
-  - This script runs on a SINGLE GPU. FSDP-sharded ckpts produced by `train_lora.py`
-    with `train_mode: full_sft` are written as plain HF dirs (state_dict gathered
-    on rank 0), so `AutoModelForImageTextToText.from_pretrained(ckpt)` just works.
+  - This script works with FSDP-sharded ckpts produced by `train_lora.py` with
+    `train_mode: full_sft` (state_dict gathered on rank 0 -> plain HF dir).
   - Collisions: ground-truth agent boxes come from each future frame's
     `gt_boxes` (in current-frame ego coordinates per UniAD's transform).
+  - Batched generation uses left-padding (Qwen2.5-VL tokenizer default is right)
+    so the prompt suffix aligns across the batch.
 """
 from __future__ import annotations
 
@@ -36,6 +46,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
+import torch.distributed as dist
 from PIL import Image
 from transformers import AutoModelForImageTextToText, AutoProcessor
 
@@ -157,6 +168,130 @@ def l2_noavg(pred: np.ndarray, gt: np.ndarray, valid: np.ndarray) -> Dict[str, f
 
 
 # ============================================================================
+# Distributed helpers
+# ============================================================================
+
+def _init_distributed() -> Tuple[int, int, int, bool]:
+    """Initialise torch.distributed if launched under torchrun.
+
+    Returns (rank, world_size, local_rank, is_distributed).
+    """
+    if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+        rank = int(os.environ["RANK"])
+        world_size = int(os.environ["WORLD_SIZE"])
+        local_rank = int(os.environ.get("LOCAL_RANK", rank % max(torch.cuda.device_count(), 1)))
+        torch.cuda.set_device(local_rank)
+        if not dist.is_initialized():
+            dist.init_process_group(backend="nccl", init_method="env://")
+        return rank, world_size, local_rank, True
+    return 0, 1, 0, False
+
+
+def _is_rank0(rank: int) -> bool:
+    return rank == 0
+
+
+def _log(rank: int, msg: str) -> None:
+    if _is_rank0(rank):
+        print(msg, flush=True)
+
+
+# ============================================================================
+# Batched inference core
+# ============================================================================
+
+def _build_batch_inputs(
+    ds: PlanningDataset,
+    processor,
+    args,
+    indices_local: List[int],
+    planning_cams: List[str],
+) -> Tuple[Dict, List[dict], List[List[dict]], List[dict]]:
+    """For a list of dataset positions (local indices into ds[]), build the
+    processor inputs once and return:
+
+      inputs, per-sample info, per-sample future_infos, per-sample sample dict.
+    """
+    from transformers.video_utils import VideoMetadata  # local import to avoid cost when DP disabled
+
+    texts: List[str] = []
+    all_clips: List[List[Image.Image]] = []
+    all_md: List[VideoMetadata] = []
+    samples: List[dict] = []
+    infos: List[dict] = []
+    futures: List[List[dict]] = []
+
+    for i in indices_local:
+        sample = ds[i]
+        samples.append(sample)
+        base_idx = ds._keep[i]
+        info = ds.infos[base_idx]
+        infos.append(info)
+        futures.append(ds._walk_future(base_idx))
+        hist = ds._walk_history(base_idx)
+        if len(planning_cams) == 1:
+            clips = [ds._load_frames(hist, planning_cams[0])]
+        else:
+            clips = ds._load_frames_multicam(hist)
+        user_content = _build_user_content_multicam(info, planning_cams)
+        sys_user_messages = [{"role": "user", "content": user_content}]
+        text = processor.apply_chat_template(
+            sys_user_messages, tokenize=False, add_generation_prompt=True
+        )
+        texts.append(text)
+        for clip in clips:
+            all_clips.append(clip)
+            all_md.append(
+                VideoMetadata(
+                    total_num_frames=len(clip),
+                    fps=args.video_fps,
+                    frames_indices=list(range(len(clip))),
+                    height=clip[0].height,
+                    width=clip[0].width,
+                )
+            )
+
+    inputs = processor(
+        text=texts,
+        videos=all_clips,
+        video_metadata=all_md,
+        return_tensors="pt",
+        padding=True,
+    )
+    return inputs, infos, futures, samples
+
+
+def _run_batch(
+    model,
+    processor,
+    inputs: Dict,
+    device: torch.device,
+    dtype: torch.dtype,
+    max_new_tokens: int,
+):
+    """Move inputs to device, run greedy generate, return (gen_tokens, prompt_len)."""
+    inputs = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
+    if "pixel_values_videos" in inputs:
+        inputs["pixel_values_videos"] = inputs["pixel_values_videos"].to(dtype)
+    if "pixel_values" in inputs and isinstance(inputs["pixel_values"], torch.Tensor):
+        inputs["pixel_values"] = inputs["pixel_values"].to(dtype)
+    prompt_len = inputs["input_ids"].shape[1]
+    gen = model.generate(
+        **inputs,
+        max_new_tokens=max_new_tokens,
+        do_sample=False,
+        num_beams=1,
+        pad_token_id=processor.tokenizer.pad_token_id or 0,
+        use_cache=True,
+    )
+    # Slice off the prompt (works for left-padding: prompt is left-aligned to
+    # column prompt_len-1 across the batch; newly-generated tokens start at col
+    # prompt_len for every row).
+    new_tokens = gen[:, prompt_len:]
+    return new_tokens
+
+
+# ============================================================================
 # Main
 # ============================================================================
 
@@ -181,17 +316,31 @@ def main() -> None:
                    help="Greedy generate budget; 1 start + 12 bins + 1 end is enough.")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--dtype", default="bfloat16")
+    p.add_argument("--batch-size", type=int, default=4,
+                   help="Per-rank batch size for model.generate (default: 4).")
     args = p.parse_args()
 
-    device = torch.device(args.device)
+    rank, world_size, local_rank, is_dist = _init_distributed()
+
+    # In distributed mode, pin each rank to its own GPU.
+    if is_dist:
+        device = torch.device(f"cuda:{local_rank}")
+    else:
+        device = torch.device(args.device)
     dtype = getattr(torch, args.dtype)
 
-    print(f"[planning_eval] loading model from {args.ckpt}")
+    _log(rank, f"[planning_eval] world_size={world_size} rank={rank} local_rank={local_rank} "
+               f"device={device} dtype={args.dtype} batch_size={args.batch_size}")
+    _log(rank, f"[planning_eval] loading model from {args.ckpt}")
+
     model = AutoModelForImageTextToText.from_pretrained(
         args.ckpt, torch_dtype=dtype, attn_implementation="sdpa",
     ).to(device)
     model.eval()
     processor = AutoProcessor.from_pretrained(args.ckpt)
+    # Batched greedy generation requires left-padding so newly generated
+    # tokens start at the same column for every row.
+    processor.tokenizer.padding_side = "left"
 
     traj_cfg = TrajectoryTokenizerConfig(num_waypoints=args.num_future_waypoints)
     traj_tok = TrajectoryTokenizer(traj_cfg)
@@ -210,146 +359,161 @@ def main() -> None:
         video_fps=args.video_fps,
         vla_loss_mode="answer_and_traj",
         max_samples=args.max_samples,
-        require_full_future=True,  # only score samples with full 3 s of future
+        require_full_future=True,
         planning_cams=planning_cams,
         require_all_cams=True,
     )
 
-    # Build the *generation prompt* (NO appended action tokens). We rebuild it
-    # here rather than using ds.__getitem__ because we want generation, not
-    # teacher-forcing input. The user text is per-sample because we prepend the
-    # ego-speed preamble (read from info["can_bus"][13]) — must match training.
-
     n_total = len(ds)
-    print(f"[planning_eval] val samples: {n_total}")
+    _log(rank, f"[planning_eval] val samples: {n_total}")
     if n_total == 0:
         raise RuntimeError("Empty val set after require_full_future filter.")
 
-    # Per-sample stats
-    temavg_acc: Dict[str, List[float]] = {k: [] for k in ["L2_1s", "L2_2s", "L2_3s", "L2_avg"]}
-    noavg_acc: Dict[str, List[float]] = {k: [] for k in ["L2_1s", "L2_2s", "L2_3s", "L2_avg"]}
-    coll: Dict[str, List[int]] = {k: [] for k in ["collision_1s", "collision_2s", "collision_3s", "collision_avg"]}
+    # Stride-shard across ranks (i, i+W, i+2W, ...). This keeps batches roughly
+    # balanced even if some samples (the multi-cam tail) are slower than others.
+    shard_indices: List[int] = list(range(rank, n_total, world_size))
+
+    # Per-sample local stats; we keep PER-SAMPLE values (not running means) so
+    # rank 0 can aggregate exactly with no numerical loss.
+    local_temavg: Dict[str, List[float]] = {k: [] for k in ["L2_1s", "L2_2s", "L2_3s", "L2_avg"]}
+    local_noavg: Dict[str, List[float]] = {k: [] for k in ["L2_1s", "L2_2s", "L2_3s", "L2_avg"]}
+    local_coll: Dict[str, List[int]] = {k: [] for k in ["collision_1s", "collision_2s", "collision_3s", "collision_avg"]}
 
     t0 = time.time()
+    bs = max(1, int(args.batch_size))
+    n_local = len(shard_indices)
+
     with torch.inference_mode():
-        for i in range(n_total):
-            sample = ds[i]
-            gt_wp = sample["_meta_waypoints"].cpu().numpy()  # (6, 2)
-            valid = sample["_meta_valid_mask"].cpu().numpy()
-            token = sample["_meta_token"]
-
-            # Build *generation* prompt (chat template with add_generation_prompt=True)
-            base_idx = ds._keep[i]
-            info = ds.infos[base_idx]
-            hist = ds._walk_history(base_idx)
-            # Single- or multi-cam clip loading; mirrors training dataset.
-            if len(planning_cams) == 1:
-                clips = [ds._load_frames(hist, planning_cams[0])]
-            else:
-                clips = ds._load_frames_multicam(hist)
-            user_content = _build_user_content_multicam(info, planning_cams)
-            sys_user_messages = [{"role": "user", "content": user_content}]
-            text = processor.apply_chat_template(
-                sys_user_messages, tokenize=False, add_generation_prompt=True
+        for bstart in range(0, n_local, bs):
+            batch_idx = shard_indices[bstart:bstart + bs]
+            inputs, infos, futures, samples = _build_batch_inputs(
+                ds, processor, args, batch_idx, planning_cams
             )
-            from transformers.video_utils import VideoMetadata
-            md = [
-                VideoMetadata(
-                    total_num_frames=len(clip),
-                    fps=args.video_fps,
-                    frames_indices=list(range(len(clip))),
-                    height=clip[0].height,
-                    width=clip[0].width,
+            new_tokens = _run_batch(
+                model, processor, inputs, device, dtype, args.max_new_tokens
+            )
+            new_tokens_cpu = new_tokens.cpu().tolist()
+
+            for j, i_local in enumerate(batch_idx):
+                sample = samples[j]
+                gt_wp = sample["_meta_waypoints"].cpu().numpy()
+                valid = sample["_meta_valid_mask"].cpu().numpy()
+                info = infos[j]
+                future_infos = futures[j]
+
+                # Stop at the first pad token so trailing pads don't confuse the
+                # decoder. (Left-padding only adds pads on the left of the prompt
+                # so this slice is right-side trailing pad from EOS-truncation.)
+                ids = new_tokens_cpu[j]
+                if processor.tokenizer.pad_token_id in ids:
+                    cut = ids.index(processor.tokenizer.pad_token_id)
+                    ids = ids[:cut]
+                pred_wp = decode_waypoints(ids, traj_tok, args.num_future_waypoints)
+
+                t = l2_temavg(pred_wp, gt_wp, valid)
+                for k in local_temavg:
+                    if not math.isnan(t[k]):
+                        local_temavg[k].append(t[k])
+                n = l2_noavg(pred_wp, gt_wp, valid)
+                for k in local_noavg:
+                    if not math.isnan(n[k]):
+                        local_noavg[k].append(n[k])
+
+                collisions_per_horizon = _uniad_compute_collision_per_sample(
+                    pred_wp_ego=pred_wp,
+                    gt_wp_ego=gt_wp,
+                    future_infos=future_infos,
+                    cur_info=info,
+                    horizon_indices=HORIZON_IDX,
                 )
-                for clip in clips
-            ]
-            inputs = processor(
-                text=[text], videos=clips, video_metadata=md, return_tensors="pt"
-            ).to(device)
-            # Cast video pixels to model dtype
-            if "pixel_values_videos" in inputs:
-                inputs["pixel_values_videos"] = inputs["pixel_values_videos"].to(dtype)
+                for hi, h_idx in enumerate(HORIZON_IDX):
+                    if h_idx >= len(future_infos) or valid[h_idx] < 1e-6:
+                        collisions_per_horizon[hi] = 0
+                local_coll["collision_1s"].append(collisions_per_horizon[0])
+                local_coll["collision_2s"].append(collisions_per_horizon[1])
+                local_coll["collision_3s"].append(collisions_per_horizon[2])
+                local_coll["collision_avg"].append(int(any(collisions_per_horizon)))
 
-            gen = model.generate(
-                **inputs,
-                max_new_tokens=args.max_new_tokens,
-                do_sample=False,
-                num_beams=1,
-                pad_token_id=processor.tokenizer.pad_token_id or 0,
-            )
-            new_ids = gen[0, inputs["input_ids"].shape[1]:].tolist()
-            pred_wp = decode_waypoints(new_ids, traj_tok, args.num_future_waypoints)
+            done = bstart + len(batch_idx)
+            if _is_rank0(rank) and (done % max(1, bs * 4) == 0 or done == n_local):
+                rate_local = done / max(time.time() - t0, 1e-6)
+                global_done = done * world_size
+                global_total = n_total
+                rate_global = rate_local * world_size
+                eta = max(0.0, (global_total - global_done) / max(rate_global, 1e-6))
+                print(
+                    f"  [rank0 {done}/{n_local} | global {global_done}/{global_total}] "
+                    f"{rate_local:.2f} sample/s (rank) | {rate_global:.2f} sample/s (global) "
+                    f"| ETA {eta:.1f} s",
+                    flush=True,
+                )
 
-            # L2 protocols
-            t = l2_temavg(pred_wp, gt_wp, valid)
-            for k in temavg_acc:
-                if not math.isnan(t[k]):
-                    temavg_acc[k].append(t[k])
-            n = l2_noavg(pred_wp, gt_wp, valid)
-            for k in noavg_acc:
-                if not math.isnan(n[k]):
-                    noavg_acc[k].append(n[k])
+    # Aggregate across ranks. Each rank packs its per-sample lists into a dict
+    # and rank 0 gathers via `dist.gather_object`.
+    local_payload = {
+        "temavg": local_temavg,
+        "noavg": local_noavg,
+        "coll": {k: [int(x) for x in v] for k, v in local_coll.items()},
+        "n_local": n_local,
+    }
 
-            # Collision check: verbatim port of UniAD's PlanningMetric.
-            # See scripts/_planning_metric.py for the cited source. Builds
-            # a 200x200 BEV segmentation grid per future timestep from
-            # vehicle (only_vehicle=True) + visible (filter_invisible=True)
-            # GT boxes reframed into current-ego (=reference) LiDAR frame,
-            # then rasterizes the axis-aligned ego footprint at each
-            # predicted waypoint and counts cell overlaps.
-            future_infos = ds._walk_future(base_idx)
-            # gt waypoints valid where mask=1; pred waypoints are always
-            # populated. We pass all 6 horizons; the function returns 0 for
-            # any future step without an info entry.
-            collisions_per_horizon = _uniad_compute_collision_per_sample(
-                pred_wp_ego=pred_wp,
-                gt_wp_ego=gt_wp,
-                future_infos=future_infos,
-                cur_info=info,
-                horizon_indices=HORIZON_IDX,
-            )
-            # Zero out steps where the GT waypoint is invalid (consistent
-            # with the L2 protocol — we don't score missing future frames).
-            for hi, h_idx in enumerate(HORIZON_IDX):
-                if h_idx >= len(future_infos) or valid[h_idx] < 1e-6:
-                    collisions_per_horizon[hi] = 0
-            coll["collision_1s"].append(collisions_per_horizon[0])
-            coll["collision_2s"].append(collisions_per_horizon[1])
-            coll["collision_3s"].append(collisions_per_horizon[2])
-            # Avg per-sample collision (any horizon hit -> count it as 1)
-            coll["collision_avg"].append(int(any(collisions_per_horizon)))
+    if is_dist:
+        gathered: List[Optional[dict]] = [None] * world_size if _is_rank0(rank) else None
+        dist.gather_object(local_payload, gathered if _is_rank0(rank) else None, dst=0)
+        dist.barrier()
+    else:
+        gathered = [local_payload]
 
-            if (i + 1) % 50 == 0:
-                rate = (i + 1) / max(time.time() - t0, 1e-6)
-                eta = (n_total - i - 1) / max(rate, 1e-6)
-                print(f"  [{i + 1}/{n_total}] {rate:.2f} sample/s | ETA {eta / 60:.1f} min")
+    if not _is_rank0(rank):
+        if is_dist:
+            dist.destroy_process_group()
+        return
 
-    # Aggregate
-    def _mean(xs: List[float]) -> float:
-        return float(np.mean(xs)) if xs else float("nan")
+    # Rank 0: merge per-sample lists from every rank.
+    temavg_acc: Dict[str, List[float]] = {k: [] for k in ["L2_1s", "L2_2s", "L2_3s", "L2_avg"]}
+    noavg_acc: Dict[str, List[float]] = {k: [] for k in ["L2_1s", "L2_2s", "L2_3s", "L2_avg"]}
+    coll_acc: Dict[str, List[int]] = {k: [] for k in ["collision_1s", "collision_2s", "collision_3s", "collision_avg"]}
+    for payload in gathered:
+        if payload is None:
+            continue
+        for k, v in payload["temavg"].items():
+            temavg_acc[k].extend(v)
+        for k, v in payload["noavg"].items():
+            noavg_acc[k].extend(v)
+        for k, v in payload["coll"].items():
+            coll_acc[k].extend(v)
 
+    def _mean(xs) -> float:
+        return float(np.mean(xs)) if len(xs) else float("nan")
+
+    elapsed = time.time() - t0
+    n_scored = len(temavg_acc["L2_avg"]) if temavg_acc["L2_avg"] else n_total
     results = {
         "ckpt": os.path.abspath(args.ckpt),
         "infos_val": os.path.abspath(args.infos_val),
         "n_samples": n_total,
+        "n_scored": n_scored,
+        "world_size": world_size,
+        "batch_size": bs,
+        "wall_seconds": round(elapsed, 2),
         "horizon_s": list(HORIZONS),
         "TemAvg": {k: _mean(v) for k, v in temavg_acc.items()},
         "NoAvg": {k: _mean(v) for k, v in noavg_acc.items()},
         "collision_rate": {
-            "collision_1s": _mean([float(x) for x in coll["collision_1s"]]),
-            "collision_2s": _mean([float(x) for x in coll["collision_2s"]]),
-            "collision_3s": _mean([float(x) for x in coll["collision_3s"]]),
-            "collision_avg": _mean([float(x) for x in coll["collision_avg"]]),
+            "collision_1s": _mean([float(x) for x in coll_acc["collision_1s"]]),
+            "collision_2s": _mean([float(x) for x in coll_acc["collision_2s"]]),
+            "collision_3s": _mean([float(x) for x in coll_acc["collision_3s"]]),
+            "collision_avg": _mean([float(x) for x in coll_acc["collision_avg"]]),
         },
         # Flat shortcut keys matching the table format requested in the spec.
         "L2_1s": _mean(temavg_acc["L2_1s"]),
         "L2_2s": _mean(temavg_acc["L2_2s"]),
         "L2_3s": _mean(temavg_acc["L2_3s"]),
         "L2_avg": _mean(temavg_acc["L2_avg"]),
-        "collision_1s": _mean([float(x) for x in coll["collision_1s"]]),
-        "collision_2s": _mean([float(x) for x in coll["collision_2s"]]),
-        "collision_3s": _mean([float(x) for x in coll["collision_3s"]]),
-        "collision_avg": _mean([float(x) for x in coll["collision_avg"]]),
+        "collision_1s": _mean([float(x) for x in coll_acc["collision_1s"]]),
+        "collision_2s": _mean([float(x) for x in coll_acc["collision_2s"]]),
+        "collision_3s": _mean([float(x) for x in coll_acc["collision_3s"]]),
+        "collision_avg": _mean([float(x) for x in coll_acc["collision_avg"]]),
         "protocol_l2": "TemAvg (VAD) shown in flat L2_*; full both protocols inside this JSON",
         "ego_footprint_m": {
             "length": EGO_LENGTH_M,
@@ -364,8 +528,11 @@ def main() -> None:
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     with open(out_path, "w") as f:
         json.dump(results, f, indent=2)
-    print(f"[planning_eval] wrote {out_path}")
-    print(json.dumps(results, indent=2))
+    print(f"[planning_eval] wrote {out_path} (wall={elapsed:.1f}s, n_scored={n_scored})", flush=True)
+    print(json.dumps(results, indent=2), flush=True)
+
+    if is_dist:
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":
