@@ -15,6 +15,7 @@ import math
 import os
 import sys
 import time
+from typing import Optional
 import yaml
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -1376,14 +1377,93 @@ def validate(model, val_loader, compress_method, compress_ratio, image_token_id,
     return val_loss, val_acc, l2_dict
 
 
+def _projector_constructor_kwargs(projector, projector_type: str) -> dict:
+    """Extract the constructor kwargs needed to re-instantiate ``projector``.
+
+    Generic over projector_type — each branch reads the instance attrs that
+    were set in __init__. Keep this in sync with each projector class's
+    constructor signature. New types (pixelshuffle / resampler) drop in
+    here.
+    """
+    t = projector_type.lower()
+    if t == "qformer":
+        # Mirrors scripts/qformer_projector_hf.Qwen2VLQFormerProjector.__init__.
+        return {
+            "vit_dim": int(projector.vit_dim),
+            "internal_dim": int(projector.internal_dim),
+            "lm_dim": int(projector.lm_dim),
+            "num_queries": int(projector.num_queries),
+            "num_layers": int(projector.num_layers),
+            "n_heads": int(projector.n_heads),
+            "ffn_mult": int(projector.ffn_mult),
+            # layer_norm_eps and dropout are not stored as attrs in the
+            # current Qwen2VLQFormerProjector; reading them off the first
+            # LayerNorm / MultiheadAttention is brittle so we fall back to
+            # the class defaults. The state_dict still pins weights exactly;
+            # only these scalar hyperparams differ from defaults if the user
+            # overrode them in YAML — record them when available.
+            "layer_norm_eps": float(getattr(projector.norm_out, "eps", 1e-6)),
+            "dropout": 0.0,
+        }
+    # PixelShuffle / Resampler will land here as elif branches when A.2/A.3
+    # add their projector classes — same shape: read the instance attrs that
+    # the projector class stores in __init__.
+    raise ValueError(
+        f"Unknown projector_type={projector_type!r}; add a branch in "
+        f"_projector_constructor_kwargs and the load-time switch in "
+        f"scripts/planning_eval.py."
+    )
+
+
+def _save_external_projector(accelerator, projector, projector_type: str,
+                             save_path: str) -> None:
+    """Save the external projector (qformer / pixelshuffle / resampler).
+
+    Writes ``<save_path>/projector.pt`` (state_dict) and
+    ``<save_path>/projector_meta.json`` (type + constructor kwargs) so the
+    load-time path in planning_eval.py can re-instantiate the class and
+    restore weights.
+
+    The qformer / pixelshuffle / resampler projectors sit OUTSIDE the FSDP
+    wrap in train_lora.py (see the "Same FSDP caveat" comment at projector
+    construction). Therefore ``projector.state_dict()`` returns the full
+    weights on every rank; we use ``accelerator.save`` to write only on
+    rank 0. ``accelerator.unwrap_model`` is a no-op for a non-wrapped
+    module — call it anyway so this code stays correct if the projector
+    ever gets DDP/FSDP-wrapped.
+    """
+    unwrapped = accelerator.unwrap_model(projector)
+    sd = unwrapped.state_dict()
+    meta = {
+        "type": projector_type.lower(),
+        "config": _projector_constructor_kwargs(unwrapped, projector_type),
+    }
+    # accelerator.save is rank-0 only — avoids 8 ranks racing on the same path.
+    projector_pt = os.path.join(save_path, "projector.pt")
+    projector_meta = os.path.join(save_path, "projector_meta.json")
+    accelerator.save(sd, projector_pt)
+    if accelerator.is_main_process:
+        import json as _json
+        with open(projector_meta, "w") as f:
+            _json.dump(meta, f, indent=2)
+
+
 def _save_model_and_state(accelerator, model, optimizer, scheduler,
                           train_mode, save_path, global_step, epoch, batch_idx,
-                          save_processor=None):
+                          save_processor=None,
+                          external_projector=None,
+                          projector_type: Optional[str] = None):
     """Distributed-safe checkpoint writer.
 
     For LoRA / QLoRA we save the adapter only (small, single rank writes).
     For full_sft under FSDP we gather a full state_dict on rank 0 and write
     via HF `save_pretrained` so the result is a drop-in HF checkpoint dir.
+
+    When ``external_projector`` is provided (qformer / pixelshuffle /
+    resampler), its state_dict + a tiny meta JSON are also written so the
+    load-time path in planning_eval.py can restore the 90M-ish projector
+    weights — they are NOT registered as submodules of the LM and would
+    otherwise be silently dropped by save_pretrained.
     """
     if accelerator.is_main_process:
         os.makedirs(save_path, exist_ok=True)
@@ -1428,6 +1508,20 @@ def _save_model_and_state(accelerator, model, optimizer, scheduler,
             # accelerator.save_state so we get a proper distributed dump.
             print(f"[warn] direct optimizer.state_dict() failed ({e}); "
                   f"using accelerator.save_state instead")
+
+    # ---- External projector (qformer / pixelshuffle / resampler) ----------
+    # These are composed into the forward at runtime but are NOT registered
+    # as submodules of the LM, so save_pretrained does not pick up their
+    # weights. Persist them as a sibling artifact.
+    if external_projector is not None:
+        if projector_type is None:
+            raise ValueError(
+                "external_projector was provided but projector_type is None; "
+                "pass projector_type='qformer'|'pixelshuffle'|'resampler'."
+            )
+        _save_external_projector(
+            accelerator, external_projector, projector_type, save_path,
+        )
     accelerator.wait_for_everyone()
 
 
@@ -2308,9 +2402,15 @@ def main():
 
                 if global_step % save_every == 0:
                     save_path = os.path.join(output_dir, f"checkpoint-{global_step}")
+                    # Pass the external projector through so its weights land
+                    # alongside the LM ckpt. _save_model_and_state is a no-op
+                    # on the projector args when both are None (linear path).
                     _save_model_and_state(
                         accelerator, model, optimizer, scheduler,
                         train_mode, save_path, global_step, epoch, step,
+                        external_projector=qformer_projector,
+                        projector_type=(projector_type
+                                        if qformer_projector is not None else None),
                     )
                     if accelerator.is_main_process:
                         tqdm.write(f"  [SAVE] checkpoint-{global_step}")
@@ -2416,6 +2516,9 @@ def main():
             accelerator, model, optimizer, scheduler,
             train_mode, final_path, global_step, num_epochs - 1, -1,
             save_processor=processor,
+            external_projector=qformer_projector,
+            projector_type=(projector_type
+                            if qformer_projector is not None else None),
         )
         accelerator.print(f"\nTraining complete! Final model saved to {final_path}")
 

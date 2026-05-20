@@ -71,6 +71,176 @@ from _planning_metric import (  # noqa: E402
 )
 
 
+# ============================================================================
+# External projector load (qformer / pixelshuffle / resampler)
+# ============================================================================
+
+def _maybe_load_external_projector(ckpt_dir: str, device: torch.device,
+                                   dtype: torch.dtype):
+    """If ``<ckpt_dir>/projector_meta.json`` exists, instantiate the projector
+    class for the recorded ``type`` with the recorded ``config`` and load
+    weights from ``<ckpt_dir>/projector.pt``.
+
+    Returns ``(projector, projector_type)`` or ``(None, None)`` if no meta
+    file is present (legacy / linear-baseline ckpts — R1' compatible).
+    """
+    meta_path = os.path.join(ckpt_dir, "projector_meta.json")
+    weights_path = os.path.join(ckpt_dir, "projector.pt")
+    if not os.path.exists(meta_path):
+        return None, None
+    with open(meta_path) as f:
+        meta = json.load(f)
+    p_type = meta["type"].lower()
+    p_cfg = meta["config"]
+    if p_type == "qformer":
+        # Lazy import — matches the train_lora.py import pattern.
+        try:
+            from scripts.qformer_projector_hf import (  # noqa: E402
+                Qwen2VLQFormerProjector,
+            )
+        except ImportError:
+            from qformer_projector_hf import (  # type: ignore  # noqa: E402
+                Qwen2VLQFormerProjector,
+            )
+        projector = Qwen2VLQFormerProjector(**p_cfg)
+    else:
+        # PixelShuffle / Resampler land here as elif branches when A.2/A.3
+        # save their projectors via _save_external_projector.
+        raise NotImplementedError(
+            f"planning_eval: load path for projector_type={p_type!r} not "
+            f"wired yet. Add an import + instantiate branch here."
+        )
+    state = torch.load(weights_path, map_location="cpu")
+    projector.load_state_dict(state)
+    projector = projector.to(device=device, dtype=dtype)
+    projector.eval()
+    return projector, p_type
+
+
+def _trim_and_pad_for_projector(
+    input_ids: torch.Tensor,
+    attention_mask: torch.Tensor,
+    video_grid_thw: torch.Tensor,
+    video_token_id: int,
+    projector,
+    merge_size: int = 2,
+):
+    """Trim per-sample video-pad placeholders so the LM sees exactly
+    ``projector.num_queries`` placeholders per video item. Returns
+    ``(new_input_ids, new_attention_mask, new_video_grid_thw, n_post_total,
+       (t0, h0, w0), num_items)`` for use by the patched
+    ``get_video_features``.
+
+    Mirrors train_lora.forward_with_video_qformer_projector's trim logic
+    (steps 1 + 2) but without label handling (generate has no labels).
+    """
+    device = input_ids.device
+    grid = video_grid_thw
+    if grid.dim() == 1:
+        grid = grid.unsqueeze(0)
+    num_items = grid.shape[0]
+
+    t_per_item = grid[:, 0].tolist()
+    h_post = (grid[:, 1] // merge_size).tolist()
+    w_post = (grid[:, 2] // merge_size).tolist()
+    n_post_per_item = [t_per_item[i] * h_post[i] * w_post[i] for i in range(num_items)]
+    n_post_total = sum(n_post_per_item)
+
+    first_thw = (t_per_item[0], h_post[0], w_post[0])
+    for i in range(num_items):
+        if (t_per_item[i], h_post[i], w_post[i]) != first_thw:
+            raise RuntimeError(
+                f"Q-Former projector requires identical post-merger "
+                f"(t, h, w) across all items at eval; item {i}="
+                f"{(t_per_item[i], h_post[i], w_post[i])} != "
+                f"item 0={first_thw}."
+            )
+    t0, h0, w0 = first_thw
+
+    B_lm = input_ids.shape[0]
+    items_per_sample = num_items // B_lm
+    if items_per_sample * B_lm != num_items:
+        raise RuntimeError(
+            f"video_grid_thw num_items={num_items} not divisible by LM "
+            f"batch size B_lm={B_lm}."
+        )
+    n_per_item = n_post_per_item[0]
+    n_compressed_per_item = int(projector.num_queries)
+
+    new_ids_list, new_mask_list = [], []
+    for b in range(B_lm):
+        ids = input_ids[b]
+        msk = attention_mask[b]
+        vid_pos = (ids == video_token_id).nonzero(as_tuple=True)[0]
+        n_vid = len(vid_pos)
+        if n_vid == 0:
+            new_ids_list.append(ids)
+            new_mask_list.append(msk)
+            continue
+        expected_uncompressed = items_per_sample * n_per_item
+        if n_vid != expected_uncompressed:
+            raise RuntimeError(
+                f"sample {b}: found {n_vid} video-pad tokens but expected "
+                f"{expected_uncompressed} ({items_per_sample} items x "
+                f"{n_per_item} post-merger tokens)."
+            )
+        drop_positions = []
+        for k in range(items_per_sample):
+            item_start = k * n_per_item
+            item_end = item_start + n_per_item
+            keep_until = item_start + n_compressed_per_item
+            drop_positions.extend(vid_pos[keep_until:item_end].tolist())
+        if drop_positions:
+            keep = torch.ones(len(ids), dtype=torch.bool, device=device)
+            keep[torch.tensor(drop_positions, device=device)] = False
+            new_ids_list.append(ids[keep])
+            new_mask_list.append(msk[keep])
+        else:
+            new_ids_list.append(ids)
+            new_mask_list.append(msk)
+
+    # Left-pad to common length (planning_eval uses left-padding for
+    # batched greedy generate; preserve that convention).
+    max_len = max(t.shape[0] for t in new_ids_list)
+    pad_id = 0  # generate is told pad_token_id below; the dummy 0 here is masked.
+    for i in range(B_lm):
+        pad = max_len - new_ids_list[i].shape[0]
+        if pad > 0:
+            new_ids_list[i] = torch.cat([
+                torch.full((pad,), pad_id, dtype=new_ids_list[i].dtype, device=device),
+                new_ids_list[i],
+            ])
+            new_mask_list[i] = torch.cat([
+                torch.zeros(pad, dtype=new_mask_list[i].dtype, device=device),
+                new_mask_list[i],
+            ])
+    new_input_ids = torch.stack(new_ids_list)
+    new_attn_mask = torch.stack(new_mask_list)
+
+    # Rebuild video_grid_thw to the compressed shape (1, h_pre, w_pre) with
+    # h_post * w_post == num_queries. Inline the factor helper from
+    # train_lora._factor_grid_thw_for_count to avoid the cross-import.
+    def _factor_grid(target: int, ms: int) -> "tuple[int, int, int]":
+        best = None
+        for h in range(1, int(target ** 0.5) + 1):
+            if target % h == 0:
+                w = target // h
+                ar = max(h, w) / min(h, w)
+                if best is None or ar < best[0]:
+                    best = (ar, h, w)
+        if best is None:
+            return (1, 1 * ms, target * ms)
+        _, h, w = best
+        return (1, h * ms, w * ms)
+
+    _, h_pre_new, w_pre_new = _factor_grid(n_compressed_per_item, merge_size)
+    new_grid = torch.tensor(
+        [[1, h_pre_new, w_pre_new]] * num_items,
+        dtype=grid.dtype, device=device,
+    )
+    return new_input_ids, new_attn_mask, new_grid, n_post_total, (t0, h0, w0), num_items
+
+
 HZ = 2.0
 DT = 1.0 / HZ              # 0.5 s
 HORIZONS = (1.0, 2.0, 3.0)
@@ -268,13 +438,114 @@ def _run_batch(
     device: torch.device,
     dtype: torch.dtype,
     max_new_tokens: int,
+    *,
+    external_projector=None,
+    projector_type: Optional[str] = None,
+    video_token_id: Optional[int] = None,
 ):
-    """Move inputs to device, run greedy generate, return (gen_tokens, prompt_len)."""
+    """Move inputs to device, run greedy generate, return new tokens.
+
+    When ``external_projector`` is given (qformer / pixelshuffle / resampler),
+    we mirror the training-side forward shim
+    (``forward_with_video_qformer_projector`` in train_lora.py):
+
+      1. Trim ``input_ids`` / ``attention_mask`` to keep only
+         ``projector.num_queries`` ``<|video_pad|>`` placeholders per item.
+      2. Rebuild ``video_grid_thw`` to the compressed shape.
+      3. Monkey-patch ``inner.get_video_features`` to run the vision tower
+         and then the projector, returning ``num_queries * num_items`` rows
+         (a `_FakeVisOut.pooler_output` carrying a list of (Nq, lm_dim)).
+      4. Call ``model.generate(**trimmed_inputs)`` — the generate path
+         calls ``get_video_features`` once during the prefill, so the
+         projector runs on the raw vision features and the LM sees the
+         compressed tokens for the rest of the decode loop.
+
+    Note ``inputs_embeds`` is NOT manually built here — the standard HF
+    Qwen2.5-VL generate path takes care of scattering the (now-projector-
+    produced) visual features into the embeddings at the placeholder
+    positions, as long as the placeholder count matches the projector's
+    output count (which it does after the trim above).
+    """
     inputs = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
     if "pixel_values_videos" in inputs:
         inputs["pixel_values_videos"] = inputs["pixel_values_videos"].to(dtype)
     if "pixel_values" in inputs and isinstance(inputs["pixel_values"], torch.Tensor):
         inputs["pixel_values"] = inputs["pixel_values"].to(dtype)
+
+    if external_projector is not None:
+        if video_token_id is None:
+            raise ValueError("video_token_id is required when external_projector is set")
+        if projector_type and projector_type != "qformer":
+            # PixelShuffle / Resampler will land here as elif branches once
+            # their training-side shims exist. For now only qformer is wired.
+            raise NotImplementedError(
+                f"planning_eval generate path for projector_type="
+                f"{projector_type!r} not implemented yet."
+            )
+        new_input_ids, new_attn_mask, new_grid, n_post_total, (t0, h0, w0), num_items = (
+            _trim_and_pad_for_projector(
+                inputs["input_ids"],
+                inputs["attention_mask"],
+                inputs["video_grid_thw"],
+                video_token_id,
+                external_projector,
+            )
+        )
+        pv = inputs["pixel_values_videos"]
+        orig_grid = inputs["video_grid_thw"]
+
+        # Unwrap PEFT/etc if present. AutoModelForImageTextToText returns
+        # the top-level Qwen2_5_VL model; the inner Qwen2_5_VLModel that
+        # owns get_video_features is at .model on that.
+        inner = model.model
+
+        _orig_get_video_features = inner.get_video_features
+
+        class _FakeVisOut:
+            def __init__(self, t):
+                self.pooler_output = t
+
+        def _patched_get_video_features(_pv, _grid):  # noqa: ARG001
+            with torch.no_grad():
+                real = _orig_get_video_features(pv, orig_grid)
+                embeds = real.pooler_output
+                if isinstance(embeds, (tuple, list)):
+                    embeds = torch.cat([e for e in embeds], dim=0)
+                embeds = embeds.detach()
+            if embeds.shape[0] != n_post_total:
+                raise RuntimeError(
+                    f"vision pooler_output rows {embeds.shape[0]} != expected "
+                    f"post-merger total {n_post_total}"
+                )
+            D = embeds.shape[-1]
+            per_item = embeds.view(num_items, t0 * h0 * w0, D)
+            proj_dtype = next(external_projector.parameters()).dtype
+            compressed_items = []
+            for i in range(num_items):
+                out_i = external_projector(per_item[i:i+1].to(proj_dtype))
+                compressed_items.append(out_i.squeeze(0))
+            return _FakeVisOut(compressed_items)
+
+        inner.get_video_features = _patched_get_video_features
+        try:
+            prompt_len = new_input_ids.shape[1]
+            gen = model.generate(
+                input_ids=new_input_ids,
+                attention_mask=new_attn_mask,
+                pixel_values_videos=pv,
+                video_grid_thw=new_grid,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+                num_beams=1,
+                pad_token_id=processor.tokenizer.pad_token_id or 0,
+                use_cache=True,
+            )
+        finally:
+            inner.get_video_features = _orig_get_video_features
+        new_tokens = gen[:, prompt_len:]
+        return new_tokens
+
+    # Vanilla / linear-baseline path (R1' byte-compatible).
     prompt_len = inputs["input_ids"].shape[1]
     gen = model.generate(
         **inputs,
@@ -342,6 +613,20 @@ def main() -> None:
     # tokens start at the same column for every row.
     processor.tokenizer.padding_side = "left"
 
+    # ---- Optional external projector (qformer / pixelshuffle / resampler) ---
+    # Detect via <ckpt>/projector_meta.json. Absent -> vanilla / linear path
+    # (R1' byte-compatible). Present -> load + wire into _run_batch.
+    external_projector, projector_type = _maybe_load_external_projector(
+        args.ckpt, device, dtype,
+    )
+    if external_projector is not None:
+        _log(rank, f"[planning_eval] external projector loaded: "
+                   f"type={projector_type} "
+                   f"params={sum(p.numel() for p in external_projector.parameters())/1e6:.2f}M")
+        video_token_id = processor.tokenizer.convert_tokens_to_ids("<|video_pad|>")
+    else:
+        video_token_id = None
+
     traj_cfg = TrajectoryTokenizerConfig(num_waypoints=args.num_future_waypoints)
     traj_tok = TrajectoryTokenizer(traj_cfg)
 
@@ -390,7 +675,10 @@ def main() -> None:
                 ds, processor, args, batch_idx, planning_cams
             )
             new_tokens = _run_batch(
-                model, processor, inputs, device, dtype, args.max_new_tokens
+                model, processor, inputs, device, dtype, args.max_new_tokens,
+                external_projector=external_projector,
+                projector_type=projector_type,
+                video_token_id=video_token_id,
             )
             new_tokens_cpu = new_tokens.cpu().tolist()
 
