@@ -1,0 +1,69 @@
+base_config: nuscenes_planning_3cam_full.yaml
+
+# ============================================================================
+# Phase B+/Track A.2: nuScenes planning, 3-CAMERA × 4-frame +
+# PixelShuffle 2x + Linear projector (deterministic 4x token compression
+# stacked on the in-encoder PatchMerger).
+# ============================================================================
+# This config inherits the full hyperparam stack from nuscenes_planning_3cam_full
+# and ONLY toggles the visual-token projector:
+#
+#   Baseline (3cam_full):  visual = patch_merger(2x2)
+#                          -> ~140 post-merger tokens/frame × 4 × 3 = ~1680 tokens
+#   This config:           visual = patch_merger(2x2) + pixelshuffle(2x2) + Linear
+#                          -> ~35 tokens/frame × 4 × 3 = ~420 tokens
+#                          -> stacked 16x raw-ViT-patch compression
+#
+# Net deltas vs 3cam_full:
+#   * +1 learnable Linear(8192 -> 2048) ≈ 16.78M params (BLIP-2-shaped, no Q).
+#   * 4x fewer <|video_pad|> placeholders at the LM boundary.
+#   * NO change to AutoVLA hyperparams (lr, schedule, warmup, gbs, epochs).
+#
+# The forward path:
+#   1. ``model.visual`` (Qwen2.5-VL vision encoder + PatchMerger) runs under
+#      no_grad and emits (total_post_tokens, lm_dim=2048) — exactly as in the
+#      stock baseline.
+#   2. ``forward_with_pixelshuffle_projector`` (scripts/train_lora.py)
+#      monkey-patches ``get_video_features`` to splice in:
+#         a. per-item reshape (B, t, h_post, w_post, 2048),
+#         b. PixelUnshuffle 2x  -> (B, t, h/2, w/2, 8192),
+#         c. Linear(8192 -> 2048),
+#      then trims 3/4 of the ``<|video_pad|>`` placeholders per item and
+#      rebuilds video_grid_thw with halved h_pre/w_pre.
+#
+# Reference: scripts/pixelshuffle_projector_hf.py (port of torchtitan
+# Qwen3VLPixelShufflePlusLinearProjector at SHA b627122).
+
+experiment: nuscenes_planning_3cam_3b_full_sft_pixelshuffle
+
+# ---- Projector switch -----------------------------------------------------
+# train_lora.py reads `projector_type` and, when it equals "pixelshuffle",
+# instantiates the projector with the kwargs under `pixelshuffle:`. Defaulting
+# to "linear" (=base behavior) keeps every other config untouched.
+projector_type: pixelshuffle
+pixelshuffle:
+  # in_features = post-merger feature dim = lm_dim for Qwen2.5-VL-3B (2048).
+  # Leaving null so the trainer resolves from model.config.text_config.hidden_size.
+  in_features: null
+  lm_dim: null
+  shuffle_ratio: 2
+
+# ---- Placeholder-count alignment -----------------------------------------
+# Qwen2.5-VL's processor emits one <|video_pad|> per post-merger token, so
+# at min_pixels=max_pixels=109760 and per-cam 4-frame clips we get ~140
+# placeholders per video block (each cam is one block). After PixelShuffle
+# 2x the trainer trims 3/4 of those placeholders per block to ~35 / block,
+# 35 × 3 cams = ~105 placeholders / sample.
+#
+# The dataset itself does NOT change — it still emits the uncompressed
+# placeholder count and the trainer compresses in-flight. This is intentional:
+# eval / smoke / val all share the same dataloader, and we want the trim to
+# happen ONLY when the projector is active (so the no-projector baseline keeps
+# working with the same pkl + same processor settings).
+
+# ---- Disk discipline -----------------------------------------------------
+# Same cadence as 3cam_full; the extra 16.78M projector params do not change
+# checkpoint size meaningfully (full-SFT ckpt is dominated by the 3B LM).
+save_every: 50
+val_every: 50
+keep_latest_k: 2

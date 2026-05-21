@@ -104,9 +104,20 @@ def _maybe_load_external_projector(ckpt_dir: str, device: torch.device,
                 Qwen2VLQFormerProjector,
             )
         projector = Qwen2VLQFormerProjector(**p_cfg)
+    elif p_type == "pixelshuffle":
+        # Lazy import — matches the train_lora.py import pattern.
+        try:
+            from scripts.pixelshuffle_projector_hf import (  # noqa: E402
+                Qwen2VLPixelShufflePlusLinearProjector,
+            )
+        except ImportError:
+            from pixelshuffle_projector_hf import (  # type: ignore  # noqa: E402
+                Qwen2VLPixelShufflePlusLinearProjector,
+            )
+        projector = Qwen2VLPixelShufflePlusLinearProjector(**p_cfg)
     else:
-        # PixelShuffle / Resampler land here as elif branches when A.2/A.3
-        # save their projectors via _save_external_projector.
+        # Resampler (A.3) lands here as another elif branch when it saves
+        # its projector via _save_external_projector.
         raise NotImplementedError(
             f"planning_eval: load path for projector_type={p_type!r} not "
             f"wired yet. Add an import + instantiate branch here."
@@ -221,6 +232,132 @@ def _trim_and_pad_for_projector(
     # Rebuild video_grid_thw to the compressed shape (1, h_pre, w_pre) with
     # h_post * w_post == num_queries. Inline the factor helper from
     # train_lora._factor_grid_thw_for_count to avoid the cross-import.
+    def _factor_grid(target: int, ms: int) -> "tuple[int, int, int]":
+        best = None
+        for h in range(1, int(target ** 0.5) + 1):
+            if target % h == 0:
+                w = target // h
+                ar = max(h, w) / min(h, w)
+                if best is None or ar < best[0]:
+                    best = (ar, h, w)
+        if best is None:
+            return (1, 1 * ms, target * ms)
+        _, h, w = best
+        return (1, h * ms, w * ms)
+
+    _, h_pre_new, w_pre_new = _factor_grid(n_compressed_per_item, merge_size)
+    new_grid = torch.tensor(
+        [[1, h_pre_new, w_pre_new]] * num_items,
+        dtype=grid.dtype, device=device,
+    )
+    return new_input_ids, new_attn_mask, new_grid, n_post_total, (t0, h0, w0), num_items
+
+
+def _trim_and_pad_for_pixelshuffle_projector(
+    input_ids: torch.Tensor,
+    attention_mask: torch.Tensor,
+    video_grid_thw: torch.Tensor,
+    video_token_id: int,
+    projector,
+    merge_size: int = 2,
+):
+    """Same structure as ``_trim_and_pad_for_projector`` (qformer) but the
+    per-item compressed token count comes from
+    ``projector.output_token_count(n_per_item)`` rather than a fixed
+    ``num_queries`` — PixelShuffle's output is ``n_per_item / shuffle_ratio**2``
+    and depends on the input grid (not a constant). Mirrors
+    ``train_lora.forward_with_video_pixelshuffle_projector``'s trim logic.
+    """
+    device = input_ids.device
+    grid = video_grid_thw
+    if grid.dim() == 1:
+        grid = grid.unsqueeze(0)
+    num_items = grid.shape[0]
+
+    t_per_item = grid[:, 0].tolist()
+    h_post = (grid[:, 1] // merge_size).tolist()
+    w_post = (grid[:, 2] // merge_size).tolist()
+    n_post_per_item = [t_per_item[i] * h_post[i] * w_post[i] for i in range(num_items)]
+    n_post_total = sum(n_post_per_item)
+
+    first_thw = (t_per_item[0], h_post[0], w_post[0])
+    for i in range(num_items):
+        if (t_per_item[i], h_post[i], w_post[i]) != first_thw:
+            raise RuntimeError(
+                f"PixelShuffle projector requires identical post-merger "
+                f"(t, h, w) across all items at eval; item {i}="
+                f"{(t_per_item[i], h_post[i], w_post[i])} != "
+                f"item 0={first_thw}."
+            )
+    t0, h0, w0 = first_thw
+    r = int(projector.shuffle_ratio)
+    if h0 % r != 0 or w0 % r != 0:
+        raise RuntimeError(
+            f"PixelShuffle projector with shuffle_ratio={r} requires "
+            f"post-merger h ({h0}) and w ({w0}) to be divisible by {r}."
+        )
+
+    B_lm = input_ids.shape[0]
+    items_per_sample = num_items // B_lm
+    if items_per_sample * B_lm != num_items:
+        raise RuntimeError(
+            f"video_grid_thw num_items={num_items} not divisible by LM "
+            f"batch size B_lm={B_lm}."
+        )
+    n_per_item = n_post_per_item[0]
+    n_compressed_per_item = int(projector.output_token_count(n_per_item))
+
+    new_ids_list, new_mask_list = [], []
+    for b in range(B_lm):
+        ids = input_ids[b]
+        msk = attention_mask[b]
+        vid_pos = (ids == video_token_id).nonzero(as_tuple=True)[0]
+        n_vid = len(vid_pos)
+        if n_vid == 0:
+            new_ids_list.append(ids)
+            new_mask_list.append(msk)
+            continue
+        expected_uncompressed = items_per_sample * n_per_item
+        if n_vid != expected_uncompressed:
+            raise RuntimeError(
+                f"sample {b}: found {n_vid} video-pad tokens but expected "
+                f"{expected_uncompressed} ({items_per_sample} items x "
+                f"{n_per_item} post-merger tokens)."
+            )
+        drop_positions = []
+        for k in range(items_per_sample):
+            item_start = k * n_per_item
+            item_end = item_start + n_per_item
+            keep_until = item_start + n_compressed_per_item
+            drop_positions.extend(vid_pos[keep_until:item_end].tolist())
+        if drop_positions:
+            keep = torch.ones(len(ids), dtype=torch.bool, device=device)
+            keep[torch.tensor(drop_positions, device=device)] = False
+            new_ids_list.append(ids[keep])
+            new_mask_list.append(msk[keep])
+        else:
+            new_ids_list.append(ids)
+            new_mask_list.append(msk)
+
+    # Left-pad to common length.
+    max_len = max(t.shape[0] for t in new_ids_list)
+    pad_id = 0
+    for i in range(B_lm):
+        pad = max_len - new_ids_list[i].shape[0]
+        if pad > 0:
+            new_ids_list[i] = torch.cat([
+                torch.full((pad,), pad_id, dtype=new_ids_list[i].dtype, device=device),
+                new_ids_list[i],
+            ])
+            new_mask_list[i] = torch.cat([
+                torch.zeros(pad, dtype=new_mask_list[i].dtype, device=device),
+                new_mask_list[i],
+            ])
+    new_input_ids = torch.stack(new_ids_list)
+    new_attn_mask = torch.stack(new_mask_list)
+
+    # Rebuild video_grid_thw to the compressed shape (1, h_pre, w_pre) with
+    # h_post * w_post == n_compressed_per_item. Inline factor helper.
     def _factor_grid(target: int, ms: int) -> "tuple[int, int, int]":
         best = None
         for h in range(1, int(target ** 0.5) + 1):
@@ -476,22 +613,33 @@ def _run_batch(
     if external_projector is not None:
         if video_token_id is None:
             raise ValueError("video_token_id is required when external_projector is set")
-        if projector_type and projector_type != "qformer":
-            # PixelShuffle / Resampler will land here as elif branches once
-            # their training-side shims exist. For now only qformer is wired.
+        if projector_type not in ("qformer", "pixelshuffle"):
+            # Resampler (A.3) will land here as another branch once its
+            # training-side shim exists.
             raise NotImplementedError(
                 f"planning_eval generate path for projector_type="
                 f"{projector_type!r} not implemented yet."
             )
-        new_input_ids, new_attn_mask, new_grid, n_post_total, (t0, h0, w0), num_items = (
-            _trim_and_pad_for_projector(
-                inputs["input_ids"],
-                inputs["attention_mask"],
-                inputs["video_grid_thw"],
-                video_token_id,
-                external_projector,
+        if projector_type == "qformer":
+            new_input_ids, new_attn_mask, new_grid, n_post_total, (t0, h0, w0), num_items = (
+                _trim_and_pad_for_projector(
+                    inputs["input_ids"],
+                    inputs["attention_mask"],
+                    inputs["video_grid_thw"],
+                    video_token_id,
+                    external_projector,
+                )
             )
-        )
+        else:  # pixelshuffle
+            new_input_ids, new_attn_mask, new_grid, n_post_total, (t0, h0, w0), num_items = (
+                _trim_and_pad_for_pixelshuffle_projector(
+                    inputs["input_ids"],
+                    inputs["attention_mask"],
+                    inputs["video_grid_thw"],
+                    video_token_id,
+                    external_projector,
+                )
+            )
         pv = inputs["pixel_values_videos"]
         orig_grid = inputs["video_grid_thw"]
 
@@ -505,6 +653,15 @@ def _run_batch(
         class _FakeVisOut:
             def __init__(self, t):
                 self.pooler_output = t
+
+        # PixelShuffle needs grid_thw_post per-item; precompute once outside
+        # the patched closure (all items share shape, asserted in
+        # _trim_and_pad_for_pixelshuffle_projector).
+        _grid_thw_post_row = None
+        if projector_type == "pixelshuffle":
+            _grid_thw_post_row = torch.tensor(
+                [[t0, h0, w0]], dtype=torch.long, device=inputs["input_ids"].device,
+            )
 
         def _patched_get_video_features(_pv, _grid):  # noqa: ARG001
             with torch.no_grad():
@@ -523,7 +680,13 @@ def _run_batch(
             proj_dtype = next(external_projector.parameters()).dtype
             compressed_items = []
             for i in range(num_items):
-                out_i = external_projector(per_item[i:i+1].to(proj_dtype))
+                if projector_type == "pixelshuffle":
+                    out_i = external_projector(
+                        per_item[i:i+1].to(proj_dtype),
+                        grid_thw_post=_grid_thw_post_row,
+                    )
+                else:
+                    out_i = external_projector(per_item[i:i+1].to(proj_dtype))
                 compressed_items.append(out_i.squeeze(0))
             return _FakeVisOut(compressed_items)
 
@@ -658,7 +821,7 @@ def evaluate_planning_l2_collision(
 
     # Fail-fast on unsupported projector types BEFORE any data work or model
     # touches — gives callers a clean NotImplementedError they can catch.
-    if external_projector is not None and projector_type and projector_type not in ("qformer",):
+    if external_projector is not None and projector_type and projector_type not in ("qformer", "pixelshuffle"):
         raise NotImplementedError(
             f"planning_eval generate path for {projector_type!r} not yet wired"
         )

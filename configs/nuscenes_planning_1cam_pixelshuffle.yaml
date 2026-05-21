@@ -52,6 +52,22 @@ warmup_steps: 36
 lr_step_freq: 143
 
 # ---- Mid-training planning metrics (from train_lora L2 val merge) --------
+# val_planning_l2=true triggers the greedy-decode L2 + UniAD-collision pass
+# alongside the legacy teacher-forced L2.
+#
+# Two cadences (independent — both fire on overlapping steps):
+#   * val_every=50  -> cheap path: TF loss/acc on val_batches=20 micro-batches.
+#     Under pixelshuffle, the greedy-decode block inside validate() is short-
+#     circuited (placeholder-trim + model.generate not yet validated for the
+#     short cheap-pass path), so this prints "L2=skipped(pixelshuffle)".
+#   * full_l2_every=250 -> full path: DP greedy-decode L2 + UniAD-collision
+#     across the ENTIRE val set, pixelshuffle-aware (mirrors planning_eval.py).
+#     On ~2050 total steps this gives 8 L2 datapoints (steps 250, 500, 750,
+#     1000, 1250, 1500, 1750, 2000) — paper-comparable trajectory metrics.
+#     Re-enabled vs A.1: the unwrap-inside-summon fix from a3f46fc cleared the
+#     mid-train DP eval deadlock; pixelshuffle generate path mirrors qformer
+#     so the same fix applies here.
 val_planning_l2: true
 val_full_eval: false
 val_greedy_max_new_tokens: 20
+full_l2_every: 250
