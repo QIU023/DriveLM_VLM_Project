@@ -170,6 +170,7 @@ data/nuscenes/
 data/QA_dataset_nus/
 data/*.zip
 data_processed/*.json
+data_processed/lidar_bev_occ_v1/
 checkpoints*/
 .claude/
 .vscode/
