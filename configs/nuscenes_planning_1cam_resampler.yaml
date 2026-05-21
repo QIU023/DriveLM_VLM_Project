@@ -62,3 +62,4 @@ lr_step_freq: 143
 val_planning_l2: true
 val_full_eval: false
 val_greedy_max_new_tokens: 20
+full_l2_every: null  # DISABLED: in-train DP eval design broken (summon_full_params + generate deadlocks even with unwrap_model). A.3 final L2 via post-train standalone launch_planning_eval_dp.sh (same path as R1'/A.0/A.1/A.2).

@@ -115,9 +115,18 @@ def _maybe_load_external_projector(ckpt_dir: str, device: torch.device,
                 Qwen2VLPixelShufflePlusLinearProjector,
             )
         projector = Qwen2VLPixelShufflePlusLinearProjector(**p_cfg)
+    elif p_type == "resampler":
+        # Lazy import — matches the train_lora.py import pattern.
+        try:
+            from scripts.perceiver_resampler_projector_hf import (  # noqa: E402
+                Qwen2VLPerceiverResamplerProjector,
+            )
+        except ImportError:
+            from perceiver_resampler_projector_hf import (  # type: ignore  # noqa: E402
+                Qwen2VLPerceiverResamplerProjector,
+            )
+        projector = Qwen2VLPerceiverResamplerProjector(**p_cfg)
     else:
-        # Resampler (A.3) lands here as another elif branch when it saves
-        # its projector via _save_external_projector.
         raise NotImplementedError(
             f"planning_eval: load path for projector_type={p_type!r} not "
             f"wired yet. Add an import + instantiate branch here."
@@ -613,9 +622,7 @@ def _run_batch(
     if external_projector is not None:
         if video_token_id is None:
             raise ValueError("video_token_id is required when external_projector is set")
-        if projector_type not in ("qformer", "pixelshuffle"):
-            # Resampler (A.3) will land here as another branch once its
-            # training-side shim exists.
+        if projector_type not in ("qformer", "pixelshuffle", "resampler"):
             raise NotImplementedError(
                 f"planning_eval generate path for projector_type="
                 f"{projector_type!r} not implemented yet."
@@ -630,7 +637,7 @@ def _run_batch(
                     external_projector,
                 )
             )
-        else:  # pixelshuffle
+        elif projector_type == "pixelshuffle":
             new_input_ids, new_attn_mask, new_grid, n_post_total, (t0, h0, w0), num_items = (
                 _trim_and_pad_for_pixelshuffle_projector(
                     inputs["input_ids"],
@@ -638,6 +645,27 @@ def _run_batch(
                     inputs["video_grid_thw"],
                     video_token_id,
                     external_projector,
+                )
+            )
+        else:  # resampler — same fixed-count trim as qformer, but reads
+               # num_latents instead of num_queries. Use a tiny shim so we
+               # don't duplicate the trim helper.
+            class _NumQueriesShim:
+                """Adapter exposing num_queries=num_latents so the qformer
+                trim helper works unchanged. Resampler is structurally
+                qformer-shaped at the trim layer (fixed per-item output
+                count, no grid divisibility), only the projector forward
+                signature differs."""
+                def __init__(self, p): self._p = p
+                @property
+                def num_queries(self): return int(self._p.num_latents)
+            new_input_ids, new_attn_mask, new_grid, n_post_total, (t0, h0, w0), num_items = (
+                _trim_and_pad_for_projector(
+                    inputs["input_ids"],
+                    inputs["attention_mask"],
+                    inputs["video_grid_thw"],
+                    video_token_id,
+                    _NumQueriesShim(external_projector),
                 )
             )
         pv = inputs["pixel_values_videos"]
@@ -654,11 +682,11 @@ def _run_batch(
             def __init__(self, t):
                 self.pooler_output = t
 
-        # PixelShuffle needs grid_thw_post per-item; precompute once outside
-        # the patched closure (all items share shape, asserted in
-        # _trim_and_pad_for_pixelshuffle_projector).
+        # PixelShuffle / Resampler need a per-item grid tensor (different
+        # kwarg names). Precompute once outside the patched closure (all
+        # items share shape, asserted in the trim helpers).
         _grid_thw_post_row = None
-        if projector_type == "pixelshuffle":
+        if projector_type in ("pixelshuffle", "resampler"):
             _grid_thw_post_row = torch.tensor(
                 [[t0, h0, w0]], dtype=torch.long, device=inputs["input_ids"].device,
             )
@@ -685,7 +713,15 @@ def _run_batch(
                         per_item[i:i+1].to(proj_dtype),
                         grid_thw_post=_grid_thw_post_row,
                     )
-                else:
+                elif projector_type == "resampler":
+                    # Per-cam grid_thw drives the resampler's temporal_pos
+                    # lookup: each cam starts from temporal_pos[0] (shared-T
+                    # multi-cam policy, matches the training shim).
+                    out_i = external_projector(
+                        per_item[i:i+1].to(proj_dtype),
+                        grid_thw=_grid_thw_post_row,
+                    )
+                else:  # qformer
                     out_i = external_projector(per_item[i:i+1].to(proj_dtype))
                 compressed_items.append(out_i.squeeze(0))
             return _FakeVisOut(compressed_items)
@@ -752,12 +788,12 @@ def evaluate_planning_l2_collision(
     (i, i+W, i+2W, ...); each rank greedy-decodes its shard, then per-sample
     metric lists are gathered to every rank via ``gather_object`` and merged.
 
-    When ``external_projector`` is provided (``projector_type='qformer'``),
-    the generate path mirrors the training-time forward shim
-    (forward_with_video_qformer_projector): placeholder trim + grid rebuild +
-    monkey-patch ``get_video_features`` so the projector runs during the
-    prefill. ``pixelshuffle`` / ``resampler`` are not yet wired — passing
-    those raises ``NotImplementedError``.
+    When ``external_projector`` is provided (``projector_type`` in
+    {``qformer``, ``pixelshuffle``, ``resampler``}), the generate path
+    mirrors the training-time forward shim
+    (forward_with_video_{qformer,pixelshuffle,resampler}_projector):
+    placeholder trim + grid rebuild + monkey-patch ``get_video_features``
+    so the projector runs during the prefill.
 
     When ``external_projector is None`` (R1' linear baseline path), we fall
     back to the vanilla ``model.generate(...)`` flow (no monkey-patch).
@@ -774,7 +810,7 @@ def evaluate_planning_l2_collision(
         read ``.device``, ``.num_processes``, ``.process_index``,
         ``.is_main_process`` and use ``gather_object`` for cross-rank merge.
     external_projector : optional qformer/pixelshuffle/resampler module.
-    projector_type : 'qformer' (only one wired) | 'pixelshuffle' | 'resampler'.
+    projector_type : 'qformer' | 'pixelshuffle' | 'resampler'.
     batch_size : per-rank generate batch (default 4).
     num_samples : cap eval to first N samples (None = all). The cap is
         applied to the GLOBAL index list BEFORE stride-sharding so each
@@ -821,7 +857,7 @@ def evaluate_planning_l2_collision(
 
     # Fail-fast on unsupported projector types BEFORE any data work or model
     # touches — gives callers a clean NotImplementedError they can catch.
-    if external_projector is not None and projector_type and projector_type not in ("qformer", "pixelshuffle"):
+    if external_projector is not None and projector_type and projector_type not in ("qformer", "pixelshuffle", "resampler"):
         raise NotImplementedError(
             f"planning_eval generate path for {projector_type!r} not yet wired"
         )

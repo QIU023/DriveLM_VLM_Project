@@ -1354,6 +1354,224 @@ def forward_with_video_pixelshuffle_projector(
     return outputs
 
 
+# --------------- Perceiver Resampler projector (Track A.3) ---------------
+
+
+def forward_with_video_resampler_projector(
+    model,
+    batch,
+    projector,
+    video_token_id: int,
+    merge_size: int = 2,
+):
+    """Forward pass with a Flamingo-style Perceiver Resampler PROJECTOR on top
+    of the Qwen2.5-VL in-encoder ``PatchMerger``.
+
+    THIS IS A PROJECTOR REPLACEMENT (same ablation axis as A.1 Q-Former and
+    A.2 PixelShuffle). Differences vs. the A.1 Q-Former sibling:
+      * Latent self-attention per block (Q-Former skips inter-latent attn).
+      * Learnable per-frame ``temporal_pos[F]`` embedding added to KV
+        BEFORE every cross-attention. The projector NEEDS per-item
+        ``grid_thw=[(t, h_post, w_post)]`` at forward time to drive the
+        temporal-index lookup; ``forward_with_video_qformer_projector`` does
+        not pass any grid_thw.
+      * Multi-cam policy: each cam-clip is fed through the projector
+        INDEPENDENTLY with its own (t, h_post, w_post). This resets the
+        temporal index to 0 per cam — so cam-A f0 and cam-B f0 both hit
+        ``temporal_pos[0]`` (shared-T policy: cams share the same time axis).
+
+    The placeholder-trim, _FakeVisOut monkey-patch, and grid-rebuild are
+    BYTE-IDENTICAL to ``forward_with_video_qformer_projector``. Per-item
+    output token count is FIXED at ``projector.num_latents`` (default 64).
+    For 1-cam x 4f at base 109760 (post-merger 4*8*15=480 visual tokens),
+    we trim to 64 LM placeholders.
+
+    Args:
+        model: PEFT-wrapped Qwen2_5_VL model.
+        batch: collated batch dict from the planning dataset.
+        projector: ``Qwen2VLPerceiverResamplerProjector`` instance.
+        video_token_id: ``<|video_pad|>`` token id.
+        merge_size: in-encoder spatial merge size (Qwen2.5-VL: 2).
+    """
+    batch.pop("image_names", None)
+
+    base = get_base_model(model)
+    device = batch["input_ids"].device
+
+    pv = batch["pixel_values_videos"]
+    grid = batch["video_grid_thw"]
+    if grid.dim() == 1:
+        grid = grid.unsqueeze(0)
+
+    num_items = grid.shape[0]
+
+    # Post-merger per-item token counts.
+    t_per_item = grid[:, 0].tolist()
+    h_post = (grid[:, 1] // merge_size).tolist()
+    w_post = (grid[:, 2] // merge_size).tolist()
+    n_post_per_item = [t_per_item[i] * h_post[i] * w_post[i] for i in range(num_items)]
+    n_post_total = sum(n_post_per_item)
+
+    # The Perceiver Resampler is data-shape agnostic in principle (cross-attn
+    # handles variable N_vision via key_padding_mask), but the per-item
+    # reshape below assumes uniform per-item shape. 1-cam x 4f and 3-cam x 4f
+    # nuScenes batches satisfy this by construction. Mirrors qformer/
+    # pixelshuffle invariants.
+    first_thw = (t_per_item[0], h_post[0], w_post[0])
+    for i in range(num_items):
+        if (t_per_item[i], h_post[i], w_post[i]) != first_thw:
+            raise RuntimeError(
+                f"Resampler projector currently requires identical post-merger "
+                f"(t, h, w) across all items. Item {i}="
+                f"{(t_per_item[i], h_post[i], w_post[i])} != item 0={first_thw}. "
+                f"Mixed-resolution batches require per-shape grouping with "
+                f"key_padding_mask (not implemented)."
+            )
+    t0, h0, w0 = first_thw
+    n_compressed_per_item = int(projector.num_latents)
+
+    # ---- 1. Build trimmed input_ids / attention_mask / labels --------------
+    input_ids = batch["input_ids"]
+    attn_mask = batch["attention_mask"]
+    labels = batch["labels"]
+    B_lm = input_ids.shape[0]
+
+    items_per_sample = num_items // B_lm
+    if items_per_sample * B_lm != num_items:
+        raise RuntimeError(
+            f"video_grid_thw num_items={num_items} not divisible by LM batch "
+            f"size B_lm={B_lm}; items_per_sample is non-uniform."
+        )
+    n_per_item = n_post_per_item[0]
+
+    new_ids_list, new_mask_list, new_lab_list = [], [], []
+    for b in range(B_lm):
+        ids = input_ids[b]
+        msk = attn_mask[b]
+        lab = labels[b]
+        vid_pos = (ids == video_token_id).nonzero(as_tuple=True)[0]
+        n_vid = len(vid_pos)
+        if n_vid == 0:
+            new_ids_list.append(ids)
+            new_mask_list.append(msk)
+            new_lab_list.append(lab)
+            continue
+        expected_uncompressed = items_per_sample * n_per_item
+        if n_vid != expected_uncompressed:
+            raise RuntimeError(
+                f"sample {b}: found {n_vid} video-pad tokens but expected "
+                f"{expected_uncompressed} ({items_per_sample} items x "
+                f"{n_per_item} post-merger tokens). max_length truncation may "
+                f"have eaten visual placeholders."
+            )
+        # Per item k, the k-th contiguous block of placeholders is
+        # [k*n_per_item .. (k+1)*n_per_item); keep first n_compressed_per_item,
+        # drop the rest.
+        drop_positions = []
+        for k in range(items_per_sample):
+            item_start = k * n_per_item
+            item_end = item_start + n_per_item
+            keep_until = item_start + n_compressed_per_item
+            drop_positions.extend(vid_pos[keep_until:item_end].tolist())
+        if drop_positions:
+            keep = torch.ones(len(ids), dtype=torch.bool, device=device)
+            keep[torch.tensor(drop_positions, device=device)] = False
+            new_ids_list.append(ids[keep])
+            new_mask_list.append(msk[keep])
+            new_lab_list.append(lab[keep])
+        else:
+            new_ids_list.append(ids)
+            new_mask_list.append(msk)
+            new_lab_list.append(lab)
+
+    # Pad to common length.
+    max_len = max(t.shape[0] for t in new_ids_list)
+    for i in range(B_lm):
+        pad = max_len - new_ids_list[i].shape[0]
+        if pad > 0:
+            new_ids_list[i] = torch.cat([
+                new_ids_list[i],
+                torch.zeros(pad, dtype=new_ids_list[i].dtype, device=device),
+            ])
+            new_mask_list[i] = torch.cat([
+                new_mask_list[i],
+                torch.zeros(pad, dtype=new_mask_list[i].dtype, device=device),
+            ])
+            new_lab_list[i] = torch.cat([
+                new_lab_list[i],
+                torch.full((pad,), -100, dtype=new_lab_list[i].dtype, device=device),
+            ])
+    new_input_ids = torch.stack(new_ids_list)
+    new_attn_mask = torch.stack(new_mask_list)
+    new_labels = torch.stack(new_lab_list)
+
+    # ---- 2. New video_grid_thw with compressed shape per item -------------
+    # Resampler emits a 1-D bag of latents (no spatial structure), so we encode
+    # as (t=1, h_pre, w_pre) where h_post * w_post == num_latents. The factor
+    # helper picks the most-square (h, w) pair.
+    _, h_pre_new, w_pre_new = _factor_grid_thw_for_count(
+        n_compressed_per_item, merge_size=merge_size,
+    )
+    new_grid = torch.tensor(
+        [[1, h_pre_new, w_pre_new]] * num_items,
+        dtype=grid.dtype, device=device,
+    )
+
+    # ---- 3. Monkey-patch get_video_features to inject resampled embeds ----
+    inner = base.model  # Qwen2_5_VLModel
+    _orig_get_video_features = inner.get_video_features
+
+    class _FakeVisOut:
+        def __init__(self, t):
+            self.pooler_output = t
+
+    def _patched_get_video_features(_pv, _grid):  # noqa: ARG001
+        # Run original encoder under no_grad (vision tower frozen).
+        with torch.no_grad():
+            real = _orig_get_video_features(pv, grid)
+            embeds = real.pooler_output
+            if isinstance(embeds, (tuple, list)):
+                embeds = torch.cat([e for e in embeds], dim=0)
+            embeds = embeds.detach()
+        if embeds.shape[0] != n_post_total:
+            raise RuntimeError(
+                f"vision pooler_output rows {embeds.shape[0]} != expected "
+                f"post-merger total {n_post_total}"
+            )
+        D = embeds.shape[-1]
+        per_item = embeds.view(num_items, t0 * h0 * w0, D)
+        # Per-item grid_thw: each cam runs through the resampler with its OWN
+        # (t, h_post, w_post), so the per-cam _compute_temporal_indices walks
+        # frames 0..t0-1 from scratch — cam-A f0 and cam-B f0 both get
+        # temporal_pos[0] (shared-T multi-cam policy). For 1-cam runs this is
+        # functionally equivalent to a single call.
+        grid_thw_per_item = torch.tensor(
+            [[t0, h0, w0]], dtype=torch.long, device=embeds.device,
+        )
+        proj_dtype = next(projector.parameters()).dtype
+        compressed_items = []
+        for i in range(num_items):
+            out_i = projector(
+                per_item[i : i + 1].to(proj_dtype),
+                grid_thw=grid_thw_per_item,
+            )  # (1, num_latents, lm_dim)
+            compressed_items.append(out_i.squeeze(0))
+        return _FakeVisOut(compressed_items)
+
+    inner.get_video_features = _patched_get_video_features
+    try:
+        outputs = model(
+            input_ids=new_input_ids,
+            attention_mask=new_attn_mask,
+            labels=new_labels,
+            pixel_values_videos=pv,
+            video_grid_thw=new_grid,
+        )
+    finally:
+        inner.get_video_features = _orig_get_video_features
+    return outputs
+
+
 @torch.no_grad()
 def validate(model, val_loader, compress_method, compress_ratio, image_token_id, val_batches, device,
              *, xframe_compressor=None, video_token_id=None, num_past_frames=None,
@@ -1361,7 +1579,8 @@ def validate(model, val_loader, compress_method, compress_ratio, image_token_id,
              planning_l2_enabled: bool = False,
              greedy_max_new_tokens: int = 20,
              qformer_projector=None,
-             pixelshuffle_projector=None):
+             pixelshuffle_projector=None,
+             resampler_projector=None):
     """Run validation for val_batches batches.
 
     Returns ``(val_loss, val_acc, l2_dict)``.
@@ -1408,6 +1627,7 @@ def validate(model, val_loader, compress_method, compress_ratio, image_token_id,
         (xframe_compressor is not None)
         or (qformer_projector is not None)
         or (pixelshuffle_projector is not None)
+        or (resampler_projector is not None)
     )
 
     # Greedy-decode accumulator (filled below in the second pass).
@@ -1438,6 +1658,10 @@ def validate(model, val_loader, compress_method, compress_ratio, image_token_id,
                 elif pixelshuffle_projector is not None:
                     outputs = forward_with_video_pixelshuffle_projector(
                         model, fwd_batch, pixelshuffle_projector, video_token_id,
+                    )
+                elif resampler_projector is not None:
+                    outputs = forward_with_video_resampler_projector(
+                        model, fwd_batch, resampler_projector, video_token_id,
                     )
                 elif xframe_compressor is not None:
                     outputs = forward_with_video_xframe_compression(
@@ -1517,6 +1741,7 @@ def validate(model, val_loader, compress_method, compress_ratio, image_token_id,
             and xframe_compressor is None
             and qformer_projector is None
             and pixelshuffle_projector is None
+            and resampler_projector is None
             and processor is not None
             and val_dataset is not None
             and _cached_batches):
@@ -1651,9 +1876,23 @@ def _projector_constructor_kwargs(projector, projector_type: str) -> dict:
             "lm_dim": int(projector.lm_dim),
             "shuffle_ratio": int(projector.shuffle_ratio),
         }
-    # Resampler (A.3) will land here as another elif branch with the same
-    # shape: read the instance attrs that the projector class stores in
-    # __init__.
+    if t == "resampler":
+        # Mirrors scripts/perceiver_resampler_projector_hf
+        # .Qwen2VLPerceiverResamplerProjector.__init__.
+        # layer_norm_eps is not stored as a top-level attr; read it off
+        # norm_out (same shape as the qformer branch). ffn_mult / n_heads /
+        # t_max are stored explicitly.
+        return {
+            "in_features": int(projector.in_features),
+            "lm_dim": int(projector.lm_dim),
+            "internal_dim": int(projector.internal_dim),
+            "num_latents": int(projector.num_latents),
+            "num_layers": int(projector.num_layers),
+            "n_heads": int(projector.n_heads),
+            "ffn_mult": int(projector.ffn_mult),
+            "layer_norm_eps": float(getattr(projector.norm_out, "eps", 1e-6)),
+            "t_max": int(projector.t_max),
+        }
     raise ValueError(
         f"Unknown projector_type={projector_type!r}; add a branch in "
         f"_projector_constructor_kwargs and the load-time switch in "
@@ -2186,6 +2425,7 @@ def main():
     # fusion mechanism vs cross-frame temporal compression).
     qformer_projector = None
     pixelshuffle_projector = None
+    resampler_projector = None
     projector_type = str(cfg.get("projector_type", "linear")).lower()
     if projector_type == "qformer":
         if xframe_compressor is not None:
@@ -2323,6 +2563,89 @@ def main():
                 f"trainable params under distributed launch; cross-rank "
                 f"gradient sync is NOT wired. Same caveat as qformer / "
                 f"resampler."
+            )
+
+    # ============ Perceiver Resampler projector (Track A.3) ============
+    # When `projector_type: resampler` is set in cfg we build the Flamingo-
+    # style Perceiver Resampler projector (64 learnable latents at
+    # internal_dim=1024, latent self-attn + cross-attn(latents <- visual +
+    # temporal_pos) + FFN per block, ~90M params) and route the planning
+    # forward through `forward_with_video_resampler_projector`. Projector
+    # params are added to the optimizer like the qformer / pixelshuffle
+    # paths. Mutually exclusive with `cross_frame_compressor`, `qformer`,
+    # and `pixelshuffle` (all four are projector replacements on the same
+    # axis).
+    if projector_type == "resampler":
+        if xframe_compressor is not None:
+            raise ValueError(
+                "Cannot combine projector_type=resampler with "
+                "cross_frame_compressor; these are different ablation axes "
+                "(fusion mechanism vs cross-frame temporal compression). "
+                "Pick one."
+            )
+        if qformer_projector is not None or pixelshuffle_projector is not None:
+            raise ValueError(
+                "Cannot combine projector_type=resampler with qformer or "
+                "pixelshuffle (all three are projector replacements on the "
+                "same axis); pick one."
+            )
+        try:
+            from scripts.perceiver_resampler_projector_hf import (  # noqa: E402
+                Qwen2VLPerceiverResamplerProjector,
+            )
+        except ImportError:
+            from perceiver_resampler_projector_hf import (  # type: ignore  # noqa: E402
+                Qwen2VLPerceiverResamplerProjector,
+            )
+        rs_cfg = cfg.get("resampler", {}) or {}
+        # Resolve LM hidden dim — resampler's in_features is the post-merger
+        # feature dim, which equals lm_dim for Qwen2.5-VL-3B/7B. Both default
+        # to text_config.hidden_size and can be overridden in YAML.
+        try:
+            lm_dim_default = int(model.config.text_config.hidden_size)
+        except Exception:
+            lm_dim_default = int(rs_cfg.get("lm_dim", 2048) or 2048)
+        rs_in_features = rs_cfg.get("in_features", None)
+        rs_lm_dim = rs_cfg.get("lm_dim", None)
+        in_features = int(rs_in_features) if rs_in_features is not None else lm_dim_default
+        lm_dim_resolved = int(rs_lm_dim) if rs_lm_dim is not None else lm_dim_default
+        resampler_projector = Qwen2VLPerceiverResamplerProjector(
+            in_features=in_features,
+            lm_dim=lm_dim_resolved,
+            internal_dim=int(rs_cfg.get("internal_dim", 1024)),
+            num_latents=int(rs_cfg.get("num_latents", 64)),
+            num_layers=int(rs_cfg.get("num_layers", 6)),
+            n_heads=int(rs_cfg.get("n_heads", 8)),
+            ffn_mult=int(rs_cfg.get("ffn_mult", 2)),
+            layer_norm_eps=float(rs_cfg.get("layer_norm_eps", 1e-6)),
+            t_max=int(rs_cfg.get("t_max", 32)),
+        )
+        resampler_projector = resampler_projector.to(
+            device=accelerator.device, dtype=compute_dtype,
+        )
+        n_proj = sum(p.numel() for p in resampler_projector.parameters())
+        n_proj_train = sum(p.numel() for p in resampler_projector.parameters() if p.requires_grad)
+        accelerator.print(
+            f"[resampler] Built projector "
+            f"in={resampler_projector.in_features} "
+            f"lm={resampler_projector.lm_dim} "
+            f"internal={resampler_projector.internal_dim} "
+            f"latents={resampler_projector.num_latents} "
+            f"layers={resampler_projector.num_layers} "
+            f"t_max={resampler_projector.t_max}: "
+            f"{n_proj_train}/{n_proj} trainable params "
+            f"({n_proj/1e6:.2f}M)"
+        )
+        # Same FSDP caveat as qformer / pixelshuffle: projector sits OUTSIDE
+        # the FSDP wrap so per-rank gradients are not cross-rank-reduced. OK
+        # for single-node smoke; must be wired (DDP wrap / manual all-reduce)
+        # before multi-node SFT.
+        if n_proj_train > 0 and _is_distributed_env:
+            accelerator.print(
+                f"[resampler] WARNING: projector has {n_proj_train} "
+                f"trainable params under distributed launch; cross-rank "
+                f"gradient sync is NOT wired. Same caveat as qformer / "
+                f"pixelshuffle."
             )
 
     gpu_mem = torch.cuda.memory_allocated() / 1024**3
@@ -2493,6 +2816,8 @@ def main():
         _opt_params = _opt_params + list(qformer_projector.parameters())
     if pixelshuffle_projector is not None:
         _opt_params = _opt_params + list(pixelshuffle_projector.parameters())
+    if resampler_projector is not None:
+        _opt_params = _opt_params + list(resampler_projector.parameters())
     optimizer = torch.optim.AdamW(_opt_params, lr=lr, weight_decay=0.01)
 
     lr_schedule = str(cfg.get("lr_schedule", "cosine"))
@@ -2642,6 +2967,10 @@ def main():
                         outputs = forward_with_video_pixelshuffle_projector(
                             model, batch, pixelshuffle_projector, video_token_id,
                         )
+                    elif resampler_projector is not None:
+                        outputs = forward_with_video_resampler_projector(
+                            model, batch, resampler_projector, video_token_id,
+                        )
                     elif xframe_compressor is not None:
                         outputs = forward_with_video_xframe_compression(
                             model, batch, xframe_compressor, video_token_id,
@@ -2738,7 +3067,9 @@ def main():
                     # Pass the external projector through so its weights land
                     # alongside the LM ckpt. _save_model_and_state is a no-op
                     # on the projector args when both are None (linear path).
-                    _active_ext_proj = qformer_projector or pixelshuffle_projector
+                    _active_ext_proj = (
+                        qformer_projector or pixelshuffle_projector or resampler_projector
+                    )
                     _save_model_and_state(
                         accelerator, model, optimizer, scheduler,
                         train_mode, save_path, global_step, epoch, step,
@@ -2785,6 +3116,7 @@ def main():
                         greedy_max_new_tokens=int(cfg.get("val_greedy_max_new_tokens", 20)),
                         qformer_projector=qformer_projector,
                         pixelshuffle_projector=pixelshuffle_projector,
+                        resampler_projector=resampler_projector,
                     )
                     if accelerator.is_main_process:
                         base = f"  [VAL] step={global_step} val_loss={val_loss:.4f} val_acc={val_acc:.4f}"
@@ -2792,6 +3124,8 @@ def main():
                             tqdm.write(f"{base} L2=skipped(qformer)")
                         elif pixelshuffle_projector is not None:
                             tqdm.write(f"{base} L2=skipped(pixelshuffle)")
+                        elif resampler_projector is not None:
+                            tqdm.write(f"{base} L2=skipped(resampler)")
                         elif xframe_compressor is not None:
                             tqdm.write(f"{base} L2=skipped(xframe)")
                         elif l2_dict:
@@ -2856,10 +3190,11 @@ def main():
                             )
                         evaluate_planning_l2_collision = None  # type: ignore[assignment]
                     if evaluate_planning_l2_collision is not None:
-                        # Resampler (A.3) stub: spec says raise
-                        # NotImplementedError on attempt. We surface a clear
-                        # log + skip instead of crashing training.
-                        _active_ext_proj_full = qformer_projector or pixelshuffle_projector
+                        # All three projector dispatch paths are now wired in
+                        # planning_eval (qformer, pixelshuffle, resampler).
+                        _active_ext_proj_full = (
+                            qformer_projector or pixelshuffle_projector or resampler_projector
+                        )
                         _proj_type_eff = (projector_type if _active_ext_proj_full is not None else None)
                         # FSDP fix: under FULL_SHARD, parameters live as 1-D
                         # FlatParameters on each rank. `model.generate(...)`
@@ -2996,7 +3331,9 @@ def main():
         accelerator.print(f"\nTraining complete! (--no-final-save -> skipping final dump)")
     else:
         final_path = os.path.join(output_dir, "final")
-        _active_ext_proj_final = qformer_projector or pixelshuffle_projector
+        _active_ext_proj_final = (
+            qformer_projector or pixelshuffle_projector or resampler_projector
+        )
         _save_model_and_state(
             accelerator, model, optimizer, scheduler,
             train_mode, final_path, global_step, num_epochs - 1, -1,
