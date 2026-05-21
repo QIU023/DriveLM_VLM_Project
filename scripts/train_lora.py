@@ -2561,8 +2561,19 @@ def main():
                                 with _FSDP.summon_full_params(
                                     model, writeback=False, recurse=True
                                 ):
+                                    # KEY FIX: unwrap the FSDP wrapper so the
+                                    # generate path doesn't re-enter FSDP hooks
+                                    # (which deadlocks at ~30min when nested
+                                    # forward fires inside summon context).
+                                    # `summon_full_params` materialises 2-D
+                                    # weights; `unwrap_model` returns the
+                                    # plain HF model that wraps them — `generate()`
+                                    # then runs exactly like standalone
+                                    # planning_eval.py (which loads via
+                                    # AutoModel.from_pretrained, no FSDP).
+                                    _unwrapped = accelerator.unwrap_model(model)
                                     l2_full = evaluate_planning_l2_collision(
-                                        model, processor, val_dataset, accelerator,
+                                        _unwrapped, processor, val_dataset, accelerator,
                                         external_projector=qformer_projector,
                                         projector_type=_proj_type_eff,
                                         batch_size=int(cfg.get("full_l2_batch_size", batch_size)),
