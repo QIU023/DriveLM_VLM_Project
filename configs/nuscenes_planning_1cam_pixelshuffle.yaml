@@ -71,3 +71,29 @@ val_planning_l2: true
 val_full_eval: false
 val_greedy_max_new_tokens: 20
 full_l2_every: 250
+
+# ---- Visual-token budget override (A.2 pixelshuffle even-grid requirement) ----
+# PixelShuffle 2x requires the post-merger spatial grid (h_post, w_post) to be
+# both divisible by shuffle_ratio=2. Base gb200_vla.yaml uses
+# min/max_pixels=109760 which, for nuScenes 1-cam 16:9 aspect (1600x900),
+# smart_resize lands on 224x420 -> patch 16x30 -> post-merger 8x15. w_post=15
+# is ODD -> PixelShuffle crashes (verified empirically: A.2 v1 died at step 0
+# with `requires post-merger ... divisible by 2` RuntimeError).
+#
+# Fix: bump to next even-x-even-friendly budget for 16:9 aspect. Smart_resize
+# table (1600x900):
+#   109760 -> 8x15 (odd w)         <-- A.1 used this
+#   100352 -> 8x15 (odd w)
+#    87808 -> 7x14 (odd h)
+#   150528 -> 10x18 (BOTH EVEN)    <-- A.2 picks this (smallest workable)
+#   225792 -> 12x22 (BOTH EVEN)
+#   301056 -> 14x26 (BOTH EVEN)
+#
+# Caveat for A.1 vs A.2 fair comparison: A.2 sees 180 visual tokens/frame
+# (10x18) vs A.1's 120 (8x15) — +50% raw visual budget. After PixelShuffle 2x
+# (4x compression): 180 LM-input tokens / frame vs A.1's qformer pool to
+# 16 LM-input tokens / frame. Not a fully apples-to-apples comparison, but the
+# standard paper method does NOT pad images / hack the projector — it fits the
+# visual grid to the projector's constraints. Documented for the writeup.
+min_pixels: 150528
+max_pixels: 150528
