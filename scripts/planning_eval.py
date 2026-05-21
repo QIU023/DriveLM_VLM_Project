@@ -42,6 +42,7 @@ import os
 import pickle
 import sys
 import time
+from types import SimpleNamespace
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -563,8 +564,293 @@ def _run_batch(
 
 
 # ============================================================================
+# Reusable evaluation function (for mid-training validate + standalone main)
+# ============================================================================
+
+def evaluate_planning_l2_collision(
+    model,
+    processor,
+    val_dataset: PlanningDataset,
+    accelerator,
+    *,
+    external_projector=None,
+    projector_type: Optional[str] = None,
+    batch_size: int = 4,
+    num_samples: Optional[int] = None,
+    max_new_tokens: int = 20,
+    video_fps: float = 2.0,
+    planning_cams: Optional[List[str]] = None,
+    silent: bool = False,
+) -> Dict[str, float]:
+    """Run DP greedy-decode L2 + UniAD-port collision eval on ``val_dataset``.
+
+    Reuses the EXISTING accelerator (does NOT call init_process_group). The
+    val samples are stride-sharded across ``accelerator.num_processes`` ranks
+    (i, i+W, i+2W, ...); each rank greedy-decodes its shard, then per-sample
+    metric lists are gathered to every rank via ``gather_object`` and merged.
+
+    When ``external_projector`` is provided (``projector_type='qformer'``),
+    the generate path mirrors the training-time forward shim
+    (forward_with_video_qformer_projector): placeholder trim + grid rebuild +
+    monkey-patch ``get_video_features`` so the projector runs during the
+    prefill. ``pixelshuffle`` / ``resampler`` are not yet wired — passing
+    those raises ``NotImplementedError``.
+
+    When ``external_projector is None`` (R1' linear baseline path), we fall
+    back to the vanilla ``model.generate(...)`` flow (no monkey-patch).
+
+    Parameters
+    ----------
+    model : the (already prepared) HF model on the right device.
+    processor : the matching AutoProcessor; ``tokenizer.padding_side`` is
+        FORCED to ``"left"`` inside this function (batched greedy generate
+        requires it). We do NOT restore the prior value, since the LM
+        forward path doesn't depend on it.
+    val_dataset : a PlanningDataset instance (multi-cam aware).
+    accelerator : the ``accelerate.Accelerator`` that owns the model. We
+        read ``.device``, ``.num_processes``, ``.process_index``,
+        ``.is_main_process`` and use ``gather_object`` for cross-rank merge.
+    external_projector : optional qformer/pixelshuffle/resampler module.
+    projector_type : 'qformer' (only one wired) | 'pixelshuffle' | 'resampler'.
+    batch_size : per-rank generate batch (default 4).
+    num_samples : cap eval to first N samples (None = all). The cap is
+        applied to the GLOBAL index list BEFORE stride-sharding so each
+        rank receives the same N / world_size shard size.
+    max_new_tokens : greedy decode budget (default 20: 1 start + 12 bins
+        + 1 end + slack).
+    video_fps : passed into VideoMetadata (default 2.0).
+    planning_cams : optional override; defaults to ``val_dataset.planning_cams``.
+    silent : if True, suppress per-batch progress prints (validate path
+        typically wants this).
+
+    Returns
+    -------
+    dict with at minimum these keys (every rank returns the same dict — the
+    gather + merge happens on every rank so it's safe to read on rank>0):
+
+        L2_avg, L2_1s, L2_2s, L2_3s           # TemAvg (VAD) protocol
+        noavg_L2_avg, noavg_L2_1s, ...        # NoAvg  (UniAD) protocol
+        collision_avg, collision_1s, ...      # UniAD-port collision (fractions)
+        n_scored                              # number of samples actually scored
+        wall_seconds                          # wall-clock of the full eval
+        protocol_l2                           # protocol marker string
+
+    Returns NaN for any horizon with no valid samples.
+    """
+    device = accelerator.device
+    rank = int(accelerator.process_index)
+    world_size = int(accelerator.num_processes)
+    is_dist = world_size > 1
+
+    # Fail-fast on unsupported projector types BEFORE any data work or model
+    # touches — gives callers a clean NotImplementedError they can catch.
+    if external_projector is not None and projector_type and projector_type not in ("qformer",):
+        raise NotImplementedError(
+            f"planning_eval generate path for {projector_type!r} not yet wired"
+        )
+
+    # Early-out on empty datasets BEFORE touching the model / processor, so a
+    # caller that wants to probe the return-dict shape can pass None for both.
+    n_total = len(val_dataset)
+    if num_samples is not None:
+        n_total = min(n_total, int(num_samples))
+    if n_total == 0:
+        return {
+            "L2_avg": float("nan"), "L2_1s": float("nan"),
+            "L2_2s": float("nan"), "L2_3s": float("nan"),
+            "noavg_L2_avg": float("nan"), "noavg_L2_1s": float("nan"),
+            "noavg_L2_2s": float("nan"), "noavg_L2_3s": float("nan"),
+            "collision_avg": float("nan"), "collision_1s": float("nan"),
+            "collision_2s": float("nan"), "collision_3s": float("nan"),
+            "n_scored": 0, "wall_seconds": 0.0,
+            "protocol_l2": "TemAvg (VAD)",
+        }
+
+    # Honour the trainer-style dtype.
+    dtype = next(model.parameters()).dtype
+
+    # Batched generate requires left-padding so new tokens start at the same
+    # column for every row.
+    processor.tokenizer.padding_side = "left"
+
+    if planning_cams is None:
+        planning_cams = list(getattr(val_dataset, "planning_cams", DEFAULT_PLANNING_CAMS))
+
+    traj_cfg = TrajectoryTokenizerConfig(num_waypoints=val_dataset.num_future)
+    traj_tok = TrajectoryTokenizer(traj_cfg)
+
+    # Standalone main() uses an argparse.Namespace as the "args" carrier; the
+    # batch-builder only reads ``args.video_fps``. Reuse that pattern with a
+    # lightweight stand-in so we don't have to refactor _build_batch_inputs.
+    _args_shim = SimpleNamespace(video_fps=float(video_fps))
+
+    # Stride-shard across ranks (same convention as main()).
+    shard_indices: List[int] = list(range(rank, n_total, world_size))
+
+    local_temavg: Dict[str, List[float]] = {k: [] for k in ["L2_1s", "L2_2s", "L2_3s", "L2_avg"]}
+    local_noavg: Dict[str, List[float]] = {k: [] for k in ["L2_1s", "L2_2s", "L2_3s", "L2_avg"]}
+    local_coll: Dict[str, List[int]] = {k: [] for k in ["collision_1s", "collision_2s", "collision_3s", "collision_avg"]}
+
+    # video_token_id is only needed on the projector path. Resolve once.
+    # (Projector-type validity was already checked at function entry.)
+    if external_projector is not None:
+        video_token_id = processor.tokenizer.convert_tokens_to_ids("<|video_pad|>")
+    else:
+        video_token_id = None
+
+    t0 = time.time()
+    bs = max(1, int(batch_size))
+    n_local = len(shard_indices)
+
+    was_training = model.training
+    model.eval()
+    try:
+        with torch.inference_mode():
+            for bstart in range(0, n_local, bs):
+                batch_idx = shard_indices[bstart:bstart + bs]
+                inputs, infos, futures, samples = _build_batch_inputs(
+                    val_dataset, processor, _args_shim, batch_idx, planning_cams
+                )
+                new_tokens = _run_batch(
+                    model, processor, inputs, device, dtype, max_new_tokens,
+                    external_projector=external_projector,
+                    projector_type=projector_type,
+                    video_token_id=video_token_id,
+                )
+                new_tokens_cpu = new_tokens.cpu().tolist()
+
+                for j, _i_local in enumerate(batch_idx):
+                    sample = samples[j]
+                    gt_wp = sample["_meta_waypoints"].cpu().numpy()
+                    valid = sample["_meta_valid_mask"].cpu().numpy()
+                    info = infos[j]
+                    future_infos = futures[j]
+
+                    ids = new_tokens_cpu[j]
+                    if processor.tokenizer.pad_token_id in ids:
+                        cut = ids.index(processor.tokenizer.pad_token_id)
+                        ids = ids[:cut]
+                    pred_wp = decode_waypoints(ids, traj_tok, val_dataset.num_future)
+
+                    t = l2_temavg(pred_wp, gt_wp, valid)
+                    for k in local_temavg:
+                        if not math.isnan(t[k]):
+                            local_temavg[k].append(t[k])
+                    n = l2_noavg(pred_wp, gt_wp, valid)
+                    for k in local_noavg:
+                        if not math.isnan(n[k]):
+                            local_noavg[k].append(n[k])
+
+                    collisions_per_horizon = _uniad_compute_collision_per_sample(
+                        pred_wp_ego=pred_wp,
+                        gt_wp_ego=gt_wp,
+                        future_infos=future_infos,
+                        cur_info=info,
+                        horizon_indices=HORIZON_IDX,
+                    )
+                    for hi, h_idx in enumerate(HORIZON_IDX):
+                        if h_idx >= len(future_infos) or valid[h_idx] < 1e-6:
+                            collisions_per_horizon[hi] = 0
+                    local_coll["collision_1s"].append(collisions_per_horizon[0])
+                    local_coll["collision_2s"].append(collisions_per_horizon[1])
+                    local_coll["collision_3s"].append(collisions_per_horizon[2])
+                    local_coll["collision_avg"].append(int(any(collisions_per_horizon)))
+
+                if not silent and accelerator.is_main_process:
+                    done = bstart + len(batch_idx)
+                    if done % max(1, bs * 4) == 0 or done == n_local:
+                        rate_local = done / max(time.time() - t0, 1e-6)
+                        global_done = done * world_size
+                        rate_global = rate_local * world_size
+                        eta = max(0.0, (n_total - global_done) / max(rate_global, 1e-6))
+                        print(
+                            f"  [planning_eval] rank0 {done}/{n_local} | "
+                            f"global {global_done}/{n_total} | "
+                            f"{rate_global:.2f} sample/s (global) | ETA {eta:.1f} s",
+                            flush=True,
+                        )
+    finally:
+        if was_training:
+            model.train()
+
+    local_payload = {
+        "temavg": local_temavg,
+        "noavg": local_noavg,
+        "coll": {k: [int(x) for x in v] for k, v in local_coll.items()},
+        "n_local": n_local,
+    }
+
+    # All-gather so EVERY rank gets the merged result (the validate caller
+    # may want to print on rank 0 but compute on all ranks).
+    if is_dist and dist.is_available() and dist.is_initialized():
+        bucket: List[Optional[dict]] = [None] * world_size
+        dist.all_gather_object(bucket, local_payload)
+        gathered = bucket
+    else:
+        gathered = [local_payload]
+
+    temavg_acc: Dict[str, List[float]] = {k: [] for k in ["L2_1s", "L2_2s", "L2_3s", "L2_avg"]}
+    noavg_acc: Dict[str, List[float]] = {k: [] for k in ["L2_1s", "L2_2s", "L2_3s", "L2_avg"]}
+    coll_acc: Dict[str, List[int]] = {k: [] for k in ["collision_1s", "collision_2s", "collision_3s", "collision_avg"]}
+    for payload in gathered:
+        if payload is None:
+            continue
+        for k, v in payload["temavg"].items():
+            temavg_acc[k].extend(v)
+        for k, v in payload["noavg"].items():
+            noavg_acc[k].extend(v)
+        for k, v in payload["coll"].items():
+            coll_acc[k].extend(v)
+
+    def _mean(xs) -> float:
+        return float(np.mean(xs)) if len(xs) else float("nan")
+
+    elapsed = time.time() - t0
+    n_scored = len(temavg_acc["L2_avg"]) if temavg_acc["L2_avg"] else n_total
+
+    return {
+        # TemAvg (VAD) — flat keys (paper-comparable).
+        "L2_avg": _mean(temavg_acc["L2_avg"]),
+        "L2_1s": _mean(temavg_acc["L2_1s"]),
+        "L2_2s": _mean(temavg_acc["L2_2s"]),
+        "L2_3s": _mean(temavg_acc["L2_3s"]),
+        # NoAvg (UniAD).
+        "noavg_L2_avg": _mean(noavg_acc["L2_avg"]),
+        "noavg_L2_1s": _mean(noavg_acc["L2_1s"]),
+        "noavg_L2_2s": _mean(noavg_acc["L2_2s"]),
+        "noavg_L2_3s": _mean(noavg_acc["L2_3s"]),
+        # UniAD-port collision (fractions in [0, 1]).
+        "collision_avg": _mean([float(x) for x in coll_acc["collision_avg"]]),
+        "collision_1s": _mean([float(x) for x in coll_acc["collision_1s"]]),
+        "collision_2s": _mean([float(x) for x in coll_acc["collision_2s"]]),
+        "collision_3s": _mean([float(x) for x in coll_acc["collision_3s"]]),
+        "n_scored": int(n_scored),
+        "wall_seconds": round(elapsed, 2),
+        "protocol_l2": "TemAvg (VAD) shown in L2_*; NoAvg under noavg_L2_*",
+    }
+
+
+# ============================================================================
 # Main
 # ============================================================================
+
+class _StandaloneAcceleratorShim:
+    """Minimal Accelerator-API stand-in for the standalone CLI path.
+
+    ``evaluate_planning_l2_collision`` only reads ``.device``,
+    ``.process_index``, ``.num_processes`` and ``.is_main_process``, so this
+    is enough to reuse the same function without pulling in the full
+    ``accelerate`` package on the eval-from-shell path. We don't initialise
+    a process group here — ``_init_distributed`` (called by main) already
+    handled that.
+    """
+
+    def __init__(self, device, rank: int, world_size: int):
+        self.device = device
+        self.process_index = rank
+        self.num_processes = world_size
+        self.is_main_process = (rank == 0)
+
 
 def main() -> None:
     p = argparse.ArgumentParser()
@@ -623,12 +909,6 @@ def main() -> None:
         _log(rank, f"[planning_eval] external projector loaded: "
                    f"type={projector_type} "
                    f"params={sum(p.numel() for p in external_projector.parameters())/1e6:.2f}M")
-        video_token_id = processor.tokenizer.convert_tokens_to_ids("<|video_pad|>")
-    else:
-        video_token_id = None
-
-    traj_cfg = TrajectoryTokenizerConfig(num_waypoints=args.num_future_waypoints)
-    traj_tok = TrajectoryTokenizer(traj_cfg)
 
     planning_cams = [c.strip() for c in args.planning_cams.split(",") if c.strip()]
     # Multi-cam expands visual tokens ~Nx; raise the eval max_length to match
@@ -654,128 +934,32 @@ def main() -> None:
     if n_total == 0:
         raise RuntimeError("Empty val set after require_full_future filter.")
 
-    # Stride-shard across ranks (i, i+W, i+2W, ...). This keeps batches roughly
-    # balanced even if some samples (the multi-cam tail) are slower than others.
-    shard_indices: List[int] = list(range(rank, n_total, world_size))
-
-    # Per-sample local stats; we keep PER-SAMPLE values (not running means) so
-    # rank 0 can aggregate exactly with no numerical loss.
-    local_temavg: Dict[str, List[float]] = {k: [] for k in ["L2_1s", "L2_2s", "L2_3s", "L2_avg"]}
-    local_noavg: Dict[str, List[float]] = {k: [] for k in ["L2_1s", "L2_2s", "L2_3s", "L2_avg"]}
-    local_coll: Dict[str, List[int]] = {k: [] for k in ["collision_1s", "collision_2s", "collision_3s", "collision_avg"]}
-
-    t0 = time.time()
+    # Thin wrapper: hand off to evaluate_planning_l2_collision (the same
+    # function used by validate() in train_lora.py). _StandaloneAcceleratorShim
+    # provides the four attrs the function reads from accelerator.
+    acc_shim = _StandaloneAcceleratorShim(device=device, rank=rank, world_size=world_size)
     bs = max(1, int(args.batch_size))
-    n_local = len(shard_indices)
-
-    with torch.inference_mode():
-        for bstart in range(0, n_local, bs):
-            batch_idx = shard_indices[bstart:bstart + bs]
-            inputs, infos, futures, samples = _build_batch_inputs(
-                ds, processor, args, batch_idx, planning_cams
-            )
-            new_tokens = _run_batch(
-                model, processor, inputs, device, dtype, args.max_new_tokens,
-                external_projector=external_projector,
-                projector_type=projector_type,
-                video_token_id=video_token_id,
-            )
-            new_tokens_cpu = new_tokens.cpu().tolist()
-
-            for j, i_local in enumerate(batch_idx):
-                sample = samples[j]
-                gt_wp = sample["_meta_waypoints"].cpu().numpy()
-                valid = sample["_meta_valid_mask"].cpu().numpy()
-                info = infos[j]
-                future_infos = futures[j]
-
-                # Stop at the first pad token so trailing pads don't confuse the
-                # decoder. (Left-padding only adds pads on the left of the prompt
-                # so this slice is right-side trailing pad from EOS-truncation.)
-                ids = new_tokens_cpu[j]
-                if processor.tokenizer.pad_token_id in ids:
-                    cut = ids.index(processor.tokenizer.pad_token_id)
-                    ids = ids[:cut]
-                pred_wp = decode_waypoints(ids, traj_tok, args.num_future_waypoints)
-
-                t = l2_temavg(pred_wp, gt_wp, valid)
-                for k in local_temavg:
-                    if not math.isnan(t[k]):
-                        local_temavg[k].append(t[k])
-                n = l2_noavg(pred_wp, gt_wp, valid)
-                for k in local_noavg:
-                    if not math.isnan(n[k]):
-                        local_noavg[k].append(n[k])
-
-                collisions_per_horizon = _uniad_compute_collision_per_sample(
-                    pred_wp_ego=pred_wp,
-                    gt_wp_ego=gt_wp,
-                    future_infos=future_infos,
-                    cur_info=info,
-                    horizon_indices=HORIZON_IDX,
-                )
-                for hi, h_idx in enumerate(HORIZON_IDX):
-                    if h_idx >= len(future_infos) or valid[h_idx] < 1e-6:
-                        collisions_per_horizon[hi] = 0
-                local_coll["collision_1s"].append(collisions_per_horizon[0])
-                local_coll["collision_2s"].append(collisions_per_horizon[1])
-                local_coll["collision_3s"].append(collisions_per_horizon[2])
-                local_coll["collision_avg"].append(int(any(collisions_per_horizon)))
-
-            done = bstart + len(batch_idx)
-            if _is_rank0(rank) and (done % max(1, bs * 4) == 0 or done == n_local):
-                rate_local = done / max(time.time() - t0, 1e-6)
-                global_done = done * world_size
-                global_total = n_total
-                rate_global = rate_local * world_size
-                eta = max(0.0, (global_total - global_done) / max(rate_global, 1e-6))
-                print(
-                    f"  [rank0 {done}/{n_local} | global {global_done}/{global_total}] "
-                    f"{rate_local:.2f} sample/s (rank) | {rate_global:.2f} sample/s (global) "
-                    f"| ETA {eta:.1f} s",
-                    flush=True,
-                )
-
-    # Aggregate across ranks. Each rank packs its per-sample lists into a dict
-    # and rank 0 gathers via `dist.gather_object`.
-    local_payload = {
-        "temavg": local_temavg,
-        "noavg": local_noavg,
-        "coll": {k: [int(x) for x in v] for k, v in local_coll.items()},
-        "n_local": n_local,
-    }
-
-    if is_dist:
-        gathered: List[Optional[dict]] = [None] * world_size if _is_rank0(rank) else None
-        dist.gather_object(local_payload, gathered if _is_rank0(rank) else None, dst=0)
-        dist.barrier()
-    else:
-        gathered = [local_payload]
+    metrics = evaluate_planning_l2_collision(
+        model, processor, ds, acc_shim,
+        external_projector=external_projector,
+        projector_type=projector_type,
+        batch_size=bs,
+        num_samples=None,  # standalone always walks the full ds (already capped via max_samples)
+        max_new_tokens=args.max_new_tokens,
+        video_fps=args.video_fps,
+        planning_cams=planning_cams,
+        silent=False,
+    )
 
     if not _is_rank0(rank):
         if is_dist:
             dist.destroy_process_group()
         return
 
-    # Rank 0: merge per-sample lists from every rank.
-    temavg_acc: Dict[str, List[float]] = {k: [] for k in ["L2_1s", "L2_2s", "L2_3s", "L2_avg"]}
-    noavg_acc: Dict[str, List[float]] = {k: [] for k in ["L2_1s", "L2_2s", "L2_3s", "L2_avg"]}
-    coll_acc: Dict[str, List[int]] = {k: [] for k in ["collision_1s", "collision_2s", "collision_3s", "collision_avg"]}
-    for payload in gathered:
-        if payload is None:
-            continue
-        for k, v in payload["temavg"].items():
-            temavg_acc[k].extend(v)
-        for k, v in payload["noavg"].items():
-            noavg_acc[k].extend(v)
-        for k, v in payload["coll"].items():
-            coll_acc[k].extend(v)
-
-    def _mean(xs) -> float:
-        return float(np.mean(xs)) if len(xs) else float("nan")
-
-    elapsed = time.time() - t0
-    n_scored = len(temavg_acc["L2_avg"]) if temavg_acc["L2_avg"] else n_total
+    # Rank 0: assemble the legacy JSON schema (TemAvg/NoAvg/collision_rate
+    # nested dicts + flat shortcut keys + ego_footprint_m) and write it.
+    elapsed = metrics["wall_seconds"]
+    n_scored = metrics["n_scored"]
     results = {
         "ckpt": os.path.abspath(args.ckpt),
         "infos_val": os.path.abspath(args.infos_val),
@@ -783,25 +967,31 @@ def main() -> None:
         "n_scored": n_scored,
         "world_size": world_size,
         "batch_size": bs,
-        "wall_seconds": round(elapsed, 2),
+        "wall_seconds": elapsed,
         "horizon_s": list(HORIZONS),
-        "TemAvg": {k: _mean(v) for k, v in temavg_acc.items()},
-        "NoAvg": {k: _mean(v) for k, v in noavg_acc.items()},
-        "collision_rate": {
-            "collision_1s": _mean([float(x) for x in coll_acc["collision_1s"]]),
-            "collision_2s": _mean([float(x) for x in coll_acc["collision_2s"]]),
-            "collision_3s": _mean([float(x) for x in coll_acc["collision_3s"]]),
-            "collision_avg": _mean([float(x) for x in coll_acc["collision_avg"]]),
+        "TemAvg": {
+            "L2_1s": metrics["L2_1s"], "L2_2s": metrics["L2_2s"],
+            "L2_3s": metrics["L2_3s"], "L2_avg": metrics["L2_avg"],
         },
-        # Flat shortcut keys matching the table format requested in the spec.
-        "L2_1s": _mean(temavg_acc["L2_1s"]),
-        "L2_2s": _mean(temavg_acc["L2_2s"]),
-        "L2_3s": _mean(temavg_acc["L2_3s"]),
-        "L2_avg": _mean(temavg_acc["L2_avg"]),
-        "collision_1s": _mean([float(x) for x in coll_acc["collision_1s"]]),
-        "collision_2s": _mean([float(x) for x in coll_acc["collision_2s"]]),
-        "collision_3s": _mean([float(x) for x in coll_acc["collision_3s"]]),
-        "collision_avg": _mean([float(x) for x in coll_acc["collision_avg"]]),
+        "NoAvg": {
+            "L2_1s": metrics["noavg_L2_1s"], "L2_2s": metrics["noavg_L2_2s"],
+            "L2_3s": metrics["noavg_L2_3s"], "L2_avg": metrics["noavg_L2_avg"],
+        },
+        "collision_rate": {
+            "collision_1s": metrics["collision_1s"],
+            "collision_2s": metrics["collision_2s"],
+            "collision_3s": metrics["collision_3s"],
+            "collision_avg": metrics["collision_avg"],
+        },
+        # Flat shortcut keys (table-format).
+        "L2_1s": metrics["L2_1s"],
+        "L2_2s": metrics["L2_2s"],
+        "L2_3s": metrics["L2_3s"],
+        "L2_avg": metrics["L2_avg"],
+        "collision_1s": metrics["collision_1s"],
+        "collision_2s": metrics["collision_2s"],
+        "collision_3s": metrics["collision_3s"],
+        "collision_avg": metrics["collision_avg"],
         "protocol_l2": "TemAvg (VAD) shown in flat L2_*; full both protocols inside this JSON",
         "ego_footprint_m": {
             "length": EGO_LENGTH_M,

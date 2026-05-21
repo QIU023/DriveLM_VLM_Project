@@ -1717,6 +1717,12 @@ def main():
                       f"FSDP={'on' if use_fsdp else 'off'}")
     if val_every > 0:
         accelerator.print(f"Validation: every {val_every} opt steps, {val_batches} batches")
+        _full_l2_every_log = cfg.get("full_l2_every", None)
+        if _full_l2_every_log is not None and int(_full_l2_every_log) > 0:
+            accelerator.print(
+                f"Validation (full L2): every {int(_full_l2_every_log)} opt steps "
+                f"(DP greedy-decode L2 + UniAD collision over full val set)"
+            )
 
     # ============ Model setup ============
     print(f"Training mode: {train_mode}  |  vla_mode={vla_mode}  |  freeze_vision={freeze_vision}")
@@ -2489,6 +2495,99 @@ def main():
                                 if k in l2_dict:
                                     log_payload[f"val_{k}"] = l2_dict[k]
                         wandb.log(log_payload, step=global_step)
+
+                # Full-L2 path (mid-training real planning metrics).
+                # Independent cadence from the cheap TF validate() above —
+                # both can fire on the same step (e.g., step 250 with
+                # val_every=50, full_l2_every=250). The cheap path stays
+                # opt-in via val_every; this opt-in via full_l2_every.
+                # Reuses scripts/planning_eval.evaluate_planning_l2_collision
+                # which DP-shards the val set across accelerator.num_processes
+                # ranks and all-gathers the per-sample metric lists.
+                _full_l2_every = cfg.get("full_l2_every", None)
+                _val_planning_l2_on = bool(use_planning and cfg.get("val_planning_l2", True))
+                _do_full_l2 = (
+                    _full_l2_every is not None
+                    and int(_full_l2_every) > 0
+                    and val_dataset is not None
+                    and _val_planning_l2_on
+                    and global_step > 0
+                    and global_step % int(_full_l2_every) == 0
+                )
+                if _do_full_l2:
+                    try:
+                        from planning_eval import evaluate_planning_l2_collision
+                    except ImportError as _e:
+                        if accelerator.is_main_process:
+                            tqdm.write(
+                                f"  [VAL-FULL] step={global_step} ERROR: cannot import "
+                                f"evaluate_planning_l2_collision ({_e}); skipping full-L2 pass."
+                            )
+                        evaluate_planning_l2_collision = None  # type: ignore[assignment]
+                    if evaluate_planning_l2_collision is not None:
+                        # Pixelshuffle / resampler stub: spec says raise
+                        # NotImplementedError on attempt. We surface a clear
+                        # log + skip instead of crashing training.
+                        _proj_type_eff = (projector_type if qformer_projector is not None else None)
+                        try:
+                            l2_full = evaluate_planning_l2_collision(
+                                model, processor, val_dataset, accelerator,
+                                external_projector=qformer_projector,
+                                projector_type=_proj_type_eff,
+                                batch_size=int(cfg.get("full_l2_batch_size", batch_size)),
+                                num_samples=cfg.get("full_l2_max_samples", None),
+                                max_new_tokens=int(cfg.get("val_greedy_max_new_tokens", 20)),
+                                video_fps=float(cfg.get("video_fps", 2.0)),
+                                silent=True,
+                            )
+                        except NotImplementedError as _nie:
+                            if accelerator.is_main_process:
+                                tqdm.write(
+                                    f"  [VAL-FULL] step={global_step} SKIP: {_nie}"
+                                )
+                            l2_full = None
+                        except Exception as _e:  # pylint: disable=broad-except
+                            if accelerator.is_main_process:
+                                tqdm.write(
+                                    f"  [VAL-FULL] step={global_step} ERROR: {type(_e).__name__}: {_e}"
+                                )
+                            l2_full = None
+
+                        if l2_full is not None and accelerator.is_main_process:
+                            tqdm.write(
+                                f"  [VAL-FULL] step={global_step} "
+                                f"L2_avg={l2_full['L2_avg']:.4f} "
+                                f"L2_1s={l2_full['L2_1s']:.4f} "
+                                f"L2_2s={l2_full['L2_2s']:.4f} "
+                                f"L2_3s={l2_full['L2_3s']:.4f} "
+                                f"collision_avg={l2_full['collision_avg'] * 100:.2f}% "
+                                f"(1s={l2_full['collision_1s'] * 100:.2f}% "
+                                f"2s={l2_full['collision_2s'] * 100:.2f}% "
+                                f"3s={l2_full['collision_3s'] * 100:.2f}%) "
+                                f"n_scored={l2_full['n_scored']} "
+                                f"wall={l2_full['wall_seconds']:.1f}s"
+                            )
+                        if l2_full is not None and args.wandb and accelerator.is_main_process:
+                            import wandb
+                            wandb.log({
+                                "val_full_l2_avg": l2_full["L2_avg"],
+                                "val_full_l2_1s": l2_full["L2_1s"],
+                                "val_full_l2_2s": l2_full["L2_2s"],
+                                "val_full_l2_3s": l2_full["L2_3s"],
+                                "val_full_noavg_l2_avg": l2_full["noavg_L2_avg"],
+                                "val_full_collision_avg": l2_full["collision_avg"],
+                                "val_full_collision_1s": l2_full["collision_1s"],
+                                "val_full_collision_2s": l2_full["collision_2s"],
+                                "val_full_collision_3s": l2_full["collision_3s"],
+                                "val_full_n_scored": l2_full["n_scored"],
+                                "val_full_wall_s": l2_full["wall_seconds"],
+                            }, step=global_step)
+                    # Ensure all ranks resync at the end of the eval before
+                    # the next training step (gather_object inside
+                    # evaluate_planning_l2_collision already syncs, but a
+                    # belt-and-braces wait keeps the train loop clean if any
+                    # rank failed in the try/except above).
+                    accelerator.wait_for_everyone()
 
                 if args.max_steps and global_step >= args.max_steps:
                     if accelerator.is_main_process:

@@ -75,10 +75,21 @@ lr_step_freq: 143
 
 # ---- Mid-training planning metrics (from train_lora L2 val merge) --------
 # val_planning_l2=true triggers the greedy-decode L2 + UniAD-collision pass
-# alongside the legacy teacher-forced L2. NOTE: the greedy pass is internally
-# skipped when qformer_projector is active (model.generate after placeholder
-# trim is not yet validated), so this run will report teacher-forced L2 only.
-# Re-evaluate after A.1 lands.
+# alongside the legacy teacher-forced L2.
+#
+# Two cadences (independent — both fire on overlapping steps):
+#   * val_every=50  -> cheap path: TF loss/acc on val_batches=20 micro-batches.
+#     Under qformer, the greedy-decode block inside validate() is short-
+#     circuited (placeholder-trim + model.generate not yet validated), so
+#     this path prints "L2=skipped(qformer)".
+#   * full_l2_every=250 -> full path: DP greedy-decode L2 + UniAD-collision
+#     across the ENTIRE val set, qformer-aware (mirrors planning_eval.py).
+#     On ~2050 total steps this gives 9 L2 datapoints (steps 250, 500, 750,
+#     1000, 1250, 1500, 1750, 2000) — paper-comparable trajectory metrics.
+#     Cost: ~3 min wall on 8x 5090 over ~6000 val samples = ~27 min total
+#     extra over the run (~22% slowdown). Acceptable for real-time L2
+#     trajectory visibility during training.
 val_planning_l2: true
 val_full_eval: false
 val_greedy_max_new_tokens: 20
+full_l2_every: 250
