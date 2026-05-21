@@ -3000,6 +3000,32 @@ def main():
                     batch_loss_window.append(batch_loss)
 
                     if accelerator.sync_gradients:
+                        # FIX (2026-05-21): external projectors / compressor
+                        # (qformer / pixelshuffle / resampler / xframe) sit
+                        # OUTSIDE the FSDP wrap. accelerator.backward() syncs
+                        # LM grads via FSDP but leaves these modules' grads
+                        # rank-local. Without manual all-reduce, each rank
+                        # trains a divergent projector on its 1/N data shard,
+                        # and save_pretrained picks rank-0's copy => effective
+                        # training data for the projector is 1/N (catastrophic
+                        # under-training under 8-rank launch).
+                        # The warnings printed at instantiation time documented
+                        # this caveat; this block is the actual fix.
+                        if accelerator.num_processes > 1:
+                            import torch.distributed as _dist
+                            _world = float(accelerator.num_processes)
+                            for _proj in (
+                                qformer_projector,
+                                pixelshuffle_projector,
+                                resampler_projector,
+                                xframe_compressor,
+                            ):
+                                if _proj is None:
+                                    continue
+                                for _p in _proj.parameters():
+                                    if _p.grad is not None:
+                                        _dist.all_reduce(_p.grad, op=_dist.ReduceOp.SUM)
+                                        _p.grad.div_(_world)
                         # Gradient clipping (FSDP-aware).
                         grad_norm = accelerator.clip_grad_norm_(model.parameters(), 1.0)
                         # grad_norm may be a tensor returned by accelerate; coerce to float
