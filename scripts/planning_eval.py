@@ -636,6 +636,20 @@ def evaluate_planning_l2_collision(
         protocol_l2                           # protocol marker string
 
     Returns NaN for any horizon with no valid samples.
+
+    FSDP contract
+    -------------
+    This function calls ``model.generate(...)`` directly. If the model was
+    wrapped by ``FullyShardedDataParallel`` (FULL_SHARD) the per-rank
+    parameters are 1-D FlatParameters and the inner ``nn.Embedding`` /
+    ``nn.Linear`` calls will raise ``RuntimeError: 'weight' must be 2-D``.
+    Callers (e.g. ``train_lora.validate()``) MUST wrap the call in
+    ``FSDP.summon_full_params(model, writeback=False, recurse=True)`` so the
+    full unsharded weights are materialised for the eval. The standalone
+    post-training ``main()`` path loads from disk via
+    ``AutoModel.from_pretrained(...)`` and is never FSDP-wrapped, so it does
+    not need this. We intentionally do NOT auto-summon inside this function
+    to keep the standalone path free of FSDP-import side-effects.
     """
     device = accelerator.device
     rank = int(accelerator.process_index)

@@ -2529,17 +2529,59 @@ def main():
                         # NotImplementedError on attempt. We surface a clear
                         # log + skip instead of crashing training.
                         _proj_type_eff = (projector_type if qformer_projector is not None else None)
+                        # FSDP fix: under FULL_SHARD, parameters live as 1-D
+                        # FlatParameters on each rank. `model.generate(...)`
+                        # inside evaluate_planning_l2_collision hits
+                        # nn.Embedding / nn.Linear with those 1-D weights and
+                        # crashes with `RuntimeError: 'weight' must be 2-D`.
+                        # `FSDP.summon_full_params(..., writeback=False,
+                        # recurse=True)` materialises the full unsharded
+                        # weights on every rank for the duration of the with-
+                        # block, then re-shards on exit. Standalone
+                        # planning_eval.py loads from disk via
+                        # AutoModel.from_pretrained so it never hits this
+                        # path; we keep the eval function FSDP-agnostic and
+                        # wrap here at the caller. qformer_projector sits
+                        # OUTSIDE the FSDP wrap (see lines ~1995-2005) so it
+                        # does not need summoning. See PyTorch FSDP docs:
+                        # https://pytorch.org/docs/stable/fsdp.html
+                        # #torch.distributed.fsdp.FullyShardedDataParallel.summon_full_params
                         try:
-                            l2_full = evaluate_planning_l2_collision(
-                                model, processor, val_dataset, accelerator,
-                                external_projector=qformer_projector,
-                                projector_type=_proj_type_eff,
-                                batch_size=int(cfg.get("full_l2_batch_size", batch_size)),
-                                num_samples=cfg.get("full_l2_max_samples", None),
-                                max_new_tokens=int(cfg.get("val_greedy_max_new_tokens", 20)),
-                                video_fps=float(cfg.get("video_fps", 2.0)),
-                                silent=True,
+                            from torch.distributed.fsdp import (
+                                FullyShardedDataParallel as _FSDP,
                             )
+                            _is_fsdp_model = isinstance(model, _FSDP) or hasattr(
+                                model, "_fsdp_wrapped_module"
+                            )
+                        except ImportError:
+                            _FSDP = None  # type: ignore[assignment]
+                            _is_fsdp_model = False
+                        try:
+                            if _is_fsdp_model and _FSDP is not None:
+                                with _FSDP.summon_full_params(
+                                    model, writeback=False, recurse=True
+                                ):
+                                    l2_full = evaluate_planning_l2_collision(
+                                        model, processor, val_dataset, accelerator,
+                                        external_projector=qformer_projector,
+                                        projector_type=_proj_type_eff,
+                                        batch_size=int(cfg.get("full_l2_batch_size", batch_size)),
+                                        num_samples=cfg.get("full_l2_max_samples", None),
+                                        max_new_tokens=int(cfg.get("val_greedy_max_new_tokens", 20)),
+                                        video_fps=float(cfg.get("video_fps", 2.0)),
+                                        silent=True,
+                                    )
+                            else:
+                                l2_full = evaluate_planning_l2_collision(
+                                    model, processor, val_dataset, accelerator,
+                                    external_projector=qformer_projector,
+                                    projector_type=_proj_type_eff,
+                                    batch_size=int(cfg.get("full_l2_batch_size", batch_size)),
+                                    num_samples=cfg.get("full_l2_max_samples", None),
+                                    max_new_tokens=int(cfg.get("val_greedy_max_new_tokens", 20)),
+                                    video_fps=float(cfg.get("video_fps", 2.0)),
+                                    silent=True,
+                                )
                         except NotImplementedError as _nie:
                             if accelerator.is_main_process:
                                 tqdm.write(
