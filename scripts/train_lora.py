@@ -2680,15 +2680,23 @@ def main():
     # and build the dataset on the fly from UniAD's preprocessed temporal infos
     # + the CAM_FRONT samples under data/nuscenes/samples/CAM_FRONT/.
     dataset_kind = str(cfg.get("dataset_kind", "drivelm")).lower()
-    use_planning = (dataset_kind == "nuscenes_planning")
+    use_planning = (dataset_kind == "nuscenes_planning"
+                    or dataset_kind == "nuscenes_planning_multimodal")
     if use_planning:
-        from planning_dataset import build_planning_dataset  # noqa: E402
-        train_dataset = build_planning_dataset(cfg, processor, split="train")
+        if dataset_kind == "nuscenes_planning_multimodal":
+            # Image-as-modality variant (Tracks B.5 / B.6): camera video + HD-map
+            # BEV image + bbox text + ego state, no new learnable module.
+            from multimodal_planning_dataset import build_multimodal_planning_dataset  # noqa: E402
+            _builder = build_multimodal_planning_dataset
+        else:
+            from planning_dataset import build_planning_dataset  # noqa: E402
+            _builder = build_planning_dataset
+        train_dataset = _builder(cfg, processor, split="train")
         val_dataset = None
         if val_every > 0 and cfg.get("infos_val"):
-            val_dataset = build_planning_dataset(cfg, processor, split="val")
+            val_dataset = _builder(cfg, processor, split="val")
         accelerator.print(
-            f"[nusc-planning] train_samples={len(train_dataset)} "
+            f"[nusc-planning] kind={dataset_kind} train_samples={len(train_dataset)} "
             f"val_samples={len(val_dataset) if val_dataset is not None else 0}"
         )
 

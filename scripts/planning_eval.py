@@ -485,6 +485,207 @@ def l2_noavg(pred: np.ndarray, gt: np.ndarray, valid: np.ndarray) -> Dict[str, f
 
 
 # ============================================================================
+# Sub-scenario classification + behavior metrics
+# ============================================================================
+
+# Sub-scenario classification thresholds. Tuning intent:
+#   - straight  : "almost no heading change AND moving" — covers the dominant
+#                 cruise samples that wash out aggregate L2.
+#   - turning   : substantial heading change — left/right/U-turns.
+#   - lane_change: noticeable lateral offset but NOT a turn (heading roughly
+#                  preserved at the end of horizon).
+#   - braking   : speed drops > 2 m/s within the 3 s window.
+#   - cruising  : moving but doesn't qualify as straight (mild heading drift,
+#                 lane curvature, etc.).
+#   - stationary: ego speed <= 1 m/s for the whole window.
+# Priority is the bucket order tested top-to-bottom; first match wins.
+_SCENARIO_BUCKETS: Tuple[str, ...] = (
+    "stationary",  # tested first as a gate: speed<=1 short-circuits everything
+    "turning",     # then big heading change wins (steals lane_change/braking)
+    "lane_change", # then large lateral but not a turn
+    "braking",     # then large speed drop but not a turn
+    "straight",    # then near-straight cruise (most common bucket)
+    "cruising",    # fallback for "moving but not in any above"
+)
+
+STRAIGHT_HEADING_THRESH_RAD = math.radians(5.0)
+TURNING_HEADING_THRESH_RAD = math.radians(15.0)
+LANE_CHANGE_LATERAL_THRESH_M = 1.5
+BRAKING_DECEL_THRESH_M_S = 2.0
+STATIONARY_SPEED_THRESH_M_S = 1.0
+HARD_BRAKE_DECEL_THRESH_M_S2 = 3.0
+
+
+def _wrap_to_pi(angle: float) -> float:
+    """Wrap to [-pi, pi]."""
+    return float((angle + math.pi) % (2.0 * math.pi) - math.pi)
+
+
+def _step_headings(wp: np.ndarray) -> np.ndarray:
+    """Per-step headings (radians) from origin to wp[0], then wp[k-1]->wp[k].
+
+    Returns shape (T,) of atan2(dy_step, dx_step) for step k=0..T-1, where
+    step 0 uses (wp[0] - origin).
+    """
+    T = wp.shape[0]
+    if T == 0:
+        return np.zeros((0,), dtype=np.float64)
+    prev = np.zeros((T, 2), dtype=np.float64)
+    prev[1:] = wp[:-1]
+    delta = wp.astype(np.float64) - prev
+    return np.arctan2(delta[:, 1], delta[:, 0])
+
+
+def _step_distances(wp: np.ndarray) -> np.ndarray:
+    """Per-step Euclidean distances; step 0 = ||wp[0]||."""
+    T = wp.shape[0]
+    if T == 0:
+        return np.zeros((0,), dtype=np.float64)
+    prev = np.zeros((T, 2), dtype=np.float64)
+    prev[1:] = wp[:-1]
+    delta = wp.astype(np.float64) - prev
+    return np.sqrt((delta ** 2).sum(axis=-1))
+
+
+def classify_scenario(gt_wp: np.ndarray, valid: np.ndarray,
+                      horizon_s: float = 3.0) -> str:
+    """Assign a sub-scenario bucket using GT waypoints in current ego frame.
+
+    Ego frame convention: at t=0 the ego is at (0, 0) facing +x. wp[i] is the
+    GT position at t=(i+1)*DT seconds. Lateral displacement perpendicular to
+    ego heading at t=0 is therefore simply |wp[-1, 1]| (y component).
+
+    Returns one of: 'straight' / 'turning' / 'lane_change' / 'braking'
+    / 'cruising' / 'stationary'.
+
+    Pads with priority order in _SCENARIO_BUCKETS — first match wins.
+    """
+    T = int(gt_wp.shape[0])
+    if T < 2 or valid.sum() < 2:
+        # Degenerate / scene-tail: don't try to bucket; call it stationary.
+        return "stationary"
+    # Use last VALID waypoint to define horizon-end quantities (so scene-tail
+    # samples are still classified consistently).
+    last_valid_idx = int(np.where(valid > 0.5)[0].max())
+    if last_valid_idx < 1:
+        return "stationary"
+
+    # Average ego speed over the valid horizon (path distance / elapsed time).
+    step_d = _step_distances(gt_wp[: last_valid_idx + 1])
+    total_d = float(step_d.sum())
+    elapsed_s = float(last_valid_idx + 1) * DT
+    avg_speed = total_d / max(elapsed_s, 1e-6)
+
+    # Heading change from first step to last step.
+    headings = _step_headings(gt_wp[: last_valid_idx + 1])
+    heading_change = _wrap_to_pi(float(headings[-1] - headings[0]))
+    abs_heading_change = abs(heading_change)
+
+    # Lateral displacement perpendicular to ego forward at t=0 is the y
+    # component (ego frame is +x = forward).
+    lateral_disp = abs(float(gt_wp[last_valid_idx, 1]))
+
+    # Speed drop: compare instantaneous speed at start of window vs end.
+    # Use single-step speeds (m/s) since DT = 0.5s.
+    v_start = float(step_d[0]) / DT
+    v_end = float(step_d[-1]) / DT
+    speed_drop = v_start - v_end
+
+    # Apply priority order.
+    if avg_speed <= STATIONARY_SPEED_THRESH_M_S:
+        return "stationary"
+    if abs_heading_change >= TURNING_HEADING_THRESH_RAD:
+        return "turning"
+    if lateral_disp > LANE_CHANGE_LATERAL_THRESH_M:
+        return "lane_change"
+    if speed_drop > BRAKING_DECEL_THRESH_M_S:
+        return "braking"
+    if abs_heading_change < STRAIGHT_HEADING_THRESH_RAD:
+        return "straight"
+    return "cruising"
+
+
+def behavior_metrics(pred: np.ndarray, gt: np.ndarray,
+                     valid: np.ndarray) -> Dict[str, float]:
+    """Per-sample behavior metrics (all in SI units).
+
+    Returns dict with:
+      heading_error_rad      — mean over T steps of wrapped |head_pred - head_gt|
+      lateral_accel_rms_m_s2 — sqrt(mean( (v_pred^2 * kappa_pred)^2 ))
+      speed_error_m_s        — mean over T steps of |v_pred - v_gt|
+      hard_brake             — 1 if any pred decel > HARD_BRAKE_DECEL_THRESH, else 0
+      progress_ratio         — pred total path / gt total path  (NaN if gt~=0)
+
+    All quantities use ALL T waypoints (no horizon truncation).
+    Invalid steps are simply omitted from the mean.
+    """
+    valid_mask = valid > 0.5
+    T = int(pred.shape[0])
+    out: Dict[str, float] = {
+        "heading_error_rad": float("nan"),
+        "lateral_accel_rms_m_s2": float("nan"),
+        "speed_error_m_s": float("nan"),
+        "hard_brake": 0,
+        "progress_ratio": float("nan"),
+    }
+    if T == 0 or not valid_mask.any():
+        return out
+
+    head_pred = _step_headings(pred)
+    head_gt = _step_headings(gt)
+    step_d_pred = _step_distances(pred)
+    step_d_gt = _step_distances(gt)
+
+    # Heading error per step (wrapped).
+    per_step_he = np.array(
+        [abs(_wrap_to_pi(float(head_pred[k] - head_gt[k]))) for k in range(T)],
+        dtype=np.float64,
+    )
+    valid_sel = valid_mask  # shape (T,)
+    if valid_sel.any():
+        out["heading_error_rad"] = float(per_step_he[valid_sel].mean())
+
+    # Per-step speed (m/s).
+    v_pred = step_d_pred / DT
+    v_gt = step_d_gt / DT
+    if valid_sel.any():
+        out["speed_error_m_s"] = float(np.abs(v_pred - v_gt)[valid_sel].mean())
+
+    # Lateral accel: a_lat = v^2 * kappa, where kappa = |delta_heading| / arc_len.
+    # Heading change between consecutive STEPS (k vs k-1); arc length = step_d_pred[k].
+    # Step 0 has no prior heading so we treat its kappa as 0.
+    lat_accel = np.zeros((T,), dtype=np.float64)
+    for k in range(1, T):
+        arc = float(step_d_pred[k])
+        if arc < 1e-3:
+            continue  # essentially stationary, curvature undefined -> 0
+        dhead = abs(_wrap_to_pi(float(head_pred[k] - head_pred[k - 1])))
+        kappa = dhead / arc
+        lat_accel[k] = (v_pred[k] ** 2) * kappa
+    if valid_sel.any():
+        out["lateral_accel_rms_m_s2"] = float(
+            math.sqrt((lat_accel[valid_sel] ** 2).mean())
+        )
+
+    # Hard brake: any per-step deceleration > threshold (in m/s^2). Δv across
+    # one step (DT = 0.5 s). Negative dv = decel.
+    if T >= 2:
+        dv = np.diff(v_pred)
+        decel = -dv / DT  # m/s^2, positive = deceleration
+        # Only count steps whose ending waypoint is valid.
+        if valid_sel[1:].any():
+            max_decel = float(decel[valid_sel[1:]].max())
+            out["hard_brake"] = int(max_decel > HARD_BRAKE_DECEL_THRESH_M_S2)
+
+    # Progress ratio.
+    gt_total = float(step_d_gt[valid_sel].sum())
+    pred_total = float(step_d_pred[valid_sel].sum())
+    if gt_total > 0.1:
+        out["progress_ratio"] = pred_total / gt_total
+    return out
+
+
+# ============================================================================
 # Distributed helpers
 # ============================================================================
 
@@ -528,12 +729,33 @@ def _build_batch_inputs(
     processor inputs once and return:
 
       inputs, per-sample info, per-sample future_infos, per-sample sample dict.
+
+    Detects MultiModalPlanningDataset via duck-typing (presence of
+    `hdmap_split_dir` + `_bbox`) and, when present, injects HD-map BEV image +
+    bbox text into the eval prompt so the model sees the same modalities as
+    training. Otherwise camera-only PlanningDataset path is byte-equivalent.
     """
     from transformers.video_utils import VideoMetadata  # local import to avoid cost when DP disabled
+
+    # Multi-modal eval detection (duck-type, avoids cross-import for camera-only path)
+    is_multimodal = (
+        hasattr(ds, "hdmap_split_dir")
+        and hasattr(ds, "_bbox")
+        and hasattr(ds, "_load_hdmap")
+        and hasattr(ds, "_lookup_bbox")
+        and hasattr(ds, "modality_dropout_p")
+    )
+    if is_multimodal:
+        from multimodal_planning_dataset import (
+            _build_user_content_multimodal,
+            BBOX_NONE_TEXT,
+            _black_hdmap,
+        )
 
     texts: List[str] = []
     all_clips: List[List[Image.Image]] = []
     all_md: List[VideoMetadata] = []
+    all_images: List[Image.Image] = []  # HD-map BEV per sample (multimodal only)
     samples: List[dict] = []
     infos: List[dict] = []
     futures: List[List[dict]] = []
@@ -550,7 +772,29 @@ def _build_batch_inputs(
             clips = [ds._load_frames(hist, planning_cams[0])]
         else:
             clips = ds._load_frames_multicam(hist)
-        user_content = _build_user_content_multicam(info, planning_cams)
+
+        if is_multimodal:
+            sample_token = info["token"]
+            # Mirror MultiModalPlanningDataset.__getitem__ §3-4 logic; honor any
+            # eval-time dropout the caller configured (matches training-style
+            # ablation).
+            rng = ds._get_rng()
+            drop_hdmap = (ds.modality_dropout_p > 0.0
+                          and rng.random() < ds.modality_dropout_p)
+            drop_bbox = (ds.modality_dropout_p > 0.0
+                         and rng.random() < ds.modality_dropout_p)
+            hdmap_img = _black_hdmap() if drop_hdmap else ds._load_hdmap(sample_token)
+            if drop_bbox:
+                bbox_text = BBOX_NONE_TEXT
+            else:
+                bbox_text = ds._lookup_bbox(sample_token)
+                if not bbox_text.strip():
+                    bbox_text = BBOX_NONE_TEXT
+            user_content = _build_user_content_multimodal(info, planning_cams, bbox_text)
+            all_images.append(hdmap_img)
+        else:
+            user_content = _build_user_content_multicam(info, planning_cams)
+
         sys_user_messages = [{"role": "user", "content": user_content}]
         text = processor.apply_chat_template(
             sys_user_messages, tokenize=False, add_generation_prompt=True
@@ -568,13 +812,17 @@ def _build_batch_inputs(
                 )
             )
 
-    inputs = processor(
+    proc_kwargs = dict(
         text=texts,
         videos=all_clips,
         video_metadata=all_md,
         return_tensors="pt",
         padding=True,
     )
+    if is_multimodal:
+        proc_kwargs["images"] = all_images
+
+    inputs = processor(**proc_kwargs)
     return inputs, infos, futures, samples
 
 
@@ -877,6 +1125,22 @@ def evaluate_planning_l2_collision(
             "collision_2s": float("nan"), "collision_3s": float("nan"),
             "n_scored": 0, "wall_seconds": 0.0,
             "protocol_l2": "TemAvg (VAD)",
+            # New keys with empty defaults so the caller assembly block
+            # `metrics["scenario_counts"]` etc. doesn't KeyError on an empty
+            # eval (e.g. probe-the-shape call).
+            "scenario_counts": {b: 0 for b in _SCENARIO_BUCKETS},
+            "scenario_metrics": {
+                b: {"L2_avg": float("nan"), "noavg_L2_avg": float("nan"),
+                    "collision_avg": float("nan"), "n": 0}
+                for b in _SCENARIO_BUCKETS
+            },
+            "behavior": {
+                "heading_error_rad": float("nan"),
+                "lateral_accel_rms_m_s2": float("nan"),
+                "speed_error_m_s": float("nan"),
+                "hard_brake_rate": float("nan"),
+                "progress_ratio": float("nan"),
+            },
         }
 
     # Honour the trainer-style dtype.
@@ -903,6 +1167,21 @@ def evaluate_planning_l2_collision(
     local_temavg: Dict[str, List[float]] = {k: [] for k in ["L2_1s", "L2_2s", "L2_3s", "L2_avg"]}
     local_noavg: Dict[str, List[float]] = {k: [] for k in ["L2_1s", "L2_2s", "L2_3s", "L2_avg"]}
     local_coll: Dict[str, List[int]] = {k: [] for k in ["collision_1s", "collision_2s", "collision_3s", "collision_avg"]}
+    # Per-sample sub-scenario tag (parallel to local_temavg["L2_avg"] etc.)
+    # and behavior metrics. Storing per-sample (not pre-binned) so the rank-0
+    # reducer can build the scenario_metrics table after the cross-rank gather.
+    local_scenarios: List[str] = []
+    local_behavior: Dict[str, List[float]] = {
+        k: [] for k in
+        ["heading_error_rad", "lateral_accel_rms_m_s2", "speed_error_m_s",
+         "hard_brake", "progress_ratio"]
+    }
+    # Parallel per-sample L2_avg / noavg_L2_avg / collision_avg arrays for
+    # scenario bucketing (NaNs preserved so we don't drift the index vs
+    # local_scenarios).
+    local_per_sample_l2_temavg: List[float] = []
+    local_per_sample_l2_noavg: List[float] = []
+    local_per_sample_coll_avg: List[int] = []
 
     # video_token_id is only needed on the projector path. Resolve once.
     # (Projector-type validity was already checked at function entry.)
@@ -967,7 +1246,19 @@ def evaluate_planning_l2_collision(
                     local_coll["collision_1s"].append(collisions_per_horizon[0])
                     local_coll["collision_2s"].append(collisions_per_horizon[1])
                     local_coll["collision_3s"].append(collisions_per_horizon[2])
-                    local_coll["collision_avg"].append(int(any(collisions_per_horizon)))
+                    sample_coll_avg = int(any(collisions_per_horizon))
+                    local_coll["collision_avg"].append(sample_coll_avg)
+
+                    # ---- New per-sample metrics (additive; existing keys unchanged) ----
+                    scenario = classify_scenario(gt_wp, valid)
+                    local_scenarios.append(scenario)
+                    beh = behavior_metrics(pred_wp, gt_wp, valid)
+                    for k in local_behavior:
+                        local_behavior[k].append(beh[k])
+                    # Parallel per-sample headline metrics for scenario bucketing.
+                    local_per_sample_l2_temavg.append(t["L2_avg"])
+                    local_per_sample_l2_noavg.append(n["L2_avg"])
+                    local_per_sample_coll_avg.append(sample_coll_avg)
 
                 if not silent and accelerator.is_main_process:
                     done = bstart + len(batch_idx)
@@ -991,6 +1282,12 @@ def evaluate_planning_l2_collision(
         "noavg": local_noavg,
         "coll": {k: [int(x) for x in v] for k, v in local_coll.items()},
         "n_local": n_local,
+        # New: per-sample arrays (one entry per scored sample on this rank).
+        "scenarios": local_scenarios,
+        "behavior": {k: list(v) for k, v in local_behavior.items()},
+        "per_sample_l2_temavg": list(local_per_sample_l2_temavg),
+        "per_sample_l2_noavg": list(local_per_sample_l2_noavg),
+        "per_sample_coll_avg": list(local_per_sample_coll_avg),
     }
 
     # All-gather so EVERY rank gets the merged result (the validate caller
@@ -1005,6 +1302,15 @@ def evaluate_planning_l2_collision(
     temavg_acc: Dict[str, List[float]] = {k: [] for k in ["L2_1s", "L2_2s", "L2_3s", "L2_avg"]}
     noavg_acc: Dict[str, List[float]] = {k: [] for k in ["L2_1s", "L2_2s", "L2_3s", "L2_avg"]}
     coll_acc: Dict[str, List[int]] = {k: [] for k in ["collision_1s", "collision_2s", "collision_3s", "collision_avg"]}
+    scen_acc: List[str] = []
+    beh_acc: Dict[str, List[float]] = {
+        k: [] for k in
+        ["heading_error_rad", "lateral_accel_rms_m_s2", "speed_error_m_s",
+         "hard_brake", "progress_ratio"]
+    }
+    per_sample_l2_temavg_acc: List[float] = []
+    per_sample_l2_noavg_acc: List[float] = []
+    per_sample_coll_avg_acc: List[int] = []
     for payload in gathered:
         if payload is None:
             continue
@@ -1014,12 +1320,65 @@ def evaluate_planning_l2_collision(
             noavg_acc[k].extend(v)
         for k, v in payload["coll"].items():
             coll_acc[k].extend(v)
+        scen_acc.extend(payload.get("scenarios", []))
+        for k, v in payload.get("behavior", {}).items():
+            beh_acc[k].extend(v)
+        per_sample_l2_temavg_acc.extend(payload.get("per_sample_l2_temavg", []))
+        per_sample_l2_noavg_acc.extend(payload.get("per_sample_l2_noavg", []))
+        per_sample_coll_avg_acc.extend(payload.get("per_sample_coll_avg", []))
 
     def _mean(xs) -> float:
         return float(np.mean(xs)) if len(xs) else float("nan")
 
+    def _mean_skip_nan(xs) -> float:
+        arr = np.asarray(xs, dtype=np.float64)
+        arr = arr[~np.isnan(arr)]
+        return float(arr.mean()) if arr.size else float("nan")
+
     elapsed = time.time() - t0
     n_scored = len(temavg_acc["L2_avg"]) if temavg_acc["L2_avg"] else n_total
+
+    # ---- New: scenario counts + scenario-bucketed metrics --------------------
+    scenario_counts: Dict[str, int] = {b: 0 for b in _SCENARIO_BUCKETS}
+    scenario_metrics: Dict[str, Dict[str, float]] = {
+        b: {"L2_avg": float("nan"), "noavg_L2_avg": float("nan"),
+            "collision_avg": float("nan"), "n": 0}
+        for b in _SCENARIO_BUCKETS
+    }
+    # Bucket the parallel per-sample arrays. The 3 per-sample arrays have the
+    # same length as scen_acc by construction (one entry per scored sample,
+    # appended together in the loop above).
+    if len(scen_acc) == len(per_sample_l2_temavg_acc) == len(per_sample_l2_noavg_acc) == len(per_sample_coll_avg_acc):
+        bucketed_temavg: Dict[str, List[float]] = {b: [] for b in _SCENARIO_BUCKETS}
+        bucketed_noavg: Dict[str, List[float]] = {b: [] for b in _SCENARIO_BUCKETS}
+        bucketed_coll: Dict[str, List[float]] = {b: [] for b in _SCENARIO_BUCKETS}
+        for i, b in enumerate(scen_acc):
+            if b not in scenario_counts:
+                # Unknown bucket — protect the schema by silently dropping (no
+                # try/except hiding real errors; only here to harden against a
+                # future bucket name typo). Count separately for visibility.
+                continue
+            scenario_counts[b] += 1
+            bucketed_temavg[b].append(per_sample_l2_temavg_acc[i])
+            bucketed_noavg[b].append(per_sample_l2_noavg_acc[i])
+            bucketed_coll[b].append(float(per_sample_coll_avg_acc[i]))
+        for b in _SCENARIO_BUCKETS:
+            scenario_metrics[b] = {
+                "L2_avg": _mean_skip_nan(bucketed_temavg[b]),
+                "noavg_L2_avg": _mean_skip_nan(bucketed_noavg[b]),
+                "collision_avg": _mean_skip_nan(bucketed_coll[b]),
+                "n": int(scenario_counts[b]),
+            }
+
+    # ---- New: behavior metrics (averaged over all samples) -------------------
+    behavior_out = {
+        "heading_error_rad": _mean_skip_nan(beh_acc["heading_error_rad"]),
+        "lateral_accel_rms_m_s2": _mean_skip_nan(beh_acc["lateral_accel_rms_m_s2"]),
+        "speed_error_m_s": _mean_skip_nan(beh_acc["speed_error_m_s"]),
+        # hard_brake is 0/1 per sample; mean = rate.
+        "hard_brake_rate": _mean([float(x) for x in beh_acc["hard_brake"]]),
+        "progress_ratio": _mean_skip_nan(beh_acc["progress_ratio"]),
+    }
 
     return {
         # TemAvg (VAD) — flat keys (paper-comparable).
@@ -1040,6 +1399,10 @@ def evaluate_planning_l2_collision(
         "n_scored": int(n_scored),
         "wall_seconds": round(elapsed, 2),
         "protocol_l2": "TemAvg (VAD) shown in L2_*; NoAvg under noavg_L2_*",
+        # ---- New schema additions (additive; existing keys untouched) -------
+        "scenario_counts": scenario_counts,
+        "scenario_metrics": scenario_metrics,
+        "behavior": behavior_out,
     }
 
 
@@ -1088,6 +1451,24 @@ def main() -> None:
     p.add_argument("--dtype", default="bfloat16")
     p.add_argument("--batch-size", type=int, default=4,
                    help="Per-rank batch size for model.generate (default: 4).")
+    # Multi-modal eval (matches training-time MultiModalPlanningDataset). When
+    # --multimodal is OFF (default), camera-only PlanningDataset path is byte-
+    # equivalent to before. When ON, eval feeds HD map BEV + bbox text + ego
+    # state alongside the camera video — matching B.5 / B.6 training.
+    p.add_argument("--multimodal", action="store_true",
+                   help="Use MultiModalPlanningDataset (HD map + bbox text + ego). "
+                        "Required for B.5 / B.6 ckpt eval to avoid train/eval "
+                        "modality mismatch.")
+    p.add_argument("--hdmap-dir", default="data/preproc/hdmap_bev",
+                   help="Directory with per-sample HD-map BEV PNGs (only used "
+                        "if --multimodal).")
+    p.add_argument("--bbox-jsonl", default="data/preproc/bbox_egostate_{split}.jsonl",
+                   help="bbox+ego state jsonl path (uses {split} template; "
+                        "resolved to 'val' here). Only used if --multimodal.")
+    p.add_argument("--modality-dropout-p", type=float, default=0.0,
+                   help="Per-modality eval-time dropout (only with --multimodal). "
+                        "Set >0 to test inference-time degradation robustness; "
+                        "default 0 = always feed full modality.")
     args = p.parse_args()
 
     rank, world_size, local_rank, is_dist = _init_distributed()
@@ -1127,20 +1508,52 @@ def main() -> None:
     # Multi-cam expands visual tokens ~Nx; raise the eval max_length to match
     # the 3-cam training config (8192). Single-cam keeps 4096 for back-compat.
     eval_max_length = 4096 if len(planning_cams) == 1 else 8192
-    ds = PlanningDataset(
-        infos_path=args.infos_val,
-        nusc_root=args.nusc_root,
-        processor=processor,
-        max_length=eval_max_length,
-        num_past_frames=args.num_past_frames,
-        num_future_waypoints=args.num_future_waypoints,
-        video_fps=args.video_fps,
-        vla_loss_mode="answer_and_traj",
-        max_samples=args.max_samples,
-        require_full_future=True,
-        planning_cams=planning_cams,
-        require_all_cams=True,
-    )
+    if args.multimodal:
+        from multimodal_planning_dataset import MultiModalPlanningDataset
+        # Resolve to absolute paths (MultiModalPlanningDataset requires absolute
+        # hdmap_dir; bbox jsonl is opened directly so relative works but
+        # absolute is safer when cwd may vary across torchrun ranks).
+        hdmap_abs = args.hdmap_dir if os.path.isabs(args.hdmap_dir) \
+            else os.path.join(_BASE_DIR, args.hdmap_dir)
+        bbox_resolved = args.bbox_jsonl.replace("{split}", "val")
+        if not os.path.isabs(bbox_resolved):
+            bbox_resolved = os.path.join(_BASE_DIR, bbox_resolved)
+        _log(rank, f"[planning_eval] MULTIMODAL eval: hdmap_dir={hdmap_abs} "
+                   f"bbox_jsonl={bbox_resolved} dropout_p={args.modality_dropout_p}")
+        ds = MultiModalPlanningDataset(
+            infos_path=args.infos_val,
+            nusc_root=args.nusc_root,
+            processor=processor,
+            max_length=eval_max_length,
+            num_past_frames=args.num_past_frames,
+            num_future_waypoints=args.num_future_waypoints,
+            video_fps=args.video_fps,
+            vla_loss_mode="answer_and_traj",
+            max_samples=args.max_samples,
+            require_full_future=True,
+            planning_cams=planning_cams,
+            require_all_cams=True,
+            hdmap_dir=hdmap_abs,
+            bbox_jsonl=bbox_resolved,
+            split="val",
+            modality_dropout_p=args.modality_dropout_p,
+        )
+    else:
+        _log(rank, "[planning_eval] CAMERA-ONLY eval (PlanningDataset)")
+        ds = PlanningDataset(
+            infos_path=args.infos_val,
+            nusc_root=args.nusc_root,
+            processor=processor,
+            max_length=eval_max_length,
+            num_past_frames=args.num_past_frames,
+            num_future_waypoints=args.num_future_waypoints,
+            video_fps=args.video_fps,
+            vla_loss_mode="answer_and_traj",
+            max_samples=args.max_samples,
+            require_full_future=True,
+            planning_cams=planning_cams,
+            require_all_cams=True,
+        )
 
     n_total = len(ds)
     _log(rank, f"[planning_eval] val samples: {n_total}")
@@ -1213,6 +1626,12 @@ def main() -> None:
             "half_width": EGO_HALF_WID_M,
             "fwd_offset_from_pose": EGO_BOX_FWD_OFFSET_M,
         },
+        # ---- Additive schema extensions (sub-scenario + behavior) ----------
+        # Preserved historic R1' / 8f_* JSONs lack these keys; any downstream
+        # consumer that needs back-compat should `.get(...)` with a default.
+        "scenario_counts": metrics["scenario_counts"],
+        "scenario_metrics": metrics["scenario_metrics"],
+        "behavior": metrics["behavior"],
     }
 
     out_path = args.output or os.path.join(args.ckpt, "eval_results.json")
@@ -1220,6 +1639,18 @@ def main() -> None:
     with open(out_path, "w") as f:
         json.dump(results, f, indent=2)
     print(f"[planning_eval] wrote {out_path} (wall={elapsed:.1f}s, n_scored={n_scored})", flush=True)
+    # Print sub-scenario breakdown so it's visible in the launch log without
+    # parsing the JSON.
+    counts = results["scenario_counts"]
+    smetrics = results["scenario_metrics"]
+    print("[planning_eval] sub-scenario counts:", flush=True)
+    for b in counts:
+        print(f"  {b:>11s}  n={counts[b]:5d}  "
+              f"L2_avg={smetrics[b]['L2_avg']:.3f}  "
+              f"noavg_L2_avg={smetrics[b]['noavg_L2_avg']:.3f}  "
+              f"collision_avg={smetrics[b]['collision_avg']:.4f}",
+              flush=True)
+    print("[planning_eval] behavior:", json.dumps(results["behavior"], indent=2), flush=True)
     print(json.dumps(results, indent=2), flush=True)
 
     if is_dist:

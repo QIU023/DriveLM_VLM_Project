@@ -1,0 +1,101 @@
+{
+  "ckpt": "/workspace/DriveLM_VLM_Project/checkpoints_qwen25/nusc_planning_b5_multimodal/final",
+  "infos_val": "/workspace/DriveLM_VLM_Project/data/uniad_infos/nuscenes_infos_temporal_val.pkl",
+  "n_samples": 5119,
+  "n_scored": 5119,
+  "world_size": 8,
+  "batch_size": 16,
+  "wall_seconds": 117.41,
+  "horizon_s": [
+    1.0,
+    2.0,
+    3.0
+  ],
+  "TemAvg": {
+    "L2_1s": 0.2777433792483203,
+    "L2_2s": 0.6171612454315203,
+    "L2_3s": 1.0989948871772366,
+    "L2_avg": 0.6646331706190258
+  },
+  "NoAvg": {
+    "L2_1s": 0.39299844157970204,
+    "L2_2s": 1.1823240338043879,
+    "L2_3s": 2.3910527801864356,
+    "L2_avg": 1.3221250851901754
+  },
+  "collision_rate": {
+    "collision_1s": 0.005860519632740769,
+    "collision_2s": 0.012502441883180308,
+    "collision_3s": 0.023246727876538385,
+    "collision_avg": 0.03535846845086931
+  },
+  "L2_1s": 0.2777433792483203,
+  "L2_2s": 0.6171612454315203,
+  "L2_3s": 1.0989948871772366,
+  "L2_avg": 0.6646331706190258,
+  "collision_1s": 0.005860519632740769,
+  "collision_2s": 0.012502441883180308,
+  "collision_3s": 0.023246727876538385,
+  "collision_avg": 0.03535846845086931,
+  "protocol_l2": "TemAvg (VAD) shown in flat L2_*; full both protocols inside this JSON",
+  "ego_footprint_m": {
+    "length": 4.084,
+    "width": 1.85,
+    "half_length": 2.042,
+    "half_width": 0.925,
+    "fwd_offset_from_pose": 0.5
+  },
+  "scenario_counts": {
+    "stationary": 939,
+    "turning": 541,
+    "lane_change": 346,
+    "braking": 314,
+    "straight": 2674,
+    "cruising": 305
+  },
+  "scenario_metrics": {
+    "stationary": {
+      "L2_avg": 0.4457310172763908,
+      "noavg_L2_avg": 0.7786010682943726,
+      "collision_avg": 0.023429179978700747,
+      "n": 939
+    },
+    "turning": {
+      "L2_avg": 1.1126543243363436,
+      "noavg_L2_avg": 2.396130812729941,
+      "collision_avg": 0.04990757855822551,
+      "n": 541
+    },
+    "lane_change": {
+      "L2_avg": 0.7622724979189951,
+      "noavg_L2_avg": 1.531129220931575,
+      "collision_avg": 0.03468208092485549,
+      "n": 346
+    },
+    "braking": {
+      "L2_avg": 0.8817198108011687,
+      "noavg_L2_avg": 1.8151933043508468,
+      "collision_avg": 0.025477707006369428,
+      "n": 314
+    },
+    "straight": {
+      "L2_avg": 0.609243177230895,
+      "noavg_L2_avg": 1.2013344647172775,
+      "collision_avg": 0.03552729992520568,
+      "n": 2674
+    },
+    "cruising": {
+      "L2_avg": 0.6952368030273686,
+      "noavg_L2_avg": 1.4047061364285325,
+      "collision_avg": 0.05573770491803279,
+      "n": 305
+    }
+  },
+  "behavior": {
+    "heading_error_rad": 0.2872967338933498,
+    "lateral_accel_rms_m_s2": 0.15205359344962163,
+    "speed_error_m_s": 0.76792195809478,
+    "hard_brake_rate": 0.006837272904864231,
+    "progress_ratio": 1.1002333422299555
+  }
+}

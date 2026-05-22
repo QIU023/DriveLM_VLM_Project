@@ -1,0 +1,48 @@
+{
+  "ckpt": "/workspace/DriveLM_VLM_Project/checkpoints_qwen25/nusc_planning_b6_multimodal_dropout/final",
+  "infos_val": "/workspace/DriveLM_VLM_Project/data/uniad_infos/nuscenes_infos_temporal_val.pkl",
+  "n_samples": 5119,
+  "n_scored": 5119,
+  "world_size": 8,
+  "batch_size": 16,
+  "wall_seconds": 120.41,
+  "horizon_s": [
+    1.0,
+    2.0,
+    3.0
+  ],
+  "TemAvg": {
+    "L2_1s": 0.3508624112156015,
+    "L2_2s": 0.7500748928912125,
+    "L2_3s": 1.2985246358506641,
+    "L2_avg": 0.7998206466524929
+  },
+  "NoAvg": {
+    "L2_1s": 0.49081906046324153,
+    "L2_2s": 1.4070780715390678,
+    "L2_3s": 2.75644182943467,
+    "L2_avg": 1.5514463204789932
+  },
+  "collision_rate": {
+    "collision_1s": 0.005274467669466693,
+    "collision_2s": 0.012697792537605002,
+    "collision_3s": 0.02441883180308654,
+    "collision_avg": 0.03516311779644462
+  },
+  "L2_1s": 0.3508624112156015,
+  "L2_2s": 0.7500748928912125,
+  "L2_3s": 1.2985246358506641,
+  "L2_avg": 0.7998206466524929,
+  "collision_1s": 0.005274467669466693,
+  "collision_2s": 0.012697792537605002,
+  "collision_3s": 0.02441883180308654,
+  "collision_avg": 0.03516311779644462,
+  "protocol_l2": "TemAvg (VAD) shown in flat L2_*; full both protocols inside this JSON",
+  "ego_footprint_m": {
+    "length": 4.084,
+    "width": 1.85,
+    "half_length": 2.042,
+    "half_width": 0.925,
+    "fwd_offset_from_pose": 0.5
+  }
+}

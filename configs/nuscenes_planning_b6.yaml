@@ -1,0 +1,30 @@
+base_config: nuscenes_planning_b5.yaml   # B.5 = HD-map + bbox + ego on R1' baseline
+
+# ============================================================================
+# Track B.6 — B.5 + per-modality random dropout p=0.1 (XPeng robustness)
+# ============================================================================
+# Only delta vs B.5: ``modality_dropout_p: 0.1``. The HD map (-> all-black 224x224)
+# and bbox text (-> "Detected objects: (none)\n") are independently dropped per
+# sample with probability 0.1 each. CAMERA and ego speed are NEVER dropped —
+# the camera is the always-present runtime modality on the XPeng deployment
+# stack, so the model must not learn to ignore it; HD map + bbox come from
+# on-board fusion modules that can fail in production, so the model should
+# gracefully degrade when they go missing at inference.
+#
+# Why p=0.1 (NOT 0.2 / 0.5): mirrors the standard SwitchOut / token-dropout
+# scale used in NLP (Wang et al. 2018, "SwitchOut: An Efficient Data
+# Augmentation Algorithm for NMT" — Algorithm 1 uses gamma=0.1) and the
+# multi-modal-dropout rate in PerceiverIO (Jaegle et al. 2022 §C.3, image
+# modality dropout p=0.1 during joint pretraining). Higher rates (0.3+) hurt
+# the joint-prediction signal because too many samples turn into camera-only
+# at the same time the model is still learning the joint conditioning.
+
+experiment: nusc_planning_b6_multimodal_dropout
+
+modality_dropout_p: 0.1
+
+# All other hyperparams inherited from B.5 verbatim. The dropout knob is a
+# DATALOADER change, not a learning-dynamics change, so the AutoVLA-aligned
+# R1' recipe is the right starting point. If B.6 shows under-training (val L2
+# plateau or persistent drop in joint-modality conditioning), an explicit
+# rationale-with-paper-citation would be needed before any LR / WD retune.

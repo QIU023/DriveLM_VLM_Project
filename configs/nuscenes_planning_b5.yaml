@@ -1,0 +1,99 @@
+base_config: nuscenes_planning_full.yaml   # = R1' / A.0 baseline (1-cam × 4f, Linear)
+
+# ============================================================================
+# Track B.5 — Image-as-modality multi-modal SFT (HD map BEV + bbox text + ego)
+# ============================================================================
+# Adds two preprocessed modalities on top of the R1' (A.0) Linear 1-cam × 4f
+# baseline that won the A.x projector ablation series at L2 0.642:
+#
+#   * HD map BEV PNG   (224x224 RGB, ego-up; from prep_hdmap_bev.py)
+#   * 3D bbox text     (top-K objects in ego frame; from prep_bbox_egostate.py)
+#
+# Both are routed through the OEM Qwen2.5-VL processor as ordinary image+video
+# tokens — NO new learnable module — and the native vision tower handles the
+# HD-map BEV the same way it handles the camera frames. The bbox text is
+# injected into the user-turn text block (already-baked-in via the chat
+# template's text concatenation).
+#
+# Ego state (speed scalar) continues to be injected by _format_ego_speed_preamble
+# in planning_dataset.py — UNCHANGED.
+#
+# LiDAR is NOT added (cache not yet built; deferred to a future track).
+#
+# Hyperparameters: IDENTICAL to R1' / A.0 baseline. Per the paper-hyperparam
+# audit gate, every deviation needs a paper-cited reason; B.5 is a pure
+# dataloader change with no rationale to retune LR / WD / schedule, so the
+# AutoVLA-aligned R1' recipe is inherited verbatim from
+# `nuscenes_planning_full.yaml -> gb200_vla.yaml`.
+
+experiment: nusc_planning_b5_multimodal
+
+# ---- Multi-modal dataset dispatch ----------------------------------------
+# train_lora.py reads cfg.dataset_kind and routes to
+# multimodal_planning_dataset.build_multimodal_planning_dataset when it sees
+# "nuscenes_planning_multimodal" (parent dispatch added 2026-05-21).
+dataset_kind: nuscenes_planning_multimodal
+dataset_class: multimodal_planning_dataset.MultiModalPlanningDataset
+
+# ---- Modality cache paths ------------------------------------------------
+# Relative to repo root; resolved at dataset construction time.
+hdmap_dir: data/preproc/hdmap_bev
+# {split} placeholder swapped to "train"/"val" by the factory.
+bbox_jsonl: data/preproc/bbox_egostate_{split}.jsonl
+
+# ---- Modality dropout (B.5 = OFF; B.6 turns this to 0.1) -----------------
+# Independent per-sample, per-modality. Camera + ego state are NEVER dropped
+# (XPeng deployment robustness pattern: only the redundant on-board-fusion
+# modalities are eligible for dropout). 0.0 here means deterministic B.5
+# behavior; the dropout code path is not exercised.
+modality_dropout_p: 0.0
+
+# ---- R1' / A.0 hyperparams (inherited from nuscenes_planning_full.yaml ->
+# gb200_vla.yaml). Listed explicitly below so the paper-hyperparam audit
+# table can read them off ONE config file without chasing the inheritance
+# chain. Any value present here MUST match the chain's effective value —
+# verified 2026-05-21 against base_config chain.
+# ----------------------------------------------------------------------------
+
+# Optimizer (defaults from torch.optim.AdamW in train_lora.py:2821):
+#   beta1 = 0.9, beta2 = 0.999  (NOT overridden; matches AutoVLA paper exactly)
+# weight_decay is hard-coded to 0.01 in train_lora.py:2821 (matches AutoVLA paper).
+learning_rate: 2.0e-5            # AutoVLA YAML (verified via gb200_vla.yaml row 2)
+
+# LR schedule (AutoVLA step-decay, replicated via lr_schedule:autovla_stepdecay):
+lr_schedule: autovla_stepdecay   # gb200_vla.yaml row 3
+warmup_steps: 36                 # 1.74 % of ~2050 total steps (paper-ratio scaled, R1' value)
+lr_step_freq: 143                # 6.96 % of ~2050 total steps (paper-ratio scaled, R1' value)
+lr_step_gamma: 0.98              # AutoVLA YAML (gb200_vla.yaml row 5)
+
+# Throughput knobs (R1' / A.0 effective: LBS=4 × grad_accum=1 × FSDP=8 = GBS 32):
+batch_size: 4
+grad_accum_steps: 1
+activation_checkpointing: false
+gradient_checkpointing: false
+
+# Epochs / max_length:
+num_epochs: 3                    # R1' value (gb200_vla.yaml has 5 — overridden to 3 in nuscenes_planning_full.yaml)
+max_length: 4096                 # R1' value (nuscenes_planning_full.yaml). Budget check:
+                                 # video ~600 + image ~144 + bbox text ~250 + chat
+                                 # template ~50 + trajectory bins 14 = ~1060 tokens
+                                 # untruncated; well under 4096 ceiling.
+
+# Camera config (R1' 1-cam × 4f, default in PlanningDataset):
+# planning_cams omitted -> DEFAULT_PLANNING_CAMS = ["CAM_FRONT"]
+planning_num_past_frames: 4
+
+# Vision token budget (R1' / AutoVLA 109760-px per frame -> deterministic count):
+min_pixels: 109760               # gb200_vla.yaml row 9
+max_pixels: 109760
+
+# Ckpt / val cadence (R1' 1-cam values; same as 1cam_qformer/pixelshuffle/resampler):
+save_every: 50
+val_every: 50
+keep_latest_k: 2
+val_planning_l2: true
+val_full_eval: false
+val_greedy_max_new_tokens: 20
+full_l2_every: null              # disabled (in-train DP eval design broken; final L2 via
+                                 # post-train standalone launch_planning_eval_dp.sh, same
+                                 # path as R1'/A.0/A.1/A.2/A.3)
