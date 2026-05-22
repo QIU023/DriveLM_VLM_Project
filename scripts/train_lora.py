@@ -1976,23 +1976,50 @@ def _save_model_and_state(accelerator, model, optimizer, scheduler,
             if save_processor is not None:
                 save_processor.save_pretrained(save_path)
 
-    # Optimizer / scheduler state — single rank dump (sharded optim under
-    # FSDP would need accelerator.save_state; we keep the simple legacy
-    # path for compatibility with the existing --resume code).
+    # Optimizer / scheduler / RNG state via accelerator.save_state.
+    # Pre-2026-05-22 this called torch.save(optimizer.state_dict()) on rank 0
+    # only, which under FSDP returns ONLY rank 0's local shard (1/N of params).
+    # That broke resume: file was 1/N expected size, ranks 1..N-1 had no state
+    # to restore. Confirmed 2026-05-22 on a 3B Qwen2.5-VL run: 2.7GB file vs
+    # expected ~24GB full Adam state for 3B params. See feedback memory
+    # [[feedback_fsdp_resume_use_accelerate_state]].
+    #
+    # accelerator.save_state writes FSDP-sharded files (one per rank) so each
+    # rank's slice of optim+scheduler+RNG is preserved. save_model=False
+    # because save_pretrained above already wrote model.safetensors (the
+    # eval pipeline reads safetensors, not accelerate's pytorch_model_fsdp_*).
+    accelerate_state_dir = os.path.join(save_path, "accelerate_state")
+    try:
+        # save_model=False intent: model already written by save_pretrained above.
+        # NOTE: in accelerate 1.13 with FSDP, save_model=False does NOT prevent
+        # FSDP plugin from writing pytorch_model_fsdp_0/*.distcp (~16GB shard
+        # files for a 3B model). We must rmtree it post-save to control disk.
+        accelerator.save_state(accelerate_state_dir, save_model=False, safe_serialization=False)
+    except Exception as e:
+        accelerator.print(f"[warn] accelerator.save_state failed: {e}; "
+                          f"resume will reset optimizer to fresh state")
+    # Strip the FSDP-format duplicate of model weights — model.safetensors above
+    # is canonical. accelerator.load_state on resume only needs optim/scheduler/RNG;
+    # we load model weights via from_pretrained(safetensors), so pytorch_model_fsdp_0
+    # is dead weight (~16GB / ckpt) that pushes disk into panic.
+    if accelerator.is_main_process:
+        import shutil
+        fsdp_model_dir = os.path.join(accelerate_state_dir, "pytorch_model_fsdp_0")
+        if os.path.isdir(fsdp_model_dir):
+            shutil.rmtree(fsdp_model_dir, ignore_errors=True)
+            accelerator.print(f"[save] removed redundant {fsdp_model_dir} (model.safetensors canonical)")
+
+    # Training meta (step/epoch/batch_idx) in JSON for the resume code to read.
     if accelerator.is_main_process:
         try:
-            torch.save({
-                "optimizer": optimizer.state_dict(),
-                "scheduler": scheduler.state_dict(),
-                "global_step": global_step,
-                "epoch": epoch,
-                "batch_idx": batch_idx,
-            }, os.path.join(save_path, "training_state.pt"))
+            with open(os.path.join(save_path, "training_meta.json"), "w") as f:
+                json.dump({
+                    "global_step": global_step,
+                    "epoch": epoch,
+                    "batch_idx": batch_idx,
+                }, f)
         except Exception as e:
-            # Under FSDP the optimizer state can be sharded — fall back to
-            # accelerator.save_state so we get a proper distributed dump.
-            print(f"[warn] direct optimizer.state_dict() failed ({e}); "
-                  f"using accelerator.save_state instead")
+            print(f"[warn] failed to write training_meta.json: {e}")
 
     # ---- External projector (qformer / pixelshuffle / resampler) ----------
     # These are composed into the forward at runtime but are NOT registered
@@ -2261,7 +2288,31 @@ def main():
         load_kwargs["torch_dtype"] = compute_dtype
 
     load_kwargs["attn_implementation"] = "sdpa"
-    model = AutoModelForImageTextToText.from_pretrained(model_id, **load_kwargs)
+
+    # Resume in full_sft mode: load model weights from the checkpoint dir
+    # (formerly the code only printed a NOTE and left weights at the base
+    # model — silent regression when users forgot to repoint model_id).
+    # Optimizer / scheduler / step counter are loaded later from
+    # training_state.pt (existing code at "Resume training state" block).
+    # Processor is always loaded from the base model_id because intermediate
+    # checkpoints don't store processor files (final/ does, but we standardize).
+    model_load_source = model_id
+    if args.resume and train_mode == "full_sft":
+        _resume_path = args.resume if os.path.isabs(args.resume) else os.path.join(_BASE_DIR, args.resume)
+        _has_single = os.path.isfile(os.path.join(_resume_path, "model.safetensors"))
+        _has_sharded = os.path.isfile(os.path.join(_resume_path, "model.safetensors.index.json"))
+        if _has_single or _has_sharded:
+            model_load_source = _resume_path
+            accelerator.print(
+                f"[resume] full_sft model weights will be loaded from {_resume_path} "
+                f"(single-file={_has_single} sharded={_has_sharded})"
+            )
+        else:
+            accelerator.print(
+                f"[resume] WARN --resume given but no model.safetensors at {_resume_path}; "
+                f"falling back to base model_id={model_id}"
+            )
+    model = AutoModelForImageTextToText.from_pretrained(model_load_source, **load_kwargs)
     processor = AutoProcessor.from_pretrained(model_id)
 
     if hasattr(processor, "image_processor") and processor.image_processor is not None:
@@ -2328,9 +2379,16 @@ def main():
     if train_mode == "full_sft":
         # Skip LoRA entirely; train all (non-frozen) parameters.
         if args.resume:
-            accelerator.print(f"NOTE: --resume with train_mode=full_sft loads model weights from {args.resume}")
-            # Caller is responsible for pointing model_id at the resume checkpoint or
-            # using accelerate/torch.distributed checkpoint loading.
+            # Model weights were already loaded from the resume dir earlier
+            # (see "model_load_source" branch above). Optimizer / scheduler
+            # / step counter are restored later from training_state.pt by
+            # the "Resume training state" block. This used to be a no-op
+            # NOTE that silently dropped resume weights for full_sft.
+            accelerator.print(
+                f"[resume] full_sft using checkpoint at {args.resume}: "
+                f"weights already loaded from from_pretrained; "
+                f"optimizer + scheduler + step will be loaded from training_state.pt"
+            )
         # Freeze vision tower if requested.
         if freeze_vision:
             base_for_freeze = model
@@ -2894,22 +2952,56 @@ def main():
         accelerator.print(f"GPU memory after FSDP prepare: {post_shard_gb:.2f} GB / rank")
 
     # ============ Resume training state ============
+    # Two formats supported:
+    #   NEW (post-2026-05-22): accelerate_state/ dir + training_meta.json,
+    #     written by accelerator.save_state. FSDP-aware per-rank shards.
+    #   LEGACY (pre-2026-05-22): training_state.pt, written by
+    #     torch.save(optimizer.state_dict()) on rank 0. BROKEN under FSDP —
+    #     only rank 0's shard saved, ranks 1..N-1 have no state. Refused.
     resume_step = 0
     resume_epoch = 0
     if args.resume:
-        state_path = os.path.join(
-            args.resume if os.path.isabs(args.resume) else os.path.join(_BASE_DIR, args.resume),
-            "training_state.pt"
-        )
-        if os.path.exists(state_path):
-            state = torch.load(state_path, weights_only=True)
-            optimizer.load_state_dict(state["optimizer"])
-            scheduler.load_state_dict(state["scheduler"])
-            resume_step = state["global_step"]
-            resume_epoch = state.get("epoch", 0)
-            accelerator.print(f"Resumed optimizer/scheduler from step {resume_step}, epoch {resume_epoch}")
+        resume_path = args.resume if os.path.isabs(args.resume) else os.path.join(_BASE_DIR, args.resume)
+        accelerate_state_dir = os.path.join(resume_path, "accelerate_state")
+        legacy_state_path = os.path.join(resume_path, "training_state.pt")
+        meta_path = os.path.join(resume_path, "training_meta.json")
+
+        if os.path.isdir(accelerate_state_dir):
+            # NEW format: accelerator.load_state restores FSDP-sharded optim,
+            # scheduler, and RNG. Model weights were already loaded via
+            # from_pretrained(resume_path) earlier; pass load_model=False so
+            # accelerate doesn't try to read pytorch_model_fsdp_0/ (which we
+            # strip after save to control disk).
+            try:
+                accelerator.load_state(accelerate_state_dir, load_model=False)
+                if os.path.isfile(meta_path):
+                    with open(meta_path) as f:
+                        meta = json.load(f)
+                    resume_step = int(meta.get("global_step", 0))
+                    resume_epoch = int(meta.get("epoch", 0))
+                accelerator.print(
+                    f"Resumed full state (optim+scheduler+RNG) via accelerator.load_state "
+                    f"from {accelerate_state_dir}; step={resume_step} epoch={resume_epoch}"
+                )
+            except Exception as e:
+                accelerator.print(
+                    f"[WARN] accelerator.load_state failed at {accelerate_state_dir}: {e}. "
+                    f"Continuing with FRESH optimizer/scheduler (model weights are still resumed)."
+                )
+        elif os.path.isfile(legacy_state_path):
+            accelerator.print(
+                f"[REFUSED] Legacy training_state.pt at {legacy_state_path} — pre-2026-05-22 "
+                f"save format was FSDP-broken (rank-0 shard only, 1/N of optim state lost on save). "
+                f"Loading it would silently corrupt training. SKIPPED. Resuming model weights only; "
+                f"optimizer/scheduler reset to fresh state. Re-train with accelerator.save_state for "
+                f"future proper-resume support."
+            )
         else:
-            accelerator.print(f"[WARN] No training_state.pt found, resuming LoRA weights only (optimizer reset)")
+            accelerator.print(
+                f"[WARN] No accelerate_state/ nor training_state.pt at {resume_path} — "
+                f"optimizer/scheduler reset to fresh state (only model weights resumed). "
+                f"Expected if --resume points at a final/ ckpt."
+            )
 
     # ============ Optional wandb ============
     if args.wandb and accelerator.is_main_process:
@@ -3059,8 +3151,24 @@ def main():
                     del outputs, loss
             except RuntimeError as e:
                 if "out of memory" in str(e):
+                    # FSDP cannot recover from per-rank OOM: rank 0 OOMs while
+                    # ranks 1..N-1 are still in pre_forward, NCCL collectives
+                    # go out of sync, and the next forward crashes with
+                    # AttributeError: 'FullyShardedDataParallel' object has no
+                    # attribute '_all_handles'. Confirmed 2026-05-22 in R1'''
+                    # resume run. Under FSDP, abort cleanly instead of skip.
+                    # For single-GPU / DDP / DeepSpeed, skip is still safe.
+                    is_fsdp = accelerator.state.fsdp_plugin is not None
+                    if is_fsdp:
+                        if accelerator.is_main_process:
+                            tqdm.write(
+                                f"[OOM] batch {step+1}/{num_batches} — FSDP cannot "
+                                f"safely skip; aborting (re-launch with smaller LBS / "
+                                f"more grad_accum / shorter max_length to reduce peak)"
+                            )
+                        raise
                     if accelerator.is_main_process:
-                        tqdm.write(f"[OOM] batch {step+1}/{num_batches}, skipping")
+                        tqdm.write(f"[OOM] batch {step+1}/{num_batches}, skipping (non-FSDP)")
                     for _v in ("outputs", "loss", "batch"):
                         try:
                             del locals()[_v]

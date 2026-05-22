@@ -130,3 +130,124 @@ optimize prefill first:
 **Orin → Thor**: 30B-class VLA targets **Thor (Blackwell, FP4-native, ~1000
 TOPS INT8 / ~2000 TFLOPS FP4, much higher BW)**. The 5090 FP4 deployment here is
 a faithful local preview of that path.
+
+---
+
+## 6. Running the full pipeline tomorrow
+
+Single end-to-end command, run **inside the NGC container** (do NOT run on
+the training host — see §1 for bring-up):
+
+```bash
+# 0. Container bring-up (host)
+docker run --rm -it --gpus '"device=0"' --ipc=host \
+  --ulimit memlock=-1 --ulimit stack=67108864 \
+  -v /workspace/DriveLM_VLM_Project:/work \
+  -v /workspace/models:/models \
+  -v /workspace/DriveLM_VLM_Project/checkpoints_qwen25:/ckpts \
+  nvcr.io/nvidia/pytorch:25.01-py3 bash
+
+# 1. Inside container — install TRT-LLM (~5 min first time)
+pip install --upgrade pip && pip install tensorrt_llm
+python -c "import tensorrt_llm as t; print('TRT-LLM', t.__version__)"
+python -c "import torch; print('cap', torch.cuda.get_device_capability())"  # expect (12, 0)
+
+# 2. Full pipeline (per checkpoint) — quant + LM engine + vision engine + benchmark CSV
+cd /work
+bash deploy/run_full_pipeline.sh \
+    --hf-dir /ckpts/nusc_planning_b5prime_3cam_multimodal/final \
+    --out    /models/engine_b5prime_5090 \
+    --calib-n 512 \
+    --bench-runs 50
+
+# 3. Parity check (5 samples vs HF bf16) — both halves emit JSON the user combines
+#    (a) on the training host, in a separate shell, when training is done:
+#        /usr/bin/python3 deploy/parity_check.py --hf-only \
+#            --hf-dir checkpoints_qwen25/nusc_planning_b5prime_3cam_multimodal/final \
+#            --tokenizer-dir /workspace/models/Qwen2.5-VL-3B-Instruct
+#    (b) in the container:
+bash deploy/run_full_pipeline.sh ...   # already done above
+python deploy/parity_check.py --trt-only \
+    --engine-dir /models/engine_b5prime_5090/engine \
+    --vision-engine-dir /models/engine_b5prime_5090/vision \
+    --tokenizer-dir /ckpts/nusc_planning_b5prime_3cam_multimodal/final
+```
+
+### Time budget (3B Qwen2.5-VL on a single 5090, TRT-LLM 1.x as of May 2026)
+
+| Stage | Wall time | Notes |
+|---|---|---|
+| TRT-LLM container first-time install | 5-15 min | only once per box |
+| `quantize_fp4.sh` (modelopt NVFP4, calib=512) | 5-10 min | calib activations are the long pole; smaller = faster but lower fidelity |
+| `build_engine.sh` (LM trtllm-build) | 3-8 min | sm_120 has *known* slow template compile per [#11386](https://github.com/NVIDIA/TensorRT-LLM/issues/11386); first build of a new shape combo can hit ~8 min |
+| Vision engine build | 1-2 min | small ViT relative to LM |
+| `benchmark.py` (50 runs) | 3-5 min | 1 s/run on hot KV |
+| `parity_check.py` (5 samples × both engines) | 5-10 min | HF bf16 forward is the slow side |
+| **Total per checkpoint, cold** | **~30-50 min** | once installed |
+
+### What "good" looks like in `benchmark.py` output
+
+| Metric | Pass | Comment |
+|---|---|---|
+| p99 TTFT | **< 100 ms** | automotive 10 Hz gate (§5). PASS line is printed automatically. |
+| mean TTFT | < 60 ms | for 3B + ~2k vision tokens this is what FP4 + the gemm/attn plugin should hit |
+| decode | > 200 tok/s | mem-BW bound at batch=1: ~1.8 TB/s 5090 BW / ~1.5 GB FP4 weights ≈ 1200 tok/s ceiling; 200+ is healthy after plugin overhead |
+| total request (prompt + 14 traj tokens) | < 150 ms | end-to-end planning cycle latency |
+
+If TTFT is way over budget, the next levers in order are: (a) ensure
+`--gemm_plugin auto` was passed to `trtllm-build` (it is by default in our
+`build_engine.sh`); (b) shrink the visual-token count via the compression
+work in this repo (the real point of the project); (c) move
+`--max_input_len`, `--max_seq_len` down to the actual prompt sizes the val
+set uses (we leave headroom at 4096/4608).
+
+### How to read `parity_check.py` output
+
+The script writes three files under `deploy/parity_out/`:
+- `parity_hf.json` — HF bf16 reference per-sample (generated tokens, decoded
+  waypoints, GT L2, top-20 logits at first 3 trajectory positions)
+- `parity_trt.json` — TRT FP4 engine per-sample (same schema; logits N/A on
+  TRT-LLM 1.x streaming runner — see comment in `parity_check.py`)
+- `parity_combined.json` — only written when both halves ran in the same
+  process; per-sample exact-match flag, first divergence position, delta-L2
+
+| Token exact-match rate | Verdict |
+|---|---|
+| **5/5 (100 %)** | green; FP4 changed nothing the trajectory tokenizer can see |
+| **4/5** | acceptable; one bin-flip on a noisy sample is well within FP4 quantization noise (each bin is ~0.4 m so a flip = ~0.2 m typical delta) |
+| **3/5 or less** | red — re-run quantize with a larger calib set (`--calib-n 1024`), or fall back to FP8 mixed (`--qformat fp8`) and re-benchmark |
+| **0/5 + delta_L2 ≫ HF L2 to GT** | FP4 collapse; abort and use the vLLM baseline (next section). |
+
+`delta_l2` (TRT − HF, in metres) is the per-sample driving-relevant signal:
+the L2 between predicted and GT trajectory should not move more than ~0.05 m
+on average compared to the bf16 reference. If it does, the FP4 engine is
+producing trajectories that drift from the eval numbers we measured during
+training — do NOT ship that engine to the demo, regardless of token-match
+rate.
+
+### Fallback: vLLM baseline if TRT-LLM 1.x blocks
+
+TRT-LLM Blackwell-consumer support is still flaky as of May 2026 —
+specifically:
+- sm_120 NVFP4 builds slow + emit kernel-occupancy warnings ([#11386](https://github.com/NVIDIA/TensorRT-LLM/issues/11386))
+- Qwen2.5-VL multimodal isn't fully in the MODEL_MAP yet (Qwen2-VL is;
+  Qwen2.5-VL is a community PR — see [#2794](https://github.com/NVIDIA/TensorRT-LLM/issues/2794),
+  [#10069](https://github.com/NVIDIA/TensorRT-LLM/issues/10069))
+- trtllm-gen FMHA cubins for SM120/121 are still being filled in ([#11799](https://github.com/NVIDIA/TensorRT-LLM/issues/11799))
+
+If `run_full_pipeline.sh` errors at step 2 or 3 with something that looks
+like a missing kernel or unsupported model_type, fall back to vLLM — it's
+~70-80 % of the TRT FP4 perf but installs cleanly on host cu130:
+
+```bash
+# Host — no container needed
+/usr/bin/python3 -m pip install vllm --pre   # check Blackwell release notes
+bash deploy/vllm_baseline.sh \
+    /workspace/DriveLM_VLM_Project/checkpoints_qwen25/nusc_planning_b5prime_3cam_multimodal/final \
+    --quantization awq --max-model-len 4608
+# Then point benchmark.py at the vLLM OpenAI-compatible endpoint (port 8000).
+```
+
+The demo deck table can quote both: "TRT-LLM FP4 (target)" + "vLLM AWQ
+(fallback)" — both are valid Blackwell-FP4-era numbers.
+

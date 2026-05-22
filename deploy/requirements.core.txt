@@ -1,0 +1,54 @@
+# Core VLA training + inference deps — curated subset of requirements.full.txt
+# Reproduce on RTX 5090 (Blackwell sm_120) with /usr/bin/python3 (system python).
+# Install with: /usr/bin/python3 -m pip install -r deploy/requirements.core.txt
+#
+# Hardware/driver baseline at freeze time (2026-05-22):
+#   NVIDIA driver  580.105.08
+#   CUDA toolkit   13.0.88
+#   GPU            RTX 5090 (Blackwell sm_120, FP4-native)
+#   capability     (12, 0)
+#
+# Full env (356 pkgs) frozen in requirements.full.txt — only the lines below
+# matter for VLA training + TRT deployment.
+
+# --- DL core (cu130 wheels) ---
+torch==2.11.0+cu130
+torchvision==0.26.0+cu130
+torchaudio==2.11.0+cu130
+torchao==0.17.0+cu130
+torchcodec==0.11.1+cu130
+torchdata==0.11.0
+
+# --- Transformer stack ---
+transformers==5.6.0
+accelerate==1.13.0
+peft==0.19.1
+tokenizers==0.22.2
+safetensors==0.7.0
+sentencepiece==0.2.1
+huggingface_hub==1.13.0
+datasets==4.7.0
+
+# --- Quantization / attention kernels ---
+bitsandbytes==0.49.2
+flash-attn-4==4.0.0b11
+
+# --- Driving / vision ---
+nuscenes-devkit==1.2.0
+opencv-python-headless==4.10.0.84
+pillow==12.1.1
+einops==0.8.2
+numpy==2.4.3
+scipy==1.17.1
+
+# --- Telemetry / experiment tracking ---
+wandb==0.26.1
+tensorboard==2.20.0
+matplotlib==3.10.9
+
+# --- TRT-LLM (deployment-only, NOT installed at training time) ---
+# Install inside the NGC pytorch:25.01-py3 container, not on host:
+#   pip install tensorrt_llm
+#   git clone https://github.com/NVIDIA/TensorRT-LLM.git
+#   cd TensorRT-LLM && git checkout v$(python -c "import tensorrt_llm;print(tensorrt_llm.__version__)")
+# See deploy/README.md §1 for full container bring-up.

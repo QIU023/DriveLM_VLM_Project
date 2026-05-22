@@ -1,0 +1,96 @@
+base_config: nuscenes_planning_full.yaml   # = R1' / A.0 baseline (1-cam × 4f, Linear)
+
+# ============================================================================
+# Track B.5' — 顶配: 3-cam × multi-modal SFT
+# ============================================================================
+# Cross-product of:
+#   B.5  (1-cam × HD map + bbox + ego image-as-modality, L2 = TBD per v2 sweep)
+#   R1'' (3-cam camera-only, planning_cams = CAM_FRONT + FL + FR)
+#
+# This is the production-aligned condition for the XPeng JD bullet ("3-cam × multi-modal").
+# No new learnable module — same Qwen2.5-VL processor handles 3 camera videos
+# + 1 HD-map BEV image. bbox text injected into the user-turn text block via
+# `_build_user_content_multimodal`.
+#
+# LiDAR is intentionally NOT added (per memory: cam + HD map + bbox + ego only,
+# aligns to XPeng / Tesla stack, NOT NIO / Li Auto family).
+
+experiment: nusc_planning_b5prime_3cam_multimodal
+
+# ---- Multi-modal dataset dispatch (same as B.5) --------------------------
+dataset_kind: nuscenes_planning_multimodal
+dataset_class: multimodal_planning_dataset.MultiModalPlanningDataset
+
+# ---- Modality cache paths (same as B.5) ----------------------------------
+hdmap_dir: data/preproc/hdmap_bev
+bbox_jsonl: data/preproc/bbox_egostate_{split}.jsonl
+
+# ---- Modality dropout OFF (B.5 default; B.6's dropout regularization is a
+# separate axis) ----------------------------------------------------------
+modality_dropout_p: 0.0
+
+# ---- 3-CAM (lifted from configs/nuscenes_planning_3cam_full.yaml) --------
+planning_cams: ["CAM_FRONT", "CAM_FRONT_LEFT", "CAM_FRONT_RIGHT"]
+planning_require_all_cams: true
+
+# ---- Visual token budget --------------------------------------------------
+# CORRECTED 2026-05-22 after B.5' pre-launch smoke caught silent truncation:
+# Qwen2.5-VL videos do NOT apply min/max_pixels at the native nuScenes 1600×900
+# raw resolution — each cam video at 4 frames yields video_grid_thw=[2, 64, 114]
+# = 14592 patches / 4 (spatial-merge) = 3648 LM tokens per cam. So:
+#   3 cams × 3648            = 10944 LM tokens
+#   + HD-map BEV (256/4)     =    64
+#   + bbox + ego text        =  ~350
+#   + chat template + sys    =   ~50
+#   + trajectory             =    14
+#   = ~11400 LM tokens raw
+# max_length=8192 (R1'' value) WAS TOO SMALL — silent truncation cut the HD
+# map + bbox entirely. Bump to 12288 to fit with buffer.
+#
+# AC=true enables gradient checkpointing to cap activation memory (would OOM
+# on 32GB cards at this seq_len without AC).
+#
+# Note: R1'' 3-cam baseline likely had the same truncation (max_length=8192,
+# 10944 cam-only tokens) — only the cam tail was clipped, but trajectory tokens
+# survived. R1'' results in v2 eval are valid but on truncated cam context;
+# fair B.5' vs R1'' apples-to-apples would require retraining R1'' with
+# max_length=12288 (deferred — flagged in CONTEXT_SESSION_RESUME doc).
+max_length: 12288
+min_pixels: 109760
+max_pixels: 109760
+
+# ---- AutoVLA-aligned hyperparams (R1' / 3-cam ratio-scaled schedule) -----
+# Total steps: 28K samples / GBS=32 * 3 epochs ≈ 2625 (same scale as 3-cam baseline).
+# Apply paper-ratio warmup=1.74% and lr_step_freq=6.96% (same as R1'').
+learning_rate: 2.0e-5
+lr_schedule: autovla_stepdecay
+warmup_steps: 39                 # 1.74% × ~2243 (R1'' value)
+lr_step_freq: 156                # 6.96% × ~2243 (R1'' value)
+lr_step_gamma: 0.98
+
+# ---- Throughput ----------------------------------------------------------
+# LBS=2 × grad_accum=2 × FSDP=8 = GBS 32 (same effective GBS as B.5 + R1'').
+# Halved LBS + AC=true to fit max_length=12288 in 32GB. Step time estimate:
+# R1'' ~7s/step at 8192 ctx no-AC → B.5' ~13-15s/step at 12288 + AC + 3-cam
+# + HD-map I/O overhead.
+# Total: 28K samples × 3 ep / GBS 32 = 2625 steps × 14s ≈ 10.2 h.
+# Tight against 10 h overnight budget — first ckpt at step 50 confirms
+# wall-clock; if >15s/step, abort and reduce LBS to 1 (GBS via grad_accum=4).
+batch_size: 2
+grad_accum_steps: 2
+activation_checkpointing: true   # MANDATORY at max_length=12288 + 3-cam on 32GB
+gradient_checkpointing: true
+num_epochs: 3                    # paper-aligned (AutoVLA 3-cam)
+planning_num_past_frames: 4
+
+# ---- Ckpt / val cadence --------------------------------------------------
+# Per [[feedback_ckpt_interval_half_hour]]: at ~7-9s/step (R1'' ~5-8s/step
+# + ~10% HD-map I/O overhead), save_every=50 ≈ 6-8 min/ckpt. First ckpt
+# lands well under 30 min.
+save_every: 50
+val_every: 50
+keep_latest_k: 2
+val_planning_l2: true
+val_full_eval: false
+val_greedy_max_new_tokens: 20
+full_l2_every: null              # final L2 via post-train standalone eval

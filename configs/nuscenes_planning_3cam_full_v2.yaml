@@ -1,0 +1,60 @@
+base_config: nuscenes_planning_full.yaml
+
+# ============================================================================
+# R1''' = R1'' v2: 3-cam camera-only with max_length=12288 (truncation fix)
+# ============================================================================
+# Discovered 2026-05-22 during B.5' pre-launch smoke: max_length=8192 silently
+# truncates 3-cam input. Actual LM tokens for 3-cam @ 109760 min_pixels:
+#   3 cams × (2 T × 64 H × 114 W / 4 spatial_merge) = 3 × 3648 = 10944 tokens
+#   + chat overhead 50 + suffix 350 + traj 14 ≈ 11358 LM tokens
+#   max_length=8192 → 3166 tokens truncated (from middle, end-of-FR-cam region)
+#
+# Original R1'' v1 thus trained on PARTIAL cam-3 context (~70% of FR cam was
+# cut). v1 numbers are valid as "what 3-cam-truncated does" but NOT
+# apples-to-apples vs B.5' (which uses max_length=12288 = full ctx).
+#
+# This config (R1''') retrains the same 3-cam camera-only setup at
+# max_length=12288 with AC, matching B.5' memory profile for fair comparison.
+
+experiment: nuscenes_planning_3cam_3b_full_sft_v2_ml12288
+
+# 3-CAM (same as R1'' v1)
+planning_cams: ["CAM_FRONT", "CAM_FRONT_LEFT", "CAM_FRONT_RIGHT"]
+planning_require_all_cams: true
+
+# Visual token budget (corrected)
+max_length: 12288
+min_pixels: 109760
+max_pixels: 109760
+
+# AC=true mandatory at max_length=12288 + 3-cam to fit 32GB (same as B.5')
+activation_checkpointing: true
+gradient_checkpointing: true
+
+# Throughput — same as B.5' for direct comparison
+batch_size: 2
+grad_accum_steps: 2
+num_epochs: 3
+planning_num_past_frames: 4
+
+# AutoVLA-aligned hyperparams (paper-ratio warmup/decay; same as R1'' v1 + B.5')
+learning_rate: 2.0e-5
+lr_schedule: autovla_stepdecay
+warmup_steps: 39
+lr_step_freq: 156
+lr_step_gamma: 0.98
+
+# Ckpt cadence (same as B.5')
+save_every: 50
+val_every: 50
+# keep_latest_k=1 (was 2) — accelerate's FSDP save writes pytorch_model_fsdp_0/
+# (~16GB transient duplicate) before our rmtree post-save can fire. With k=2,
+# mid-save peak hits 3 × 38GB + transient 16GB = 130GB, crossing the 12GB
+# disk-panic threshold. k=1 caps peak at 2 × 38GB + 16GB ≈ 92GB, safe under
+# 140GB free. Cost: only 1 backup ckpt — if training crashes between saves
+# (rare, save_every=50 ≈ 7 min apart), we lose < 7 min of progress.
+keep_latest_k: 1
+val_planning_l2: true
+val_full_eval: false
+val_greedy_max_new_tokens: 20
+full_l2_every: null
