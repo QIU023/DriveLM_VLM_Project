@@ -137,16 +137,32 @@ def _maybe_load_external_projector(ckpt_dir: str, device: torch.device,
             )
         projector = Qwen2VLPixelShufflePlusLinearProjector(**p_cfg)
     elif p_type == "resampler":
-        # Lazy import — matches the train_lora.py import pattern.
-        try:
-            from scripts.perceiver_resampler_projector_hf import (  # noqa: E402
-                Qwen2VLPerceiverResamplerProjector,
-            )
-        except ImportError:
-            from perceiver_resampler_projector_hf import (  # type: ignore  # noqa: E402
-                Qwen2VLPerceiverResamplerProjector,
-            )
-        projector = Qwen2VLPerceiverResamplerProjector(**p_cfg)
+        # v1 vs v2 (IDEFICS-2 pretrained): branch on pretrained flag
+        if p_cfg.get("pretrained") is True or "idefics_vision_dim" in p_cfg:
+            try:
+                from scripts.resampler_projector_idefics2 import (  # noqa: E402
+                    Idefics2ResamplerProjector,
+                )
+            except ImportError:
+                from resampler_projector_idefics2 import (  # type: ignore  # noqa: E402
+                    Idefics2ResamplerProjector,
+                )
+            ctor_kwargs = {
+                k: p_cfg[k]
+                for k in ("vit_dim", "lm_dim", "num_queries", "pretrained_repo")
+                if k in p_cfg
+            }
+            projector = Idefics2ResamplerProjector(**ctor_kwargs)
+        else:
+            try:
+                from scripts.perceiver_resampler_projector_hf import (  # noqa: E402
+                    Qwen2VLPerceiverResamplerProjector,
+                )
+            except ImportError:
+                from perceiver_resampler_projector_hf import (  # type: ignore  # noqa: E402
+                    Qwen2VLPerceiverResamplerProjector,
+                )
+            projector = Qwen2VLPerceiverResamplerProjector(**p_cfg)
     else:
         raise NotImplementedError(
             f"planning_eval: load path for projector_type={p_type!r} not "

@@ -1,0 +1,48 @@
+base_config: nuscenes_planning_full.yaml
+
+# ============================================================================
+# Track A.3 v2: IDEFICS-2 PRETRAINED Perceiver Resampler (1-cam camera-only)
+# ============================================================================
+# Pivot from A.3 v1 random-init. Per memory feedback_pretrained_init_audit_before_sft.
+# Load IDEFICS-2 connector (modality_projection MLP + perceiver_resampler) =
+# ~743M pretrained params + ~10M random adapter (Linear 2048->1152 input, 4096->2048
+# output).
+#
+# Anchor: R1' linear 0.6420; A.1 v2 BLIP-2 Q-Former 0.6773.
+# Hypothesis: IDEFICS-2 Resampler (3 layers, 4096 internal, 64 latents) trained on
+# OBELICS multimodal web = stronger prior than BLIP-2 Q-Former on caption pairs.
+
+experiment: nusc_planning_a3_v2_1cam_resampler_idefics2
+
+projector_type: resampler
+resampler:
+  pretrained: true
+  pretrained_repo: "HuggingFaceM4/idefics2-8b"
+  in_features: 2048  # Qwen2.5-VL-3B post-merger
+  lm_dim: 2048
+  num_latents: 64  # IDEFICS-2 native (must match)
+
+# Same throughput as A.1 v2
+activation_checkpointing: false
+gradient_checkpointing: false
+batch_size: 4
+grad_accum_steps: 1
+num_epochs: 3
+planning_num_past_frames: 4
+
+# AutoVLA paper-ratio schedule
+learning_rate: 2.0e-5
+lr_schedule: autovla_stepdecay
+warmup_steps: 36
+lr_step_freq: 143
+lr_step_gamma: 0.98
+
+# Disk discipline (bf16 weights-only ckpt)
+save_every: 50
+val_every: 50
+keep_latest_k: 1
+
+val_planning_l2: true
+val_full_eval: false
+val_greedy_max_new_tokens: 20
+full_l2_every: null

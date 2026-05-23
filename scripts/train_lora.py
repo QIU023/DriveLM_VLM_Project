@@ -1901,11 +1901,19 @@ def _projector_constructor_kwargs(projector, projector_type: str) -> dict:
             "shuffle_ratio": int(projector.shuffle_ratio),
         }
     if t == "resampler":
-        # Mirrors scripts/perceiver_resampler_projector_hf
-        # .Qwen2VLPerceiverResamplerProjector.__init__.
-        # layer_norm_eps is not stored as a top-level attr; read it off
-        # norm_out (same shape as the qformer branch). ffn_mult / n_heads /
-        # t_max are stored explicitly.
+        # v1 has `in_features` / `internal_dim` / `num_latents` / `t_max` attrs;
+        # v2 (Idefics2ResamplerProjector) has `vit_dim` / `lm_dim` / `num_queries`
+        # and class-level idefics constants. Detect by presence of `qformer_hidden`
+        # marker (set to 0 in v2; not present in v1).
+        if hasattr(projector, "idefics_vision_dim"):
+            return {
+                "vit_dim": int(projector.vit_dim),
+                "lm_dim": int(projector.lm_dim),
+                "num_queries": int(projector.num_queries),
+                "pretrained": True,
+                "idefics_vision_dim": int(projector.idefics_vision_dim),
+                "idefics_lm_dim": int(projector.idefics_lm_dim),
+            }
         return {
             "in_features": int(projector.in_features),
             "lm_dim": int(projector.lm_dim),
@@ -2744,18 +2752,7 @@ def main():
                 "pixelshuffle (all three are projector replacements on the "
                 "same axis); pick one."
             )
-        try:
-            from scripts.perceiver_resampler_projector_hf import (  # noqa: E402
-                Qwen2VLPerceiverResamplerProjector,
-            )
-        except ImportError:
-            from perceiver_resampler_projector_hf import (  # type: ignore  # noqa: E402
-                Qwen2VLPerceiverResamplerProjector,
-            )
         rs_cfg = cfg.get("resampler", {}) or {}
-        # Resolve LM hidden dim — resampler's in_features is the post-merger
-        # feature dim, which equals lm_dim for Qwen2.5-VL-3B/7B. Both default
-        # to text_config.hidden_size and can be overridden in YAML.
         try:
             lm_dim_default = int(model.config.text_config.hidden_size)
         except Exception:
@@ -2764,30 +2761,56 @@ def main():
         rs_lm_dim = rs_cfg.get("lm_dim", None)
         in_features = int(rs_in_features) if rs_in_features is not None else lm_dim_default
         lm_dim_resolved = int(rs_lm_dim) if rs_lm_dim is not None else lm_dim_default
-        resampler_projector = Qwen2VLPerceiverResamplerProjector(
-            in_features=in_features,
-            lm_dim=lm_dim_resolved,
-            internal_dim=int(rs_cfg.get("internal_dim", 1024)),
-            num_latents=int(rs_cfg.get("num_latents", 64)),
-            num_layers=int(rs_cfg.get("num_layers", 6)),
-            n_heads=int(rs_cfg.get("n_heads", 8)),
-            ffn_mult=int(rs_cfg.get("ffn_mult", 2)),
-            layer_norm_eps=float(rs_cfg.get("layer_norm_eps", 1e-6)),
-            t_max=int(rs_cfg.get("t_max", 32)),
-        )
+        # A.3 v2: load IDEFICS-2 PRETRAINED Connector (modality_projection + perceiver_resampler).
+        rs_pretrained = bool(rs_cfg.get("pretrained", False))
+        if rs_pretrained:
+            try:
+                from scripts.resampler_projector_idefics2 import (  # noqa: E402
+                    Idefics2ResamplerProjector,
+                )
+            except ImportError:
+                from resampler_projector_idefics2 import (  # type: ignore  # noqa: E402
+                    Idefics2ResamplerProjector,
+                )
+            resampler_projector = Idefics2ResamplerProjector(
+                vit_dim=in_features,
+                lm_dim=lm_dim_resolved,
+                num_queries=int(rs_cfg.get("num_latents", 64)),
+                pretrained_repo=str(rs_cfg.get("pretrained_repo", "HuggingFaceM4/idefics2-8b")),
+                dtype=compute_dtype,
+            )
+        else:
+            try:
+                from scripts.perceiver_resampler_projector_hf import (  # noqa: E402
+                    Qwen2VLPerceiverResamplerProjector,
+                )
+            except ImportError:
+                from perceiver_resampler_projector_hf import (  # type: ignore  # noqa: E402
+                    Qwen2VLPerceiverResamplerProjector,
+                )
+            resampler_projector = Qwen2VLPerceiverResamplerProjector(
+                in_features=in_features,
+                lm_dim=lm_dim_resolved,
+                internal_dim=int(rs_cfg.get("internal_dim", 1024)),
+                num_latents=int(rs_cfg.get("num_latents", 64)),
+                num_layers=int(rs_cfg.get("num_layers", 6)),
+                n_heads=int(rs_cfg.get("n_heads", 8)),
+                ffn_mult=int(rs_cfg.get("ffn_mult", 2)),
+                layer_norm_eps=float(rs_cfg.get("layer_norm_eps", 1e-6)),
+                t_max=int(rs_cfg.get("t_max", 32)),
+            )
         resampler_projector = resampler_projector.to(
             device=accelerator.device, dtype=compute_dtype,
         )
         n_proj = sum(p.numel() for p in resampler_projector.parameters())
         n_proj_train = sum(p.numel() for p in resampler_projector.parameters() if p.requires_grad)
+        # v1 has in_features/internal_dim/num_latents/num_layers/t_max attrs;
+        # v2 (IDEFICS-2 pretrained) only has vit_dim/lm_dim/num_queries.
+        _in_attr = getattr(resampler_projector, "in_features", getattr(resampler_projector, "vit_dim", "?"))
+        _n_lat = getattr(resampler_projector, "num_latents", getattr(resampler_projector, "num_queries", "?"))
         accelerator.print(
-            f"[resampler] Built projector "
-            f"in={resampler_projector.in_features} "
-            f"lm={resampler_projector.lm_dim} "
-            f"internal={resampler_projector.internal_dim} "
-            f"latents={resampler_projector.num_latents} "
-            f"layers={resampler_projector.num_layers} "
-            f"t_max={resampler_projector.t_max}: "
+            f"[resampler] Built projector pretrained={rs_pretrained} "
+            f"in={_in_attr} lm={resampler_projector.lm_dim} latents={_n_lat}: "
             f"{n_proj_train}/{n_proj} trainable params "
             f"({n_proj/1e6:.2f}M)"
         )
