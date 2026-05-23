@@ -1,0 +1,41 @@
+{
+  "ckpt": "checkpoints_qwen25/nusc_planning_b5prime_3cam_multimodal/final",
+  "device": "NVIDIA GeForce RTX 5090",
+  "device_cap": [
+    12,
+    0
+  ],
+  "dtype": "bfloat16",
+  "backend": "HF transformers (no TRT engine)",
+  "params_B": 3.754622976,
+  "input_tokens": 1462,
+  "video_tokens": 720,
+  "max_new_tokens": 14,
+  "n_warmup": 3,
+  "n_runs": 10,
+  "load_seconds": 3.429785887012258,
+  "prefill_ms": {
+    "mean": 143.06394020095468,
+    "p50": 143.14933901187032,
+    "p99": 146.61770987790078
+  },
+  "TTFT_ms": {
+    "mean": 194.20995650580153,
+    "p50": 146.73527993727475,
+    "p99": 473.293294653995
+  },
+  "per_token_decode_ms": {
+    "mean": 17.450876091606915,
+    "p50": 20.83195938478009,
+    "p99": 22.647834688138502
+  },
+  "full_traj_ms": {
+    "mean": 421.0713456966914,
+    "p50": 417.368823022116,
+    "p99": 438.07549694902264
+  },
+  "throughput_toks_per_s": {
+    "mean": 33.25700196463385,
+    "p50": 33.543493730063965
+  }
+}

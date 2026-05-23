@@ -1,0 +1,26 @@
+{
+  "ckpt": "checkpoints_qwen25/nusc_planning_b5prime_3cam_multimodal/final",
+  "n_samples": 500,
+  "compression": {
+    "spatial_method": "none",
+    "spatial_ratio": 1,
+    "temporal_method": "none",
+    "temporal_ratio": 1,
+    "visual_tokens_in": 2880.0,
+    "visual_tokens_out": 2880.0,
+    "ratio": 1.0
+  },
+  "TemAvg": {
+    "L2_1s": 0.2990053117647767,
+    "L2_2s": 0.6437225917056203,
+    "L2_3s": 1.1527466174662113,
+    "L2_avg": 0.6984915069788694
+  },
+  "NoAvg": {
+    "L2_1s": 0.4151652158433392,
+    "L2_2s": 1.2254698378734472,
+    "L2_3s": 2.52832199018537,
+    "L2_avg": 1.3896523479673857
+  },
+  "eval_seconds": 227.5
+}

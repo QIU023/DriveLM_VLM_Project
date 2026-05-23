@@ -1,0 +1,149 @@
+{
+  "method": "training-free compression on B.5' 3-cam multi-modal ckpt (camera-only eval, 500 samples)",
+  "cells": [
+    {
+      "tag": "s_fastervlm2_t_none1",
+      "L2_avg": 0.6897455263522765,
+      "collision_pct": 0,
+      "tokens_in": 2880.0,
+      "tokens_out": 1440.0,
+      "compression_ratio": 2.0,
+      "n_samples": 500
+    },
+    {
+      "tag": "s_fastervlm4_t_none1",
+      "L2_avg": 0.6857625802531838,
+      "collision_pct": 0,
+      "tokens_in": 2880.0,
+      "tokens_out": 720.0,
+      "compression_ratio": 4.0,
+      "n_samples": 500
+    },
+    {
+      "tag": "s_fastervlm4_t_temporal_pool2",
+      "L2_avg": 0.7089730111993849,
+      "collision_pct": 0,
+      "tokens_in": 2880.0,
+      "tokens_out": 360.0,
+      "compression_ratio": 8.0,
+      "n_samples": 500
+    },
+    {
+      "tag": "s_fastervlm4_t_temporal_pool4",
+      "L2_avg": 0.7149971096403896,
+      "collision_pct": 0,
+      "tokens_in": 2880.0,
+      "tokens_out": 180.0,
+      "compression_ratio": 16.0,
+      "n_samples": 500
+    },
+    {
+      "tag": "s_fastervlm8_t_none1",
+      "L2_avg": 0.6877094824649393,
+      "collision_pct": 0,
+      "tokens_in": 2880.0,
+      "tokens_out": 360.0,
+      "compression_ratio": 8.0,
+      "n_samples": 500
+    },
+    {
+      "tag": "s_none1_t_longvu2",
+      "L2_avg": 0.6976145647068818,
+      "collision_pct": 0,
+      "tokens_in": 2880.0,
+      "tokens_out": 1440.0,
+      "compression_ratio": 2.0,
+      "n_samples": 500
+    },
+    {
+      "tag": "s_none1_t_longvu4",
+      "L2_avg": 0.7070615598248938,
+      "collision_pct": 0,
+      "tokens_in": 2880.0,
+      "tokens_out": 720.0,
+      "compression_ratio": 4.0,
+      "n_samples": 500
+    },
+    {
+      "tag": "s_none1_t_none1",
+      "L2_avg": 0.6984915069788694,
+      "collision_pct": 0,
+      "tokens_in": 2880.0,
+      "tokens_out": 2880.0,
+      "compression_ratio": 1.0,
+      "n_samples": 500
+    },
+    {
+      "tag": "s_none1_t_temporal_pool2",
+      "L2_avg": 0.708567474603653,
+      "collision_pct": 0,
+      "tokens_in": 2880.0,
+      "tokens_out": 1440.0,
+      "compression_ratio": 2.0,
+      "n_samples": 500
+    },
+    {
+      "tag": "s_none1_t_temporal_pool4",
+      "L2_avg": 0.7163508499935269,
+      "collision_pct": 0,
+      "tokens_in": 2880.0,
+      "tokens_out": 720.0,
+      "compression_ratio": 4.0,
+      "n_samples": 500
+    },
+    {
+      "tag": "s_prumerge2_t_none1",
+      "L2_avg": 0.6860780645757913,
+      "collision_pct": 0,
+      "tokens_in": 2880.0,
+      "tokens_out": 1440.0,
+      "compression_ratio": 2.0,
+      "n_samples": 500
+    },
+    {
+      "tag": "s_prumerge4_t_none1",
+      "L2_avg": 0.7051464336092272,
+      "collision_pct": 0,
+      "tokens_in": 2880.0,
+      "tokens_out": 720.0,
+      "compression_ratio": 4.0,
+      "n_samples": 500
+    },
+    {
+      "tag": "s_prumerge8_t_none1",
+      "L2_avg": 0.7030371943861247,
+      "collision_pct": 0,
+      "tokens_in": 2880.0,
+      "tokens_out": 360.0,
+      "compression_ratio": 8.0,
+      "n_samples": 500
+    },
+    {
+      "tag": "s_pyramiddrop2_t_none1",
+      "L2_avg": 0.6890993178673088,
+      "collision_pct": 0,
+      "tokens_in": 2880.0,
+      "tokens_out": 1440.0,
+      "compression_ratio": 2.0,
+      "n_samples": 500
+    },
+    {
+      "tag": "s_pyramiddrop4_t_none1",
+      "L2_avg": 0.6925116875953973,
+      "collision_pct": 0,
+      "tokens_in": 2880.0,
+      "tokens_out": 720.0,
+      "compression_ratio": 4.0,
+      "n_samples": 500
+    },
+    {
+      "tag": "s_pyramiddrop8_t_none1",
+      "L2_avg": 0.6853756568183502,
+      "collision_pct": 0,
+      "tokens_in": 2880.0,
+      "tokens_out": 360.0,
+      "compression_ratio": 8.0,
+      "n_samples": 500
+    }
+  ]
+}
