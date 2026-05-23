@@ -1,0 +1,30 @@
+{
+  "ckpt": "/workspace/DriveLM_VLM_Project/checkpoints_qwen25/nusc_planning_b5pp_1cam_qwen3vl_multimodal/final",
+  "backend": "TRT-LLM 1.3.0rc15 PyTorch backend",
+  "model_type": "qwen3_vl",
+  "dtype": "bfloat16",
+  "tensor_parallel_size": 1,
+  "n_warmup": 3,
+  "n_runs": 20,
+  "max_new_tokens": 14,
+  "load_seconds": 654.9266040679067,
+  "TTFT_ms": {
+    "mean": 34.7943797474727,
+    "p50": 31.73367347335443,
+    "p99": 43.64753469009884
+  },
+  "per_token_decode_ms": {
+    "mean": 6.052898472766033,
+    "p50": 6.160629156511277,
+    "p99": 6.602637602840192
+  },
+  "full_traj_ms": {
+    "mean": 113.48205989343114,
+    "p50": 113.01171145169064,
+    "p99": 117.72031301283278
+  },
+  "throughput_toks_per_s": {
+    "mean": 123.40002879917922,
+    "p50": 123.88106724274841
+  }
+}
