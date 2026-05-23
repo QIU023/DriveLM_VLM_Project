@@ -1,0 +1,57 @@
+base_config: nuscenes_planning_full.yaml
+
+# ============================================================================
+# Track A.1 v2: Q-Former with BLIP-2 PRETRAINED init (1-cam camera-only)
+# ============================================================================
+# Pivot from A.1 v1 random-init failure (L2=0.68 vs baseline R1' linear 0.62).
+# Per memory feedback_qformer_pretrained_init_only + feedback_pretrained_init_audit_before_sft:
+# load BLIP-2 Q-Former weights (pretrained on 129M image-text pairs); only the
+# two boundary adapters are random-init (~3.4M / 105M total = 3% random).
+#
+# Anchor for comparison: R1' = A.0 (Linear projector, 1cam x 4f, L2 0.642).
+# Hypothesis: pretrained Q-Former cross-attention pooling beats Linear MLP
+# at fusing 4f video into LM token stream at tight token budget.
+#
+# Setup identical to A.1 v1 EXCEPT projector init source.
+
+experiment: nusc_planning_a1_v2_1cam_qformer_blip2
+
+# ---- Projector switch -----------------------------------------------------
+projector_type: qformer
+qformer:
+  pretrained: true                                  # NEW for v2
+  pretrained_repo: "Salesforce/blip2-opt-2.7b"      # 105M Q-Former + 32 queries
+  # vit_dim = LM hidden (post-merger features) for Qwen2.5-VL-3B.
+  vit_dim: 2048
+  lm_dim: 2048
+  # 32 queries matches BLIP-2 native — maximizes pretrained init usage.
+  num_queries: 32
+  # internal_dim / num_layers / n_heads not used by Blip2QFormerProjector
+  # (those are fixed by BLIP-2 arch: 12 layers x 768 hidden x 12 heads).
+
+# Throughput / memory same as A.1 v1
+activation_checkpointing: false
+gradient_checkpointing: false
+batch_size: 4
+grad_accum_steps: 1
+num_epochs: 3
+planning_num_past_frames: 4
+
+# AutoVLA paper-ratio schedule (same as A.1 v1)
+learning_rate: 2.0e-5
+lr_schedule: autovla_stepdecay
+warmup_steps: 36                                    # 1.74% of ~2050 steps
+lr_step_freq: 143                                   # 6.96% of ~2050 steps
+lr_step_gamma: 0.98
+
+# Disk discipline (post bf16 save patch: ~9G/ckpt; k=1 safe)
+save_every: 50
+val_every: 50
+keep_latest_k: 1
+
+val_planning_l2: true
+val_full_eval: false
+val_greedy_max_new_tokens: 20
+full_l2_every: null
+
+# 1-cam max_length headroom (4096 from base is plenty for 1cam x 4f + 32 q-tokens)

@@ -355,6 +355,11 @@ class MultiModalPlanningDataset(PlanningDataset):
         second_per_grid_ts = inputs.get("second_per_grid_ts")
         pixel_values = inputs.get("pixel_values")          # HD-map image
         image_grid_thw = inputs.get("image_grid_thw")      # HD-map image grid
+        # Qwen3-VL M-RoPE requires `mm_token_type_ids` (0=text, 1=image, 2=video)
+        # per-token. Processor returns it for Qwen3-family; Qwen2.5-VL returns None.
+        mm_token_type_ids = inputs.get("mm_token_type_ids")
+        if mm_token_type_ids is not None:
+            mm_token_type_ids = mm_token_type_ids.squeeze(0)
 
         # 6. Append action tokens INSIDE the assistant turn (verbatim copy of
         # the PlanningDataset logic; we cannot call super().__getitem__ because
@@ -372,6 +377,15 @@ class MultiModalPlanningDataset(PlanningDataset):
         new_ids = ids_list[:insert_at] + list(action_tokens) + ids_list[insert_at:]
         input_ids = torch.tensor(new_ids, dtype=input_ids.dtype)
         attention_mask = torch.ones_like(input_ids)
+        # Keep mm_token_type_ids aligned with input_ids: action tokens are text
+        # (type=0), inserted at the same offset.
+        if mm_token_type_ids is not None:
+            mm_dtype = mm_token_type_ids.dtype
+            mm_token_type_ids = torch.cat([
+                mm_token_type_ids[:insert_at],
+                torch.zeros(len(action_tokens), dtype=mm_dtype),
+                mm_token_type_ids[insert_at:],
+            ], dim=0)
 
         # 7. Truncate if too long (parent's logic).
         if input_ids.shape[0] > self.max_length:
@@ -382,6 +396,11 @@ class MultiModalPlanningDataset(PlanningDataset):
             input_ids = keep
             attention_mask = torch.ones_like(input_ids)
             action_insert_start -= overflow
+            if mm_token_type_ids is not None:
+                mm_token_type_ids = torch.cat([
+                    mm_token_type_ids[:trim_from],
+                    mm_token_type_ids[trim_to:],
+                ], dim=0)
 
         # 8. Label masking (parent's logic).
         labels = input_ids.clone()
@@ -444,6 +463,8 @@ class MultiModalPlanningDataset(PlanningDataset):
             result["image_grid_thw"] = (
                 image_grid_thw.squeeze(0) if image_grid_thw.dim() > 1 else image_grid_thw
             )
+        if mm_token_type_ids is not None:
+            result["mm_token_type_ids"] = mm_token_type_ids
 
         result["image_name"] = os.path.basename(self._image_path(info))
         result["_meta_waypoints"] = torch.tensor(wp, dtype=torch.float32)

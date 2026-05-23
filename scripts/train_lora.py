@@ -287,6 +287,10 @@ def collate_fn(batch):
     padded_input_ids = []
     padded_attention_mask = []
     padded_labels = []
+    # Qwen3-VL M-RoPE: per-token modality type (0=text, 1=image, 2=video). Pad
+    # with 0 (text) since pad positions are masked-out by attention anyway.
+    has_mm_type = "mm_token_type_ids" in batch[0]
+    padded_mm_token_type_ids = []
 
     for item in batch:
         seq_len = item["input_ids"].shape[0]
@@ -300,12 +304,19 @@ def collate_fn(batch):
         padded_labels.append(
             torch.cat([item["labels"], torch.full((pad_len,), -100, dtype=item["labels"].dtype)])
         )
+        if has_mm_type:
+            mm = item["mm_token_type_ids"]
+            padded_mm_token_type_ids.append(
+                torch.cat([mm, torch.zeros(pad_len, dtype=mm.dtype)])
+            )
 
     result = {
         "input_ids": torch.stack(padded_input_ids),
         "attention_mask": torch.stack(padded_attention_mask),
         "labels": torch.stack(padded_labels),
     }
+    if has_mm_type:
+        result["mm_token_type_ids"] = torch.stack(padded_mm_token_type_ids)
 
     if "pixel_values" in batch[0]:
         result["pixel_values"] = torch.cat(
@@ -1850,7 +1861,20 @@ def _projector_constructor_kwargs(projector, projector_type: str) -> dict:
     """
     t = projector_type.lower()
     if t == "qformer":
-        # Mirrors scripts/qformer_projector_hf.Qwen2VLQFormerProjector.__init__.
+        # Two flavors: v1 random-init custom Q-Former (has internal_dim/num_layers/
+        # n_heads/ffn_mult attrs) vs v2 BLIP-2 pretrained (Blip2QFormerProjector,
+        # has only vit_dim/lm_dim/num_queries). Detect by presence of attr.
+        if hasattr(projector, "qformer_hidden"):
+            # v2 BLIP-2 pretrained
+            return {
+                "vit_dim": int(projector.vit_dim),
+                "lm_dim": int(projector.lm_dim),
+                "num_queries": int(projector.num_queries),
+                "pretrained": True,
+                "qformer_hidden": int(projector.qformer_hidden),
+                "qformer_encoder_hidden": int(projector.qformer_encoder_hidden),
+            }
+        # v1 random-init custom
         return {
             "vit_dim": int(projector.vit_dim),
             "internal_dim": int(projector.internal_dim),
@@ -1937,7 +1961,8 @@ def _save_model_and_state(accelerator, model, optimizer, scheduler,
                           train_mode, save_path, global_step, epoch, batch_idx,
                           save_processor=None,
                           external_projector=None,
-                          projector_type: Optional[str] = None):
+                          projector_type: Optional[str] = None,
+                          weights_only: bool = False):
     """Distributed-safe checkpoint writer.
 
     For LoRA / QLoRA we save the adapter only (small, single rank writes).
@@ -1949,6 +1974,12 @@ def _save_model_and_state(accelerator, model, optimizer, scheduler,
     load-time path in planning_eval.py can restore the 90M-ish projector
     weights — they are NOT registered as submodules of the LM and would
     otherwise be silently dropped by save_pretrained.
+
+    ``weights_only=True`` skips accelerator.save_state (optim+scheduler+RNG).
+    Saves ~80% disk per ckpt (e.g. 4B model: 50GB -> 8GB) at the cost of
+    resume losing optimizer state — resume from such a ckpt re-initializes
+    the optimizer to fresh state. Use for deploy-only runs or short trains
+    where mid-train resume is unnecessary.
     """
     if accelerator.is_main_process:
         os.makedirs(save_path, exist_ok=True)
@@ -1960,6 +1991,15 @@ def _save_model_and_state(accelerator, model, optimizer, scheduler,
         # returns the local state dict in single-GPU mode).
         state_dict = accelerator.get_state_dict(model)
         if accelerator.is_main_process:
+            # FSDP with `mixed_precision_policy` upcasts params to fp32 for the
+            # optimizer; without explicit downcast, save_pretrained writes fp32
+            # (2x disk vs bf16). Cast floating-point tensors to bf16 on save —
+            # inference reload reads dtype from config (bfloat16) anyway, so
+            # this is lossless for downstream use. Saves ~50% disk per ckpt
+            # (e.g. Qwen3-VL-4B: 18GB -> 9GB).
+            for k, v in state_dict.items():
+                if v.is_floating_point() and v.dtype != torch.bfloat16:
+                    state_dict[k] = v.to(torch.bfloat16)
             unwrapped.save_pretrained(
                 save_path,
                 is_main_process=True,
@@ -1989,25 +2029,31 @@ def _save_model_and_state(accelerator, model, optimizer, scheduler,
     # because save_pretrained above already wrote model.safetensors (the
     # eval pipeline reads safetensors, not accelerate's pytorch_model_fsdp_*).
     accelerate_state_dir = os.path.join(save_path, "accelerate_state")
-    try:
-        # save_model=False intent: model already written by save_pretrained above.
-        # NOTE: in accelerate 1.13 with FSDP, save_model=False does NOT prevent
-        # FSDP plugin from writing pytorch_model_fsdp_0/*.distcp (~16GB shard
-        # files for a 3B model). We must rmtree it post-save to control disk.
-        accelerator.save_state(accelerate_state_dir, save_model=False, safe_serialization=False)
-    except Exception as e:
-        accelerator.print(f"[warn] accelerator.save_state failed: {e}; "
-                          f"resume will reset optimizer to fresh state")
-    # Strip the FSDP-format duplicate of model weights — model.safetensors above
-    # is canonical. accelerator.load_state on resume only needs optim/scheduler/RNG;
-    # we load model weights via from_pretrained(safetensors), so pytorch_model_fsdp_0
-    # is dead weight (~16GB / ckpt) that pushes disk into panic.
-    if accelerator.is_main_process:
-        import shutil
-        fsdp_model_dir = os.path.join(accelerate_state_dir, "pytorch_model_fsdp_0")
-        if os.path.isdir(fsdp_model_dir):
-            shutil.rmtree(fsdp_model_dir, ignore_errors=True)
-            accelerator.print(f"[save] removed redundant {fsdp_model_dir} (model.safetensors canonical)")
+    if weights_only:
+        accelerator.print(
+            f"[save] weights_only=True -> skipping accelerator.save_state "
+            f"(no optim/scheduler/RNG); resume from this ckpt will reset optimizer."
+        )
+    else:
+        try:
+            # save_model=False intent: model already written by save_pretrained above.
+            # NOTE: in accelerate 1.13 with FSDP, save_model=False does NOT prevent
+            # FSDP plugin from writing pytorch_model_fsdp_0/*.distcp (~16GB shard
+            # files for a 3B model). We must rmtree it post-save to control disk.
+            accelerator.save_state(accelerate_state_dir, save_model=False, safe_serialization=False)
+        except Exception as e:
+            accelerator.print(f"[warn] accelerator.save_state failed: {e}; "
+                              f"resume will reset optimizer to fresh state")
+        # Strip the FSDP-format duplicate of model weights — model.safetensors above
+        # is canonical. accelerator.load_state on resume only needs optim/scheduler/RNG;
+        # we load model weights via from_pretrained(safetensors), so pytorch_model_fsdp_0
+        # is dead weight (~16GB / ckpt) that pushes disk into panic.
+        if accelerator.is_main_process:
+            import shutil
+            fsdp_model_dir = os.path.join(accelerate_state_dir, "pytorch_model_fsdp_0")
+            if os.path.isdir(fsdp_model_dir):
+                shutil.rmtree(fsdp_model_dir, ignore_errors=True)
+                accelerator.print(f"[save] removed redundant {fsdp_model_dir} (model.safetensors canonical)")
 
     # Training meta (step/epoch/batch_idx) in JSON for the resume code to read.
     if accelerator.is_main_process:
@@ -2056,6 +2102,12 @@ def main():
     parser.add_argument("--train-max-samples", type=int, default=None, help="Cap train dataset to first N samples (planning branch only)")
     parser.add_argument("--no-validate", action="store_true", help="Disable in-loop validation (smoke runs)")
     parser.add_argument("--no-final-save", action="store_true", help="Skip the post-training _save_model_and_state final dump (smoke runs)")
+    parser.add_argument("--save-optim-state", action="store_true", default=None,
+                        help="Save optimizer/scheduler/RNG shards alongside model weights. "
+                             "Default OFF (model weights only) to keep ckpts small "
+                             "(~80% smaller, e.g. 4B: 8GB vs 40GB). Turn ON only when "
+                             "you need mid-train resume to preserve optimizer state. "
+                             "Overrides config.save_optim_state.")
     parser.add_argument("--val-full-eval", dest="val_full_eval", action="store_true",
                         default=None,
                         help="Greedy-decode the entire val set (~3 min on 8 GPU) instead "
@@ -2098,6 +2150,13 @@ def main():
     num_workers = cfg.get("num_workers", 0)
     save_every = args.save_every if args.save_every is not None else cfg.get("save_every", 500)
     keep_latest_k = cfg.get("keep_latest_k", 3)  # disk discipline; 0 disables pruning
+    # Default OFF — weights-only ckpt. Opt IN to save optimizer/scheduler/RNG
+    # when mid-train resume needs to preserve optimizer state. Most runs don't
+    # (deploy-only or short trains), and full state quintuples ckpt disk cost.
+    save_optim_state = (args.save_optim_state
+                        if args.save_optim_state is not None
+                        else bool(cfg.get("save_optim_state", False)))
+    save_weights_only = not save_optim_state
     if args.train_max_samples is not None:
         cfg["train_max_samples"] = int(args.train_max_samples)
     if args.no_validate:
@@ -2163,15 +2222,31 @@ def main():
         # Try to locate the actual decoder-layer class to enable a
         # cls-name-based auto-wrap policy. Fall back to string-based
         # name (which the plugin also accepts) if the import fails.
-        try:
-            from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
-                Qwen2_5_VLDecoderLayer,
-            )
-            transformer_cls_names = ["Qwen2_5_VLDecoderLayer"]
-        except Exception as e:  # pragma: no cover
-            print(f"[FSDP] Could not import Qwen2_5_VLDecoderLayer ({e}); "
-                  f"falling back to string name only")
-            transformer_cls_names = ["Qwen2_5_VLDecoderLayer"]
+        # Backbone-detect from model_id: Qwen3-VL has its own decoder layer
+        # class (`Qwen3VLTextDecoderLayer`); FSDP needs the exact class name to
+        # auto-wrap per-layer. Wrong class name -> no per-layer FSDP shard ->
+        # OOM at first forward.
+        _mid_lower = str(model_id).lower()
+        if "qwen3-vl" in _mid_lower or "qwen3_vl" in _mid_lower or "qwen3vl" in _mid_lower:
+            try:
+                from transformers.models.qwen3_vl.modeling_qwen3_vl import (
+                    Qwen3VLTextDecoderLayer,
+                )
+                transformer_cls_names = ["Qwen3VLTextDecoderLayer"]
+            except Exception as e:  # pragma: no cover
+                print(f"[FSDP] Could not import Qwen3VLTextDecoderLayer ({e}); "
+                      f"falling back to string name only")
+                transformer_cls_names = ["Qwen3VLTextDecoderLayer"]
+        else:
+            try:
+                from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
+                    Qwen2_5_VLDecoderLayer,
+                )
+                transformer_cls_names = ["Qwen2_5_VLDecoderLayer"]
+            except Exception as e:  # pragma: no cover
+                print(f"[FSDP] Could not import Qwen2_5_VLDecoderLayer ({e}); "
+                      f"falling back to string name only")
+                transformer_cls_names = ["Qwen2_5_VLDecoderLayer"]
 
         # IMPORTANT: do NOT enable activation_checkpointing in the FSDP plugin
         # for transformers >= 5.x — `Qwen2_5_VLDecoderLayer` inherits from
@@ -2493,16 +2568,8 @@ def main():
                 "(fusion mechanism vs cross-frame temporal compression). "
                 "Pick one."
             )
-        try:
-            from scripts.qformer_projector_hf import (  # noqa: E402
-                Qwen2VLQFormerProjector,
-            )
-        except ImportError:
-            from qformer_projector_hf import (  # type: ignore  # noqa: E402
-                Qwen2VLQFormerProjector,
-            )
         qf_cfg = cfg.get("qformer", {}) or {}
-        # Resolve LM hidden dim (= post-merger in_features for Qwen2.5-VL).
+        # Resolve LM hidden dim (= post-merger in_features for Qwen2.5/3-VL).
         try:
             lm_dim_default = int(model.config.text_config.hidden_size)
         except Exception:
@@ -2511,17 +2578,48 @@ def main():
         # the Q-Former's KV input dim is the LM hidden size, since
         # get_video_features outputs (total_post_tokens, lm_dim).
         vit_dim_default = lm_dim_default
-        qformer_projector = Qwen2VLQFormerProjector(
-            vit_dim=int(qf_cfg.get("vit_dim", vit_dim_default)),
-            internal_dim=int(qf_cfg.get("internal_dim", 1024)),
-            lm_dim=int(qf_cfg.get("lm_dim", lm_dim_default)),
-            num_queries=int(qf_cfg.get("num_queries", 64)),
-            num_layers=int(qf_cfg.get("num_layers", 6)),
-            n_heads=int(qf_cfg.get("n_heads", 8)),
-            ffn_mult=int(qf_cfg.get("ffn_mult", 4)),
-            layer_norm_eps=float(qf_cfg.get("layer_norm_eps", 1e-6)),
-            dropout=float(qf_cfg.get("dropout", 0.0)),
-        )
+        # A.1 v2: load BLIP-2 PRETRAINED Q-Former weights instead of random
+        # init (per memory feedback_qformer_pretrained_init_only +
+        # feedback_pretrained_init_audit_before_sft). v1 random-init underperformed
+        # the linear baseline by L2 +0.06-0.10; v2 = 105M pretrained weights from
+        # BLIP-2 + ~3.4M random adapter params at the boundaries.
+        use_pretrained = bool(qf_cfg.get("pretrained", False))
+        if use_pretrained:
+            try:
+                from scripts.qformer_projector_blip2 import (  # noqa: E402
+                    Blip2QFormerProjector,
+                )
+            except ImportError:
+                from qformer_projector_blip2 import (  # type: ignore  # noqa: E402
+                    Blip2QFormerProjector,
+                )
+            qformer_projector = Blip2QFormerProjector(
+                vit_dim=int(qf_cfg.get("vit_dim", vit_dim_default)),
+                lm_dim=int(qf_cfg.get("lm_dim", lm_dim_default)),
+                num_queries=int(qf_cfg.get("num_queries", 32)),
+                pretrained_repo=str(qf_cfg.get("pretrained_repo", "Salesforce/blip2-opt-2.7b")),
+                dtype=compute_dtype,
+            )
+        else:
+            try:
+                from scripts.qformer_projector_hf import (  # noqa: E402
+                    Qwen2VLQFormerProjector,
+                )
+            except ImportError:
+                from qformer_projector_hf import (  # type: ignore  # noqa: E402
+                    Qwen2VLQFormerProjector,
+                )
+            qformer_projector = Qwen2VLQFormerProjector(
+                vit_dim=int(qf_cfg.get("vit_dim", vit_dim_default)),
+                internal_dim=int(qf_cfg.get("internal_dim", 1024)),
+                lm_dim=int(qf_cfg.get("lm_dim", lm_dim_default)),
+                num_queries=int(qf_cfg.get("num_queries", 64)),
+                num_layers=int(qf_cfg.get("num_layers", 6)),
+                n_heads=int(qf_cfg.get("n_heads", 8)),
+                ffn_mult=int(qf_cfg.get("ffn_mult", 4)),
+                layer_norm_eps=float(qf_cfg.get("layer_norm_eps", 1e-6)),
+                dropout=float(qf_cfg.get("dropout", 0.0)),
+            )
         qformer_projector = qformer_projector.to(
             device=accelerator.device, dtype=compute_dtype,
         )
@@ -2529,11 +2627,10 @@ def main():
         n_proj_train = sum(p.numel() for p in qformer_projector.parameters() if p.requires_grad)
         accelerator.print(
             f"[qformer] Built projector "
+            f"pretrained={use_pretrained} "
             f"vit={qformer_projector.vit_dim} "
             f"lm={qformer_projector.lm_dim} "
-            f"internal={qformer_projector.internal_dim} "
-            f"queries={qformer_projector.num_queries} "
-            f"layers={qformer_projector.num_layers}: "
+            f"queries={qformer_projector.num_queries}: "
             f"{n_proj_train}/{n_proj} trainable params "
             f"({n_proj/1e6:.2f}M)"
         )
@@ -3218,6 +3315,7 @@ def main():
                         external_projector=_active_ext_proj,
                         projector_type=(projector_type
                                         if _active_ext_proj is not None else None),
+                        weights_only=save_weights_only,
                     )
                     if accelerator.is_main_process:
                         tqdm.write(f"  [SAVE] checkpoint-{global_step}")
@@ -3483,6 +3581,7 @@ def main():
             external_projector=_active_ext_proj_final,
             projector_type=(projector_type
                             if _active_ext_proj_final is not None else None),
+            weights_only=save_weights_only,
         )
         accelerator.print(f"\nTraining complete! Final model saved to {final_path}")
 

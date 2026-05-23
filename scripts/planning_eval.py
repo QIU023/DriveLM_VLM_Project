@@ -94,16 +94,37 @@ def _maybe_load_external_projector(ckpt_dir: str, device: torch.device,
     p_type = meta["type"].lower()
     p_cfg = meta["config"]
     if p_type == "qformer":
-        # Lazy import — matches the train_lora.py import pattern.
-        try:
-            from scripts.qformer_projector_hf import (  # noqa: E402
-                Qwen2VLQFormerProjector,
-            )
-        except ImportError:
-            from qformer_projector_hf import (  # type: ignore  # noqa: E402
-                Qwen2VLQFormerProjector,
-            )
-        projector = Qwen2VLQFormerProjector(**p_cfg)
+        # Two flavors saved by train_lora._projector_constructor_kwargs:
+        # v1 random-init (Qwen2VLQFormerProjector, has internal_dim) or v2
+        # BLIP-2 pretrained (Blip2QFormerProjector, has pretrained=True +
+        # qformer_hidden in cfg). Branch on cfg shape.
+        if p_cfg.get("pretrained") is True or "qformer_hidden" in p_cfg:
+            try:
+                from scripts.qformer_projector_blip2 import (  # noqa: E402
+                    Blip2QFormerProjector,
+                )
+            except ImportError:
+                from qformer_projector_blip2 import (  # type: ignore  # noqa: E402
+                    Blip2QFormerProjector,
+                )
+            # Strip non-constructor kwargs that came from the meta dump.
+            ctor_kwargs = {
+                k: p_cfg[k]
+                for k in ("vit_dim", "lm_dim", "num_queries", "pretrained_repo")
+                if k in p_cfg
+            }
+            projector = Blip2QFormerProjector(**ctor_kwargs)
+        else:
+            # Lazy import — matches the train_lora.py import pattern.
+            try:
+                from scripts.qformer_projector_hf import (  # noqa: E402
+                    Qwen2VLQFormerProjector,
+                )
+            except ImportError:
+                from qformer_projector_hf import (  # type: ignore  # noqa: E402
+                    Qwen2VLQFormerProjector,
+                )
+            projector = Qwen2VLQFormerProjector(**p_cfg)
     elif p_type == "pixelshuffle":
         # Lazy import — matches the train_lora.py import pattern.
         try:
