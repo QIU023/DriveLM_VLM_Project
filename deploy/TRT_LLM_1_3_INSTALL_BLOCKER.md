@@ -42,13 +42,17 @@ TRT-LLM 1.3.0rc15 has ~50+ transitive deps that:
 
 ## Recommended path forward (~half day)
 
-1. **Use NVIDIA's official TRT-LLM Docker image** (likely `nvcr.io/nvidia/tritonserver:25.06-trtllm-python-py3` or similar):
-   ```
-   docker pull nvcr.io/nvidia/tensorrt-llm:1.3-py3
-   docker run --gpus all -it -v $PWD:/workspace ...
-   ```
-   - Docker image has all deps pre-resolved against a known torch ABI
-   - Cost: ~5-10GB download + ~30min container setup
+1. **Use NVIDIA's official TRT-LLM Docker image** — **ALSO BLOCKED in our env**:
+   - Installed `docker.io 29.1.3` via apt
+   - Daemon won't start with iptables enabled (`Permission denied (you must be root)` — even though we ARE root; no NET_ADMIN cap)
+   - Daemon DOES start with `--iptables=false --ip6tables=false --bridge=none`, but:
+   - **Image pull fails: `unshare: operation not permitted`** — outer container lacks CAP_SYS_ADMIN, so inner docker can't create namespaces (regardless of storage driver, vfs/overlayfs both blocked)
+   - **Root cause**: we're running inside an unprivileged container. Docker-in-docker requires outer container started with `--privileged` or `--cap-add=SYS_ADMIN,NET_ADMIN`. That's a HOST-level decision, not changeable from inside.
+   - **Path forward when host operator can add cap**: same as below
+   - ```
+     docker pull nvcr.io/nvidia/tensorrt-llm:1.3-py3
+     docker run --gpus all -it -v $PWD:/workspace ...
+     ```
 2. **Inside Docker**: `trtllm-build --checkpoint_dir ./checkpoints_qwen25/nusc_planning_b5pp_1cam_qwen3vl_multimodal/final --output_dir engines/b5pp_qwen3vl --gemm_plugin auto`
 3. **Test inference**: `trtllm-serve engines/b5pp_qwen3vl --port 8000`
 4. **Bench vs HF baseline**: `deploy/bench_hf_baseline.py` already has the comparison framework
