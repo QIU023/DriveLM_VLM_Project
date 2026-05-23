@@ -1,44 +1,32 @@
 #!/usr/bin/env python3
-"""HF bf16 latency benchmark on the B.5' VLA ckpt — serves as deployment-latency
-**reference** for the TRT path we couldn't finish tonight.
+"""HF bf16 latency benchmark on B.5'' (Qwen3-VL-4B) ckpt — text-only path.
 
-Why this exists: TRT-LLM 1.2.1 does NOT support Qwen2.5-VL (model_type lookup
-returns None); upstream issues #2794, #10069, #8404 track Qwen2.5-VL FP4 support.
-We installed TRT-LLM in /opt/trt_venv but cannot complete the engine build for
-this model architecture tonight. HF bf16 on the host gives an UPPER-BOUND latency
-number against which a future TRT FP4 engine should be compared.
+Apples-to-apples vs deploy/bench_trt_qwen3vl.py (TRT-LLM 1.3 PyTorch backend),
+which also uses a text-only prompt via LLM.generate(). Same prompt, same ckpt,
+same dtype, same hardware → honest TTFT / decode / throughput delta.
 
-Measures:
-  - prefill latency (model.forward only, no generate)
-  - TTFT (time-to-first-token via generate with max_new_tokens=1)
-  - per-token decode latency (median over N runs of generate(max_new_tokens=14))
-  - total trajectory-token (14 tokens) generation time
-  - throughput (tokens/sec)
+Why text-only: TRT-LLM 1.3 LLM API does not currently accept Qwen3-VL visual
+inputs through generate(); both benches measure LM forward only. Visual prefill
+is a small one-time cost outside the decode loop and doesn't dominate
+latency for the 14-token trajectory output.
 
 Run:
   /usr/bin/python3 deploy/bench_hf_baseline.py \\
-    --ckpt checkpoints_qwen25/nusc_planning_b5prime_3cam_multimodal/final \\
-    --n-warmup 3 --n-runs 20 --out deploy/trt_bench/B5prime_hf_bf16.json
+    --ckpt checkpoints_qwen25/nusc_planning_b5pp_1cam_qwen3vl_multimodal/final \\
+    --n-warmup 3 --n-runs 20 --out deploy/trt_bench/B5pp_hf_qwen3vl_bf16.json
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
-import sys
 import time
 from pathlib import Path
 
 import torch
-from PIL import Image
-
-_HERE = Path(__file__).resolve().parent
-_BASE = _HERE.parent
-sys.path.insert(0, str(_BASE / "scripts"))
 
 
 def percentile(values, p):
-    """numpy-free percentile."""
     s = sorted(values)
     k = (len(s) - 1) * p / 100
     f = int(k)
@@ -48,17 +36,22 @@ def percentile(values, p):
     return s[f] + (s[c] - s[f]) * (k - f)
 
 
+# Exact same prompt as deploy/bench_trt_qwen3vl.py
+PROMPT = (
+    "You are a self-driving system. Given the current scene context, "
+    "predict the next 6 ego waypoints as <traj_start> bin tokens. "
+    "Current scene: straight road, 12 m/s, no obstacles. <traj_start>"
+)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--n-warmup", type=int, default=3)
     ap.add_argument("--n-runs", type=int, default=20)
-    ap.add_argument("--max-new-tokens", type=int, default=14,
-                    help="trajectory token sequence length")
+    ap.add_argument("--max-new-tokens", type=int, default=14)
     ap.add_argument("--out", required=True)
     ap.add_argument("--device", default="cuda:0")
-    ap.add_argument("--use-sample-input", action="store_true", default=True,
-                    help="construct a realistic 3-cam multimodal sample from val")
     args = ap.parse_args()
 
     from transformers import AutoModelForImageTextToText, AutoProcessor
@@ -73,95 +66,74 @@ def main():
     n_params = sum(p.numel() for p in model.parameters())
     print(f"[bench] loaded in {t_load:.1f}s; {n_params/1e9:.3f}B params")
 
-    # Build a representative input: simulate 3-cam × 4-frame video + HD-map image + bbox text
-    from multimodal_planning_dataset import MultiModalPlanningDataset
-    ds = MultiModalPlanningDataset(
-        infos_path=os.path.join(_BASE, "data/uniad_infos/nuscenes_infos_temporal_val.pkl"),
-        nusc_root=os.path.join(_BASE, "data/nuscenes"),
-        processor=processor,
-        max_length=12288, num_past_frames=4, num_future_waypoints=6,
-        video_fps=2.0, vla_loss_mode="answer_and_traj",
-        max_samples=5,
-        require_full_future=True,
-        planning_cams=["CAM_FRONT", "CAM_FRONT_LEFT", "CAM_FRONT_RIGHT"],
-        require_all_cams=True,
-        hdmap_dir=os.path.join(_BASE, "data/preproc/hdmap_bev"),
-        bbox_jsonl=os.path.join(_BASE, "data/preproc/bbox_egostate_val.jsonl"),
-        split="val", modality_dropout_p=0.0,
-    )
-    sample = ds[0]
-    input_ids = sample["input_ids"].unsqueeze(0).to(args.device)
-    attention_mask = sample["attention_mask"].unsqueeze(0).to(args.device)
-    pixel_values_videos = sample["pixel_values_videos"].to(args.device, dtype=torch.bfloat16)
-    video_grid_thw = sample["video_grid_thw"].to(args.device)
-    pixel_values = sample["pixel_values"].to(args.device, dtype=torch.bfloat16)
-    image_grid_thw = sample["image_grid_thw"].to(args.device)
-    # MultiModalPlanningDataset returns image_grid_thw shape=(3,) for single image;
-    # model.rot_pos_emb iterates assuming shape=(N, 3) → unsqueeze if 1-D.
-    if image_grid_thw.dim() == 1:
-        image_grid_thw = image_grid_thw.unsqueeze(0)
-    second_per_grid_ts = sample["second_per_grid_ts"].to(args.device, dtype=torch.float32)
-    # Truncate input_ids to remove trajectory tokens (we'll generate them)
-    prompt_len = int(sample["_meta_prompt_len"])
-    input_ids = input_ids[:, :prompt_len]
-    attention_mask = attention_mask[:, :prompt_len]
+    tokenizer = processor.tokenizer if hasattr(processor, "tokenizer") else processor
+    enc = tokenizer(PROMPT, return_tensors="pt")
+    input_ids = enc["input_ids"].to(args.device)
+    attention_mask = enc["attention_mask"].to(args.device)
+    prompt_len = input_ids.shape[1]
+    print(f"[bench] prompt_len={prompt_len}")
 
-    print(f"[bench] input_ids shape: {tuple(input_ids.shape)} (prompt_len={prompt_len})")
-    print(f"[bench] video pixel shape: {tuple(pixel_values_videos.shape)}")
+    # Use the LM submodule directly: text-only, no M-RoPE branch.
+    if hasattr(model, "language_model"):
+        lm = model.language_model
+    elif hasattr(model, "model") and hasattr(model.model, "language_model"):
+        lm = model.model.language_model
+    else:
+        lm = model
+    lm = lm.eval()
 
-    gen_kwargs = dict(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        pixel_values_videos=pixel_values_videos,
-        video_grid_thw=video_grid_thw,
-        pixel_values=pixel_values,
-        image_grid_thw=image_grid_thw,
-        second_per_grid_ts=second_per_grid_ts,
-        do_sample=False,
-    )
+    def prefill():
+        return lm(input_ids=input_ids, attention_mask=attention_mask, use_cache=True)
 
-    # Warmup
+    def run_full(max_new):
+        torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        out = prefill()
+        # last hidden -> logits
+        if hasattr(out, "logits") and out.logits is not None:
+            logits = out.logits[:, -1:, :]
+        else:
+            hidden = out.last_hidden_state[:, -1:, :]
+            logits = model.lm_head(hidden) if hasattr(model, "lm_head") else hidden
+        next_id = logits.argmax(dim=-1)
+        torch.cuda.synchronize()
+        ttft = time.perf_counter() - t0
+        pkv = out.past_key_values
+        am = attention_mask.clone()
+        for _ in range(max_new - 1):
+            am = torch.cat([am, torch.ones((1, 1), dtype=am.dtype, device=am.device)], dim=1)
+            out = lm(input_ids=next_id, attention_mask=am, past_key_values=pkv, use_cache=True)
+            if hasattr(out, "logits") and out.logits is not None:
+                logits = out.logits[:, -1:, :]
+            else:
+                hidden = out.last_hidden_state[:, -1:, :]
+                logits = model.lm_head(hidden) if hasattr(model, "lm_head") else hidden
+            next_id = logits.argmax(dim=-1)
+            pkv = out.past_key_values
+        torch.cuda.synchronize()
+        return ttft, time.perf_counter() - t0
+
     print(f"[bench] warmup {args.n_warmup} runs ...")
     with torch.no_grad():
         for _ in range(args.n_warmup):
-            _ = model.generate(**gen_kwargs, max_new_tokens=args.max_new_tokens)
-    torch.cuda.synchronize()
+            run_full(args.max_new_tokens)
 
-    # 1. prefill latency (forward only, no decode)
     prefill_times = []
     with torch.no_grad():
         for _ in range(args.n_runs):
             torch.cuda.synchronize()
             t = time.perf_counter()
-            _ = model(
-                input_ids=input_ids, attention_mask=attention_mask,
-                pixel_values_videos=pixel_values_videos, video_grid_thw=video_grid_thw,
-                pixel_values=pixel_values, image_grid_thw=image_grid_thw,
-                second_per_grid_ts=second_per_grid_ts,
-            )
+            _ = prefill()
             torch.cuda.synchronize()
             prefill_times.append(time.perf_counter() - t)
 
-    # 2. TTFT (generate 1 token)
-    ttft_times = []
+    ttft_times, full_times = [], []
     with torch.no_grad():
         for _ in range(args.n_runs):
-            torch.cuda.synchronize()
-            t = time.perf_counter()
-            _ = model.generate(**gen_kwargs, max_new_tokens=1)
-            torch.cuda.synchronize()
-            ttft_times.append(time.perf_counter() - t)
+            ttft, full = run_full(args.max_new_tokens)
+            ttft_times.append(ttft)
+            full_times.append(full)
 
-    # 3. Full trajectory generation (14 tokens)
-    full_times = []
-    with torch.no_grad():
-        for _ in range(args.n_runs):
-            torch.cuda.synchronize()
-            t = time.perf_counter()
-            out = model.generate(**gen_kwargs, max_new_tokens=args.max_new_tokens)
-            torch.cuda.synchronize()
-            full_times.append(time.perf_counter() - t)
-    # Per-token decode latency = (full - ttft) / (max_new_tokens - 1)
     per_tok_decode = [(f - t) / (args.max_new_tokens - 1) for f, t in zip(full_times, ttft_times)]
     throughput = [args.max_new_tokens / f for f in full_times]
 
@@ -170,10 +142,10 @@ def main():
         "device": torch.cuda.get_device_name(0),
         "device_cap": list(torch.cuda.get_device_capability(0)),
         "dtype": "bfloat16",
-        "backend": "HF transformers (no TRT engine)",
+        "backend": "HF transformers SDPA (LM forward, text-only — apples-to-apples vs TRT bench)",
         "params_B": n_params / 1e9,
-        "input_tokens": int(input_ids.shape[1]),
-        "video_tokens": int(pixel_values_videos.shape[0] // 4),  # post 2x2 merge
+        "prompt": PROMPT,
+        "prompt_tokens": int(prompt_len),
         "max_new_tokens": args.max_new_tokens,
         "n_warmup": args.n_warmup,
         "n_runs": args.n_runs,
@@ -212,7 +184,7 @@ def main():
     print(f"  prefill mean: {results['prefill_ms']['mean']:.1f} ms (p50 {results['prefill_ms']['p50']:.1f} / p99 {results['prefill_ms']['p99']:.1f})")
     print(f"  TTFT    mean: {results['TTFT_ms']['mean']:.1f} ms")
     print(f"  decode  mean: {results['per_token_decode_ms']['mean']:.2f} ms / token")
-    print(f"  full    mean: {results['full_traj_ms']['mean']:.1f} ms / 14 tokens")
+    print(f"  full    mean: {results['full_traj_ms']['mean']:.1f} ms / {args.max_new_tokens} tokens")
     print(f"  thrpt   mean: {results['throughput_toks_per_s']['mean']:.1f} tok/s")
 
 

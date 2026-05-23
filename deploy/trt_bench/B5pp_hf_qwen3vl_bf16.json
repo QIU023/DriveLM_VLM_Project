@@ -1,0 +1,41 @@
+{
+  "ckpt": "checkpoints_qwen25/nusc_planning_b5pp_1cam_qwen3vl_multimodal/final",
+  "device": "NVIDIA GeForce RTX 5090",
+  "device_cap": [
+    12,
+    0
+  ],
+  "dtype": "bfloat16",
+  "backend": "HF transformers SDPA (LM forward, text-only \u2014 apples-to-apples vs TRT bench)",
+  "params_B": 4.437815808,
+  "prompt": "You are a self-driving system. Given the current scene context, predict the next 6 ego waypoints as <traj_start> bin tokens. Current scene: straight road, 12 m/s, no obstacles. <traj_start>",
+  "prompt_tokens": 49,
+  "max_new_tokens": 14,
+  "n_warmup": 3,
+  "n_runs": 20,
+  "load_seconds": 2.7501938990317285,
+  "prefill_ms": {
+    "mean": 28.91450736206025,
+    "p50": 25.19472554558888,
+    "p99": 41.739822709932916
+  },
+  "TTFT_ms": {
+    "mean": 28.075949545018375,
+    "p50": 27.127856970764697,
+    "p99": 41.99509416008367
+  },
+  "per_token_decode_ms": {
+    "mean": 24.172981879942547,
+    "p50": 23.97336745903326,
+    "p99": 27.77972575671111
+  },
+  "full_traj_ms": {
+    "mean": 342.3247139842715,
+    "p50": 339.2944684601389,
+    "p99": 391.82693669339636
+  },
+  "throughput_toks_per_s": {
+    "mean": 40.96631808429641,
+    "p50": 41.262093341278955
+  }
+}
