@@ -33,11 +33,18 @@ export HF_HOME=${HF_HOME:-/workspace/hf_cache}
 export RAY_DEDUP_LOGS=0
 
 # ------- step 1: build parquet snapshots if missing -------
+# 12K train + 500 val subsample (vs full 24K/5K) — keeps build < 10 min and
+# parquet < 5 GB. 12K × 6 epoch = 2000-3000 step training range.
+TRAIN_SAMPLES=${TRAIN_SAMPLES:-12000}
+VAL_SAMPLES=${VAL_SAMPLES:-500}
+N_WORKERS=${BUILD_WORKERS:-8}
 for split in train val; do
   pq=$DATA_DIR/nusc_planning_${split}.parquet
+  max_samples=$([ "$split" = "train" ] && echo $TRAIN_SAMPLES || echo $VAL_SAMPLES)
   if [ ! -f "$pq" ]; then
-    echo "[launcher] building $pq ..."
+    echo "[launcher] building $pq ($max_samples samples, $N_WORKERS workers) ..."
     /usr/bin/python3 $GRPO_DIR/build_parquet.py --config $CFG --split $split \
+      --max-samples $max_samples --workers $N_WORKERS --max-edge 448 --jpeg-q 75 \
       2>&1 | tee -a "$LOG_DIR/build_parquet_${split}.log"
   fi
 done
@@ -50,12 +57,15 @@ done
 /usr/bin/python3 -m verl.trainer.main_ppo \
     --config-path=$GRPO_DIR/configs \
     --config-name=grpo_b5prime_3cam \
+    'hydra.searchpath=[file:///workspace/verl/verl/trainer/config]' \
     trainer.experiment_name=$RUN_NAME \
     trainer.default_local_dir=$SAVE_ROOT \
     trainer.save_freq=50 \
     trainer.test_freq=50 \
-    trainer.total_training_steps=500 \
-    trainer.max_actor_ckpt_to_keep=2 \
+    trainer.total_training_steps=${TOTAL_STEPS:-1500} \
+    trainer.max_actor_ckpt_to_keep=${KEEP_CKPTS:-1} \
+    actor_rollout_ref.actor.checkpoint.save_contents='[model]' \
+    actor_rollout_ref.actor.checkpoint.load_contents='[model]' \
   2>&1 | tee "$LOG_DIR/train.log" &
 TRAIN_PID=$!
 echo "TRAIN_PID=$TRAIN_PID  RUN_NAME=$RUN_NAME  SAVE_ROOT=$SAVE_ROOT" | tee "$LOG_DIR/run.meta"
