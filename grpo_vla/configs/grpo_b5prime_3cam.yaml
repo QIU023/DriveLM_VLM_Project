@@ -1,0 +1,152 @@
+# GRPO trainer override config — B.5' Qwen2.5-VL-3B 3cam (Hydra override on verl/trainer/config/ppo_trainer.yaml).
+#
+# Author:  Agent C   (overnight orchestration 2026-05-23 → 2026-05-24)
+# veRL:    v0.7.1 (commit bec9ef74768dd201881cd4e54cd0385e87caae27)
+# Source:  /workspace/DriveLM_VLM_Project/docs/f1_grpo_design.md §2.2
+#          plus reference example /workspace/verl/examples/grpo_trainer/run_qwen2_5_vl-7b-sglang.sh
+#
+# USAGE
+#   /usr/bin/python3 -m verl.trainer.main_ppo \
+#       --config-path=/workspace/DriveLM_VLM_Project/grpo_vla/configs \
+#       --config-name=grpo_b5prime_3cam \
+#       hydra.searchpath=[file:///workspace/verl/verl/trainer/config]
+#
+# AUDIT TABLE (paper-vs-ours, scaled per §2.2 of design doc, 11 rows)
+# --------------------------------------------------------------------------------
+# Param                | veRL 7B default | Ours 3B / 5090 | Reason
+# --------------------------------------------------------------------------------
+# MODEL_PATH           | Qwen/Qwen2.5-VL-7B-Instruct | B.5' SFT ckpt | RL on SFT init
+# TRAIN_BATCH_SIZE     | 512             | 24             | match our SFT GBS / compute cap
+# PPO_MINI_BATCH       | 128             | 8              | scale w/ batch
+# LR                   | 1e-6            | 1e-6           | unchanged (paper-aligned)
+# KL coef (β)          | 0.01            | 0.01           | unchanged
+# Rollout n            | 5               | 8              | DeepSeek-R1-Zero recipe (less var)
+# TP rollout           | 2               | 2              | option B layout
+# Strategy             | fsdp2           | fsdp           | torch 2.11 compat
+# Max prompt           | 1024            | 2400           | 4-frame video + HD map tokens
+# Max response         | 2048            | 50             | trajectory tokens only
+# Epochs               | 15              | 1              | 24K samples, single pass first
+# Save freq            | 20              | 20             | (per memory: ckpt_interval_half_hour
+#                                                          will reassess once step-time known)
+# Test freq            | 5               | 5              | unchanged
+# GPU mem util rollout | 0.6             | 0.5            | 32GB tighter
+# PPO max tok/GPU      | 24576           | 16384          | 32GB tighter
+# --------------------------------------------------------------------------------
+
+defaults:
+  - /ppo_trainer            # inherit upstream verl ppo_trainer.yaml
+  - _self_
+
+# --- algorithm (GRPO) ---
+algorithm:
+  adv_estimator: grpo
+  use_kl_in_reward: false   # KL is in actor loss instead (use_kl_loss=true)
+  norm_adv_by_std_in_grpo: true
+
+# --- data ---
+data:
+  # parquet built by /workspace/DriveLM_VLM_Project/grpo_vla/dataset_adapter.py
+  train_files: /workspace/DriveLM_VLM_Project/grpo_vla/data/nusc_planning_train.parquet
+  val_files:   /workspace/DriveLM_VLM_Project/grpo_vla/data/nusc_planning_val.parquet
+  train_batch_size: 24
+  max_prompt_length: 2400
+  max_response_length: 50
+  filter_overlong_prompts: true
+  truncation: error
+  image_key: images          # List[bytes] per row (3 cam frames + 1 HD-map BEV)
+  return_raw_chat: true
+
+  # --- dataset-builder side keys (consumed by build_verl_nuscenes_dataset
+  # and the e2e save-load smoke harness; veRL ignores extras). Mirror of
+  # configs/nuscenes_planning_b5_prime_3cam.yaml so we have a single source
+  # of truth at the GRPO config; if the SFT config drifts, regenerate parquet.
+  nusc_root: /workspace/DriveLM_VLM_Project/data/nuscenes
+  infos_train: /workspace/DriveLM_VLM_Project/data/uniad_infos/nuscenes_infos_temporal_train.pkl
+  infos_val:   /workspace/DriveLM_VLM_Project/data/uniad_infos/nuscenes_infos_temporal_val.pkl
+  hdmap_dir:   /workspace/DriveLM_VLM_Project/data/preproc/hdmap_bev
+  bbox_jsonl:  /workspace/DriveLM_VLM_Project/data/preproc/bbox_egostate_{split}.jsonl
+  planning_cams: ["CAM_FRONT", "CAM_FRONT_LEFT", "CAM_FRONT_RIGHT"]
+  planning_require_all_cams: true
+  planning_num_past_frames: 4
+  planning_num_future_wp: 6
+  planning_require_full_future: true
+  video_fps: 2.0
+  max_length: 2560
+  vla_loss_mode: answer_and_traj
+
+# --- actor / rollout / ref ---
+actor_rollout_ref:
+
+  hybrid_engine: true
+
+  model:
+    path: /workspace/DriveLM_VLM_Project/checkpoints_qwen25/nusc_planning_b5prime_3cam_multimodal/final
+    use_remove_padding: true
+    enable_gradient_checkpointing: true
+    trust_remote_code: true
+
+  actor:
+    strategy: fsdp           # fsdp (not fsdp2) until veRL+torch 2.11 path is verified
+    optim:
+      lr: 1.0e-6
+    ppo_mini_batch_size: 8
+    ppo_micro_batch_size_per_gpu: 1   # 32GB-safe; raise after first step-time pass
+    ppo_max_token_len_per_gpu: 16384
+    use_kl_loss: true
+    kl_loss_coef: 0.01
+    kl_loss_type: low_var_kl
+    entropy_coeff: 0.0
+    fsdp_config:
+      param_offload: false
+      optimizer_offload: false
+
+  rollout:
+    name: sglang             # ServerAdapter -> SGLangReplica (Ray-managed http server)
+    mode: async              # only async is registered for sglang in v0.7.1
+    tensor_model_parallel_size: 2
+    gpu_memory_utilization: 0.5
+    n: 8
+    enforce_eager: false
+    free_cache_engine: true
+    multi_stage_wake_up: true
+    enable_chunked_prefill: false
+    log_prob_micro_batch_size_per_gpu: 2
+    # NOTE on external SGLang server:
+    #   veRL v0.7.1 SGLangReplica spawns its own server (see
+    #   /workspace/verl/verl/workers/rollout/sglang_rollout/async_sglang_server.py:455).
+    #   Agent A's standalone server on http://localhost:30001 is NOT consumed by
+    #   verl directly — it is used (a) for the 1-step smoke (this PR) and
+    #   (b) for the reward-fn-side eval pipeline.
+    engine_kwargs:
+      sglang:
+        disable_radix_cache: false
+
+  ref:
+    log_prob_micro_batch_size_per_gpu: 2
+    fsdp_config:
+      param_offload: true
+
+# --- reward (callable resolved at runtime) ---
+reward:
+  # custom planning reward defined in grpo_vla/reward.py
+  reward_manager: naive
+  custom_reward_function:
+    path: /workspace/DriveLM_VLM_Project/grpo_vla/reward.py
+    name: planning_reward     # signature per f1_grpo_design.md §3.1
+
+# --- trainer ---
+trainer:
+  project_name: grpo_b5prime_3cam
+  experiment_name: b5prime_3cam_grpo_n8_lr1e6
+  logger: ["console"]
+  n_gpus_per_node: 8
+  nnodes: 1
+  total_epochs: 1
+  save_freq: 20
+  test_freq: 5
+  critic_warmup: 0
+  val_before_train: true
+  default_local_dir: /workspace/DriveLM_VLM_Project/checkpoints_qwen25/grpo_b5prime_3cam
+  max_actor_ckpt_to_keep: 2     # per memory: ckpt_interval_half_hour + post_train_cleanup
+  resume_mode: auto
+  device: cuda
