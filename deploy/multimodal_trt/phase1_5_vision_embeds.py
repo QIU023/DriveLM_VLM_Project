@@ -49,10 +49,10 @@ def assemble_mm_embedding(
                 pixel_values=pixel_values.to(device, dtype=dtype),
                 image_grid_thw=image_grid_thw.to(device),
             )
-            # pooler_output is a list-of-tensors (one per image), each (n_tokens, hidden)
+            # pooler_output is a tuple-of-tensors (one per image), each (n_tokens, hidden)
             po = out.pooler_output
-            if isinstance(po, list):
-                base = torch.cat(po, dim=0)
+            if isinstance(po, (list, tuple)):
+                base = torch.cat(list(po), dim=0)
             else:
                 base = po
             ds = out.deepstack_features  # list of n_deepstack tensors, each (n_tokens, hidden)
@@ -67,8 +67,8 @@ def assemble_mm_embedding(
                 video_grid_thw=video_grid_thw.to(device),
             )
             po = out.pooler_output
-            if isinstance(po, list):
-                base = torch.cat(po, dim=0)
+            if isinstance(po, (list, tuple)):
+                base = torch.cat(list(po), dim=0)
             else:
                 base = po
             ds = out.deepstack_features

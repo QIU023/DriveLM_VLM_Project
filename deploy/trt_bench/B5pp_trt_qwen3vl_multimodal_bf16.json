@@ -1,0 +1,38 @@
+{
+  "ckpt": "/workspace/DriveLM_VLM_Project/checkpoints_qwen25/nusc_planning_b5pp_1cam_qwen3vl_multimodal/final",
+  "backend": "TRT-LLM 1.3.0rc15 PyTorch backend + mm-disagg (HF vision pre-compute + injected handles)",
+  "model": "Qwen3-VL-4B B.5'' VLA",
+  "modality_real": "video(1cam x 4f) + image(HD-map BEV) + text(bbox/ego/prompt)",
+  "dtype": "bfloat16",
+  "video_mm_tokens": 36,
+  "image_mm_tokens": 121,
+  "embed_dim": 10240,
+  "prompt_len_expanded": 727,
+  "max_new_tokens": 14,
+  "n_warmup": 3,
+  "n_runs": 20,
+  "parity_gate": {
+    "hf_baseline_top1": 151934,
+    "trt_top1": 151934,
+    "passed": true
+  },
+  "TTFT_ms": {
+    "mean": 26.733225351199508,
+    "p50": 26.63152205059305,
+    "p99": 28.23380057583563
+  },
+  "per_token_decode_ms": {
+    "mean": 6.431416977340213,
+    "p50": 6.415459457247589,
+    "p99": 6.768344326768643
+  },
+  "full_traj_ms": {
+    "mean": 110.34164605662227,
+    "p50": 109.86807750305161,
+    "p99": 114.64341232087463
+  },
+  "throughput_toks_per_s": {
+    "mean": 126.89778475885498,
+    "p50": 127.42555010798172
+  }
+}
