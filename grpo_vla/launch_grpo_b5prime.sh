@@ -7,6 +7,11 @@
 set -euo pipefail
 set -x
 
+# 2026-05-24: disable core dumps — vastai_kaalia was saving 5-6 GB per crashed vLLM
+# worker to /var/lib/vastai_kaalia/data, filling disk in minutes during init failures.
+ulimit -c 0 || true
+echo "* soft core 0" > /tmp/_no_cores.conf 2>/dev/null || true
+
 GRPO_DIR=/workspace/DriveLM_VLM_Project/grpo_vla
 RUN_NAME=${RUN_NAME:-grpo_b5prime_3cam_$(date +%Y%m%d-%H%M%S)}
 SAVE_ROOT=/workspace/DriveLM_VLM_Project/checkpoints_qwen25/$RUN_NAME
@@ -43,7 +48,7 @@ for split in train val; do
   max_samples=$([ "$split" = "train" ] && echo $TRAIN_SAMPLES || echo $VAL_SAMPLES)
   if [ ! -f "$pq" ]; then
     echo "[launcher] building $pq ($max_samples samples, $N_WORKERS workers) ..."
-    /usr/bin/python3 $GRPO_DIR/build_parquet.py --config $CFG --split $split \
+    /venv/grpo_vla/bin/python $GRPO_DIR/build_parquet.py --config $CFG --split $split \
       --max-samples $max_samples --workers $N_WORKERS --max-edge 448 --jpeg-q 75 \
       2>&1 | tee -a "$LOG_DIR/build_parquet_${split}.log"
   fi
@@ -54,7 +59,7 @@ done
 #  - save_freq=50 / test_freq=50 (~30 min @ ~35s/step ; feedback_ckpt_interval_half_hour)
 #  - total_training_steps=500 (per task spec; ~0.5 epoch on 24K data)
 #  - max_actor_ckpt_to_keep=2 (feedback_post_train_cleanup_intermediates)
-/usr/bin/python3 -m verl.trainer.main_ppo \
+/venv/grpo_vla/bin/python -m verl.trainer.main_ppo \
     --config-path=$GRPO_DIR/configs \
     --config-name=grpo_b5prime_3cam \
     'hydra.searchpath=[file:///workspace/verl/verl/trainer/config]' \
@@ -78,7 +83,7 @@ echo "TRAIN_PID=$TRAIN_PID  RUN_NAME=$RUN_NAME  SAVE_ROOT=$SAVE_ROOT" | tee "$LO
     if [ -n "$latest" ]; then
       step=$(basename "$latest" | sed 's/global_step_//')
       if [ "$step" != "$last" ] && [ $((step % 50)) -eq 0 ]; then
-        /usr/bin/python3 $GRPO_DIR/eval_during_training.py \
+        /venv/grpo_vla/bin/python $GRPO_DIR/eval_during_training.py \
           --step "$step" --ckpt "$latest/actor" \
           --n-samples 200 --sglang-url http://localhost:30001 --config $CFG \
           >> "$LOG_DIR/eval.log" 2>&1 || echo "eval step=$step crashed" >> "$LOG_DIR/eval.log"

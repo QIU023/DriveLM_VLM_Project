@@ -35,12 +35,13 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _jpeg_bytes(img, max_edge: int = 448, q: int = 75) -> bytes:
-    """Resize keeping aspect ratio (max edge=max_edge) + JPEG encode."""
-    img = img.convert("RGB")
-    w, h = img.size
-    scale = max_edge / max(w, h) if max(w, h) > max_edge else 1.0
-    if scale < 1.0:
-        img = img.resize((int(w * scale), int(h * scale)))
+    """Force-resize to (max_edge × max_edge) square + JPEG encode.
+
+    2026-05-24: vLLM 0.12 Qwen2.5-VL image-token vs vision-feature off-by-one
+    when mixing image aspect ratios (cam 16:9 + HD-map 1:1) due to processor's
+    28-multiple rounding. Square images eliminate per-image grid_thw drift.
+    """
+    img = img.convert("RGB").resize((max_edge, max_edge))
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=q, optimize=False)
     return buf.getvalue()
@@ -95,16 +96,19 @@ def _process_one(i: int):
     images_payload: List[dict] = []
     image_marker_blocks: List[str] = []
 
-    # Flatten 3 cam clips → 12 frames as images, with per-frame label
+    # 2026-05-24: vLLM 0.12 multi-image off-by-one (tokens vs features count).
+    # Drop temporal context (3 historical frames): use ONLY CAM_FRONT t-0 (latest)
+    # + HD-map = 2 images total. bbox text + ego speed text fully preserved.
     cam_labels = ["FRONT", "FRONT_LEFT", "FRONT_RIGHT"]
     video_clips = mm.get("video") or []
-    for c_idx, clip in enumerate(video_clips):
-        label = cam_labels[c_idx] if c_idx < len(cam_labels) else f"CAM_{c_idx}"
-        for f_idx, frame in enumerate(clip):
-            images_payload.append({"bytes": _jpeg_bytes(frame, _MAX_EDGE, _JPEG_Q)})
-            image_marker_blocks.append(f"Camera {label} t-{len(clip)-1-f_idx}: <image>")
+    if video_clips:
+        # Take ONLY the last frame of the FIRST camera clip (CAM_FRONT current)
+        clip0 = video_clips[0]
+        last_frame = clip0[-1]
+        images_payload.append({"bytes": _jpeg_bytes(last_frame, _MAX_EDGE, _JPEG_Q)})
+        image_marker_blocks.append("Camera FRONT (current): <image>")
 
-    # HD-map image
+    # HD-map image (kept)
     for img in (mm.get("image") or []):
         images_payload.append({"bytes": _jpeg_bytes(img, _MAX_EDGE, _JPEG_Q)})
         image_marker_blocks.append("HD-map BEV: <image>")
