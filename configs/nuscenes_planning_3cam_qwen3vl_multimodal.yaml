@@ -1,0 +1,114 @@
+base_config: nuscenes_planning_full.yaml   # = R1' / A.0 baseline (1-cam × 4f, Linear)
+
+# ============================================================================
+# B.5''' — Qwen3-VL-4B backbone × 3-cam × multi-modal SFT
+# ============================================================================
+# Migration from B.5' (Qwen2.5-VL-3B 3-cam multimodal) to Qwen3-VL-4B for TRT
+# native deploy (TRT-LLM 1.3.0rc15 modeling_qwen3vl.py registers
+# Qwen3VLForConditionalGeneration; Qwen2.5-VL has no native modeling file per
+# NVIDIA issues #10069, #12824).
+#
+# Cross-product:
+#   B.5'  = Qwen2.5-VL-3B × 3-cam × {HD-map + bbox + ego}, L2 = 0.5557
+#   B.5'' = Qwen3-VL-4B   × 1-cam × {HD-map + bbox + ego}, L2 = 0.5557
+#   B.5''' (this)   = Qwen3-VL-4B × 3-cam × {HD-map + bbox + ego}
+#
+# Field-by-field 1:1 with B.5' EXCEPT model_id; everything else (modality
+# stack, max_length, LR schedule, GBS, AC, epochs, save cadence) identical.
+#
+# Token audit 2026-05-25 on Qwen3-VL-4B processor over full 28K train + 6K val:
+#   visual fixed = 3 × 2800 (per-cam @ patch=16 native 1600x900) + 64 (HD-map)
+#                = 8464 LM tokens
+#   total max = 9139 train / 9130 val (+~40 deepstack marker offset)
+#   over 12288: 0 / 34149 = 0.00%
+#   → max_length=12288 has 3109 token buffer (25.3%), well above silent-truncation risk
+#   Report: docs/B5ppp_token_audit.md
+#
+# vs B.5' Qwen2.5-VL token math (same audit script over same data):
+#   visual fixed = 3 × 3648 + 64 = 10976
+#   max = 11690 (4.8% headroom over 12288)
+#   B.5''' visual is -22% from patch=14→16, so max_length=12288 is more comfortable here.
+
+experiment: nusc_planning_b5ppp_3cam_qwen3vl_multimodal
+
+# ---- Backbone (the only deliberate change vs B.5') ------------------------
+# Switched to 2B 2026-05-25: Qwen3-VL-4B + native 3-cam OOM'd 5× on 32GB 5090
+# (hidden=2560 → +56% per-token activation vs Qwen2.5-VL-3B). 2B has hidden=2048
+# (same as Qwen2.5-VL-3B) + 28 layers (vs 36) → fits native at LBS=2 GA=2.
+# Trade: -50% params (2B vs 4B), should retain most multimodal capability.
+model_id: "Qwen/Qwen3-VL-2B-Instruct"
+dtype: bfloat16
+train_mode: full_sft
+
+# ---- Multi-modal dataset dispatch (same as B.5') -------------------------
+dataset_kind: nuscenes_planning_multimodal
+dataset_class: multimodal_planning_dataset.MultiModalPlanningDataset
+hdmap_dir: data/preproc/hdmap_bev
+bbox_jsonl: data/preproc/bbox_egostate_{split}.jsonl
+modality_dropout_p: 0.0
+
+# ---- 3-CAM (same as B.5') -------------------------------------------------
+planning_cams: ["CAM_FRONT", "CAM_FRONT_LEFT", "CAM_FRONT_RIGHT"]
+planning_require_all_cams: true
+
+# ---- Visual token budget --------------------------------------------------
+# CRITICAL 2026-05-25 retrain — apples-to-apples with B.5' effective resolution:
+#
+# B.5' (Qwen2.5-VL) had min/max_pixels=109760 applied to image_processor (HD-map),
+# but Qwen2.5-VL has no dedicated video_processor → train_lora.py's video-mode
+# mutation branch silently skipped → videos passed through at NATIVE 1600x900.
+#
+# Qwen3-VL has Qwen3VLVideoProcessor → the same mutation branch DOES fire →
+# v1 silently downscaled videos to thumbnails (when given image-cap values).
+#
+# Apples-to-apples mapping:
+# - min_pixels/max_pixels (109760) → applied to image_processor (HD-map): matches B.5'
+# - video_max_pixels NOT SET → train_lora.py skips video mutation; video_processor
+#   keeps HF default (size.longest_edge ≈ 25M total-clip-volume cap = native
+#   pass-through for 4-frame 1600×900). Equivalent to B.5' Qwen2.5-VL behavior.
+#   (DO NOT set video_max_pixels=1440000 — that's a TOTAL-CLIP cap which
+#   restricts T*H*W ≤ 1.44M; native T=2 1600×900 needs ≥ 2.88M → downscales.)
+#
+# Cross-check @ native video: video_grid_thw=[[2,56,100]] per cam
+#   = 2800 LM tok/cam × 3 = 8400; + HD-map (121) + text (~600) ≈ 9100 < 12288.
+max_length: 12288
+min_pixels: 109760           # HD-map cap (per B.5')
+max_pixels: 109760
+# NO video_max_pixels = HF default 25M cap = native 1600×900 video.
+# Qwen3-VL-2B at native: 3 cam × 2800 LM tok = 8400 video + 121 HD + ~700 text
+# ≈ 9221 total prompt. Same activation regime as B.5' Qwen2.5-VL-3B
+# (both hidden=2048), B.5' fit at LBS=2 GA=2 — this should too.
+# NO compress_method (we want clean baseline; compression sweep happens at
+# DEPLOY TIME via deploy/trt_b5ppp/bench_trt.py for true "train full, deploy
+# compressed" data — apples-to-apples with FasterVLM/PruMerge literature).
+
+# ---- AutoVLA-aligned hyperparams (same as B.5') --------------------------
+learning_rate: 2.0e-5
+lr_schedule: autovla_stepdecay
+warmup_steps: 39                 # 1.74% × ~2243 (R1'' value)
+lr_step_freq: 156                # 6.96% × ~2243 (R1'' value)
+lr_step_gamma: 0.98
+
+# ---- Throughput ----------------------------------------------------------
+# v2 2026-05-25 (native video): visual ~8400 + text ~700 = ~9100 prompt.
+# Qwen3-VL-4B params (+33% over Qwen2.5-VL-3B) + activation per token (hidden
+# 2560 vs 2048, +25%) → ~60% heavier than B.5' at same prompt size.
+# LBS=4 OOM (smoke v1), LBS=2 OOM (smoke v2). Drop to LBS=1 GA=4 (GBS=32 same).
+# ETA: step ~14-18s × 2242 = ~9-11h. Still overnight.
+batch_size: 1
+grad_accum_steps: 4   # MUST: GBS = LBS=1 × GA=4 × world=8 = 32 (paper AutoVLA)
+                      # 32GB 5090 phys max for Qwen3-VL-2B native 3-cam = LBS=1.
+                      # Cannot increase LBS (smoke @ LBS=2 OOM); must use GA for GBS=32.
+activation_checkpointing: true   # MANDATORY at max_length=12288 + 4B + LBS=4 on 32GB
+gradient_checkpointing: true
+num_epochs: 3                    # paper-aligned (AutoVLA 3-cam)
+planning_num_past_frames: 4
+
+# ---- Ckpt / val cadence --------------------------------------------------
+save_every: 50
+val_every: 50
+keep_latest_k: 2                 # safety: keep 2 latest in case one corrupt; per [[feedback_never_delete_sft_outputs]] never auto-delete final/ or any latest
+val_planning_l2: true
+val_full_eval: false
+val_greedy_max_new_tokens: 20
+full_l2_every: null              # final L2 via post-train standalone eval

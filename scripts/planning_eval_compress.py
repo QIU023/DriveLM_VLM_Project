@@ -41,6 +41,20 @@ Sweep these knobs (spatial in {none,fastervlm,prumerge,pyramiddrop,crp} x
 {2,4,8,16}, temporal in {none,temporal_pool,vtm,longvu} x {1,2,4}) to draw the
 Pareto frontier. Each run records the ACHIEVED token budget so points are
 comparable.
+
+QWEN3-VL DEEPSTACK COMPAT NOTE (2026-05-25):
+The install_compression_hook() monkey-patches `inner.get_video_features` and
+returns a `_FakeVisOut` whose `.pooler_output` is a list of (N_compressed, D)
+tensors. This API matches Qwen2.5-VL's vision path. Qwen3-VL adds a deepstack
+multi-layer return shape and the LM forward may consume MORE than just
+`.pooler_output` (e.g. the per-layer features for deepstack feature fusion).
+If you see runtime errors on a Qwen3-VL ckpt mentioning "deepstack" or
+"layer_features" — this hook needs to be extended to mirror the deepstack
+tuple. F8 smoke (2026-05-25) was BLOCKED by training-GPU contention so the
+Qwen3-VL deepstack path remains UNVALIDATED via this script. Recommend running
+the Qwen2.5-VL B.5 ckpt smoke (--ckpt checkpoints_qwen25/nusc_planning_b5_multimodal/final
+--spatial-method fastervlm --spatial-ratio 4 --max-samples 10) as soon as a
+GPU is free, before relying on this for Qwen3-VL.
 """
 from __future__ import annotations
 

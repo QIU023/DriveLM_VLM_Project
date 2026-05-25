@@ -47,10 +47,13 @@ planning_require_all_cams: true
 # + trajectory ~ 14
 # = ~3350-3600 LM tokens; max_length=6144 = ~70% headroom for chat-template
 # variance + system prompt growth on Qwen3-VL.
+# 2026-05-25 v2: max_length bumped to fit native 1-cam (was 6144, audit max
+# at native ≈ 3520, plenty of room — keep 6144 for safety buffer).
 max_length: 6144
-# Match B.5' production-validated pixel budget for consistent eval comparison.
-# Below native 1600*900=1.44M, so processor's auto-resize MAY downscale; smoke
-# step will verify actual emitted token count vs estimate.
+# HD-map cap = B.5'/B.5 109760 (Qwen2.5-VL videos ignored this — Qwen3-VL also
+# ignores when only ONE image present at this size). DO NOT set video_max_pixels
+# — let Qwen3VLVideoProcessor default ~25M cap give native 1600×900 pass-through.
+# Audit cross-check: 1 cam × 2800 + 121 HD + ~600 text = ~3521 total prompt.
 min_pixels: 109760
 max_pixels: 109760
 
@@ -67,8 +70,8 @@ lr_step_gamma: 0.98
 # 4B params vs 3B is +33% compute; 1-cam (vs 3-cam) is -66% video tokens.
 # Net per-step ≈ -50% vs B.5' -> ~5-7s/step. Total: 2625 * 6s = ~4.4h.
 batch_size: 2
-grad_accum_steps: 2
-activation_checkpointing: true   # 4B + multimodal on 32GB -> AC mandatory
+grad_accum_steps: 2   # FSDP2 + AC; LBS=2 × GA=2 × world=8 = GBS 32 paper (LBS=4 OOM'd)
+activation_checkpointing: true   # AC-off test showed identical 10.5GB peak + same step time → keep on for outlier safety
 gradient_checkpointing: true
 num_epochs: 3
 planning_num_past_frames: 4

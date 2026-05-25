@@ -732,6 +732,250 @@ def forward_with_video_xframe_compression(
     return outputs
 
 
+# --------------- Training-free video spatial compression (FasterVLM/PruMerge/etc) ---------------
+
+
+def forward_with_video_compression_free(
+    model,
+    batch,
+    video_token_id: int,
+    compress_method: str,
+    compress_ratio: int,
+    num_past_frames: int,
+    merge_size: int = 2,
+):
+    """Forward pass with TRAINING-FREE visual token compression on VIDEO tokens.
+
+    Mirrors ``forward_with_video_xframe_compression`` but:
+      * Replaces the trained ``compressor(frames)`` call with a per-video-block
+        invocation of ``compress_visual_tokens(embeds, grid, method, ratio)``
+        from ``visual_compress.py``. No learnable parameters.
+      * Supports multi-cam (e.g. 3-cam) layouts where each sample has multiple
+        contiguous ``<|video_pad|>`` runs (one per ``{"type":"video"}`` content
+        block). Uses ``planning_eval_compress._trim_video_pad_for_compression``
+        and ``_per_item_post_counts`` to walk per-block placeholder runs and
+        rebuild ``video_grid_thw`` row-by-row.
+
+    Designed for Qwen3-VL / Qwen2.5-VL training when the user wants
+    train-deploy parity with the inference-time FasterVLM hook used in
+    ``planning_eval_compress.py``.
+
+    Args:
+        model:            FSDP/LoRA-wrapped image-text-to-text model.
+        batch:            dict with ``input_ids``, ``attention_mask``,
+                          ``labels``, ``pixel_values_videos``, ``video_grid_thw``.
+        video_token_id:   ``<|video_pad|>`` token id (int).
+        compress_method:  one of ``avg_pool|fastervlm|prumerge|pyramiddrop|crp|crp_merge``.
+        compress_ratio:   integer compression ratio (e.g. 4 keeps 1/4 of tokens).
+        num_past_frames:  T_pre for video clip (informational; the trim uses
+                          per-row grid_thw, not this).
+        merge_size:       spatial merger factor (default 2 for Qwen2.5/3-VL).
+
+    Returns:
+        Model output (object with ``.loss`` and ``.logits``).
+    """
+    # No-op fast path: compression disabled.
+    if compress_method == "none" or compress_ratio <= 1 or "pixel_values_videos" not in batch:
+        # Strip meta keys / image_names so we can hand off cleanly.
+        clean = {k: v for k, v in batch.items() if k != "image_names"}
+        return model(**clean)
+
+    # Lazy imports — avoid circular import at module load and keep this
+    # function self-contained.
+    from visual_compress import compress_visual_tokens
+    from planning_eval_compress import (
+        _per_item_post_counts,
+        _trim_video_pad_for_compression,
+    )
+
+    # Strip non-tensor / non-model keys.
+    batch.pop("image_names", None)
+
+    base = get_base_model(model)
+    device = batch["input_ids"].device
+
+    pv = batch["pixel_values_videos"]
+    grid = batch["video_grid_thw"]  # (num_videos_total, 3); for 3-cam: B*3 rows
+    if grid.dim() == 1:
+        grid = grid.unsqueeze(0)
+
+    input_ids = batch["input_ids"]
+    attn_mask = batch["attention_mask"]
+    labels = batch["labels"]
+    B = input_ids.shape[0]
+
+    # 1. Per-video-block post-merger token count, then compute compressed target
+    # (round-down by ratio, min 1). For 3-cam: 3 entries per sample.
+    per_item_orig = _per_item_post_counts(grid, merge_size)
+    per_item_comp = [max(1, n // int(compress_ratio)) for n in per_item_orig]
+
+    # 2. Trim each contiguous <|video_pad|> run in input_ids down to its
+    # per-block compressed count, also fix attention_mask and rebuild
+    # video_grid_thw to (1, h*ms, w*ms) per row. We then re-trim labels
+    # using the same row-wise drop mask so loss alignment stays correct.
+    # NOTE: _trim_video_pad_for_compression left-pads with 0; for TRAINING we
+    # want RIGHT-pad (causal forward expects right-padding + -100 label pad).
+    # We re-implement the trim inline so we can right-pad and trim labels
+    # together with input_ids in lockstep.
+
+    num_items = int(grid.shape[0])
+    if num_items == 0:
+        return model(**{k: v for k, v in batch.items()})
+    items_per_sample = num_items // B
+    if items_per_sample * B != num_items:
+        raise RuntimeError(
+            f"video_grid_thw num_items={num_items} not divisible by batch B={B}"
+        )
+
+    new_ids_list, new_mask_list, new_lab_list = [], [], []
+    for b in range(B):
+        ids = input_ids[b]
+        msk = attn_mask[b]
+        lab = labels[b]
+        vid_pos = (ids == video_token_id).nonzero(as_tuple=True)[0]
+        if len(vid_pos) == 0:
+            new_ids_list.append(ids)
+            new_mask_list.append(msk)
+            new_lab_list.append(lab)
+            continue
+
+        # Split into contiguous runs (one per video block).
+        runs = []
+        cur = [int(vid_pos[0].item())]
+        for p in vid_pos[1:].tolist():
+            if p == cur[-1] + 1:
+                cur.append(p)
+            else:
+                runs.append(cur)
+                cur = [p]
+        runs.append(cur)
+        # 2026-05-25: Qwen3-VL chat template emits T_grid contiguous runs per
+        # video item (T_grid=2 for 4-frame clip @ temporal_patch=2), NOT one
+        # contiguous run per item. So 3-cam batch yields 6 runs per row even
+        # though video_grid_thw has 3 items. Use FLAT cumulative matching:
+        # the total video_pad count in this row must equal sum(per_item_orig
+        # for this sample), then we drop the trailing pad of each ITEM (not
+        # each run) by indexing into the flat sorted vid_pos.
+        sample_items_orig = per_item_orig[b * items_per_sample : (b + 1) * items_per_sample]
+        sample_items_comp = per_item_comp[b * items_per_sample : (b + 1) * items_per_sample]
+        expected_total = sum(sample_items_orig)
+        if len(vid_pos) != expected_total:
+            raise RuntimeError(
+                f"sample {b}: found {len(vid_pos)} <|video_pad|> tokens but "
+                f"video_grid_thw says {expected_total} (sum across {items_per_sample} items)"
+            )
+
+        # Walk flat vid_pos in order; drop the trailing (orig-comp) positions of each item.
+        drop_positions = []
+        flat_idx = 0
+        flat_pos_list = vid_pos.tolist()
+        for k, (orig_n, comp_n) in enumerate(zip(sample_items_orig, sample_items_comp)):
+            item_positions = flat_pos_list[flat_idx : flat_idx + orig_n]
+            if comp_n < orig_n:
+                drop_positions.extend(item_positions[comp_n:])
+            flat_idx += orig_n
+
+        if drop_positions:
+            keep = torch.ones(len(ids), dtype=torch.bool, device=device)
+            keep[torch.tensor(drop_positions, device=device)] = False
+            new_ids_list.append(ids[keep])
+            new_mask_list.append(msk[keep])
+            new_lab_list.append(lab[keep])
+        else:
+            new_ids_list.append(ids)
+            new_mask_list.append(msk)
+            new_lab_list.append(lab)
+
+    # Right-pad to common length (training convention).
+    max_len = max(t.shape[0] for t in new_ids_list)
+    for i in range(B):
+        pad = max_len - new_ids_list[i].shape[0]
+        if pad > 0:
+            new_ids_list[i] = torch.cat([
+                new_ids_list[i],
+                torch.zeros(pad, dtype=new_ids_list[i].dtype, device=device),
+            ])
+            new_mask_list[i] = torch.cat([
+                new_mask_list[i],
+                torch.zeros(pad, dtype=new_mask_list[i].dtype, device=device),
+            ])
+            new_lab_list[i] = torch.cat([
+                new_lab_list[i],
+                torch.full((pad,), -100, dtype=new_lab_list[i].dtype, device=device),
+            ])
+    new_input_ids = torch.stack(new_ids_list)
+    new_attn_mask = torch.stack(new_mask_list)
+    new_labels = torch.stack(new_lab_list)
+
+    # 3. Rebuild video_grid_thw row-by-row: (1, h*ms, w*ms) with h*w = comp_n.
+    new_rows = []
+    for k in range(num_items):
+        new_rows.append(list(_factor_grid_thw_for_count(per_item_comp[k], merge_size=merge_size)))
+    new_grid_thw = torch.tensor(new_rows, dtype=grid.dtype, device=device)
+
+    # 4. Monkey-patch inner.get_video_features so the model.forward call runs
+    # the (frozen) vision tower under no_grad and then applies the training-free
+    # compressor per-video-block. Pattern mirrors the xframe path exactly so
+    # FSDP-sharded vision params get summoned correctly at the model.forward
+    # entry.
+    inner = base.model  # Qwen2_5_VLModel / Qwen3VLModel
+    _orig_get_video_features = inner.get_video_features
+
+    class _FakeVisOut:
+        def __init__(self, t):
+            self.pooler_output = t
+
+    def _patched_get_video_features(_pv_arg, _grid_arg, **_kw):  # noqa: ARG001
+        # Use the ORIGINAL pixel_values_videos + grid (the model's forward
+        # passes new_grid_thw which we rebuilt; we need the raw grid for the
+        # vision tower).
+        with torch.no_grad():
+            real = _orig_get_video_features(pv, grid)
+            embeds = real.pooler_output
+        if not isinstance(embeds, (tuple, list)):
+            # Older transformers returned a single concatenated tensor; split
+            # by per-item original counts so we can compress each block.
+            embeds = torch.split(embeds, per_item_orig)
+
+        compressed_items = []
+        for i, e in enumerate(embeds):
+            e = e.detach()
+            n = int(per_item_orig[i])
+            if e.shape[0] != n:
+                raise RuntimeError(
+                    f"video block {i}: vision pooler_output {e.shape[0]} != "
+                    f"per_item_orig {n}"
+                )
+            # Build a single-image grid_thw (1, 1, n) for compress_visual_tokens
+            # (it expects a 2D (num_images, 3) tensor; we treat the block as
+            # one image-equivalent with t=1, h=1, w=n).
+            blk_grid = torch.tensor([[1, 1, n]], dtype=torch.long, device=e.device)
+            comp, _ = compress_visual_tokens(e, blk_grid, compress_method, int(compress_ratio))
+            target = int(per_item_comp[i])
+            # Guard against off-by-one from non-divisible factorizations.
+            if comp.shape[0] != target:
+                if comp.shape[0] > target:
+                    comp = comp[:target]
+                else:
+                    pad_t = comp.new_zeros((target - comp.shape[0], comp.shape[-1]))
+                    comp = torch.cat([comp, pad_t], dim=0)
+            compressed_items.append(comp)
+        return _FakeVisOut(compressed_items)
+
+    inner.get_video_features = _patched_get_video_features
+    try:
+        outputs = model(
+            input_ids=new_input_ids,
+            attention_mask=new_attn_mask,
+            labels=new_labels,
+            pixel_values_videos=pv,        # passed through; patch ignores it
+            video_grid_thw=new_grid_thw,
+        )
+    finally:
+        inner.get_video_features = _orig_get_video_features
+    return outputs
+
+
 _META_KEYS_FOR_FORWARD = (
     "_meta_waypoints", "_meta_valid_mask", "_meta_tokens",
     "_meta_prompt_lens", "_meta_action_lens",
@@ -1591,7 +1835,8 @@ def validate(model, val_loader, compress_method, compress_ratio, image_token_id,
              greedy_max_new_tokens: int = 20,
              qformer_projector=None,
              pixelshuffle_projector=None,
-             resampler_projector=None):
+             resampler_projector=None,
+             video_mode: bool = False):
     """Run validation for val_batches batches.
 
     Returns ``(val_loss, val_acc, l2_dict)``.
@@ -1677,6 +1922,13 @@ def validate(model, val_loader, compress_method, compress_ratio, image_token_id,
                 elif xframe_compressor is not None:
                     outputs = forward_with_video_xframe_compression(
                         model, fwd_batch, xframe_compressor, video_token_id, num_past_frames,
+                    )
+                elif (video_mode and compress_method != "none" and int(compress_ratio) > 1
+                      and "pixel_values_videos" in fwd_batch):
+                    outputs = forward_with_video_compression_free(
+                        model, fwd_batch, video_token_id,
+                        compress_method, int(compress_ratio),
+                        num_past_frames if num_past_frames is not None else 4,
                     )
                 else:
                     outputs = forward_with_compression(model, fwd_batch, compress_method, compress_ratio, image_token_id)
@@ -2197,10 +2449,12 @@ def main():
     data_path_vla = cfg.get("data_path_vla", None)
     fsdp_enabled = cfg.get("fsdp", False)  # informational; launching FSDP is done via torchrun + accelerate
     activation_checkpointing = cfg.get("activation_checkpointing", cfg.get("gradient_checkpointing", False))
-    # TODO(v2): visual token compression for video — needs a per-frame variant of
-    # forward_with_compression (currently compress_visual_tokens only handles image
-    # tokens via image_grid_thw). For Tier-1 we leave compress_method='none' in video
-    # configs and only exercise the data + forward path.
+    # Visual token compression for video: training-free spatial compression
+    # (FasterVLM/PruMerge/PyramidDrop/CRP/avg_pool) is now supported via
+    # forward_with_video_compression_free, which mirrors planning_eval_compress
+    # for train-deploy parity. Multi-cam (e.g. 3-cam) layouts handled.
+    # For trained cross-frame compressors (VTM/LongVU/temporal_pool) use the
+    # xframe_compressor path instead.
     lora_target_modules_vision = cfg.get("lora_target_modules_vision", []) or []
 
     # Compression & experiment settings
@@ -2265,22 +2519,61 @@ def main():
         # was saved during the original forward and recomputation` on backward.
         # Instead, leave AC off in the plugin and let HF's built-in
         # `model.gradient_checkpointing_enable()` (called below) do it.
-        fsdp_plugin = FullyShardedDataParallelPlugin(
-            sharding_strategy=ShardingStrategy.FULL_SHARD,
-            backward_prefetch=BackwardPrefetch.BACKWARD_PRE,
-            mixed_precision_policy=MixedPrecision(
-                param_dtype=torch.bfloat16,
-                reduce_dtype=torch.float32,
-                buffer_dtype=torch.bfloat16,
-            ),
-            transformer_cls_names_to_wrap=transformer_cls_names,
-            use_orig_params=True,
-            sync_module_states=True,
-            cpu_ram_efficient_loading=True,
-            forward_prefetch=False,
-            activation_checkpointing=False,  # see comment above
-            state_dict_type="SHARDED_STATE_DICT",
-        )
+        # 2026-05-25: CPU offload for 4B Qwen3-VL + native 9100-token activation
+        # on 32GB 5090. Without offload, peak fwd+bwd exceeds 32GB even at LBS=1.
+        # Tradeoff: ~30-50% slowdown but fits. Gated on env var so 3B / smaller-prompt
+        # runs don't pay the cost.
+        from torch.distributed.fsdp import CPUOffload
+        _cpu_offload_env = os.environ.get("FSDP_CPU_OFFLOAD", "0") == "1"
+        cpu_offload_cfg = CPUOffload(offload_params=True) if _cpu_offload_env else None
+        if _cpu_offload_env:
+            print(f"[FSDP] CPU offload params=True (env FSDP_CPU_OFFLOAD=1)")
+        # 2026-05-25: detect FSDP2 from accelerate yaml; if v2, use new-style
+        # args (reshard_after_forward etc) and skip FSDP1-only args.
+        import os as _os, yaml as _yaml
+        _ac_cfg_path = _os.environ.get("ACCELERATE_CONFIG_FILE", "accelerate_configs/fsdp_8gpu.yaml")
+        try:
+            _ac_cfg = _yaml.safe_load(open(_ac_cfg_path)) if _os.path.exists(_ac_cfg_path) else {}
+            _fsdp_v = int((_ac_cfg.get("fsdp_config") or {}).get("fsdp_version", 1))
+        except Exception:
+            _fsdp_v = 1
+        print(f"[FSDP] version={_fsdp_v}")
+        if _fsdp_v == 2:
+            from torch.distributed.fsdp import MixedPrecisionPolicy as _MPP2
+            # 2026-05-25: enable plugin-level AC (per-layer checkpointing wrap)
+            # to allow LBS≥2 at native res — activation savings ~5-10×.
+            # reduce_dtype=bf16 (was fp32) halves grad reduce comm/storage.
+            fsdp_plugin = FullyShardedDataParallelPlugin(
+                fsdp_version=2,
+                reshard_after_forward=True,
+                mixed_precision_policy=_MPP2(
+                    param_dtype=torch.bfloat16,
+                    reduce_dtype=torch.bfloat16,
+                ),
+                transformer_cls_names_to_wrap=transformer_cls_names,
+                cpu_ram_efficient_loading=True,
+                activation_checkpointing=True,  # plugin AC redundant w/ yaml AC, but harmless; keep for symmetry
+                state_dict_type="SHARDED_STATE_DICT",
+                cpu_offload=cpu_offload_cfg,
+            )
+        else:
+            fsdp_plugin = FullyShardedDataParallelPlugin(
+                sharding_strategy=ShardingStrategy.FULL_SHARD,
+                backward_prefetch=BackwardPrefetch.BACKWARD_PRE,
+                mixed_precision_policy=MixedPrecision(
+                    param_dtype=torch.bfloat16,
+                    reduce_dtype=torch.float32,
+                    buffer_dtype=torch.bfloat16,
+                ),
+                transformer_cls_names_to_wrap=transformer_cls_names,
+                use_orig_params=True,
+                sync_module_states=True,
+                cpu_ram_efficient_loading=True,
+                forward_prefetch=False,
+                activation_checkpointing=False,
+                state_dict_type="SHARDED_STATE_DICT",
+                cpu_offload=cpu_offload_cfg,
+            )
         accelerator = Accelerator(fsdp_plugin=fsdp_plugin,
                                   gradient_accumulation_steps=grad_accum,
                                   mixed_precision="bf16")
@@ -2401,22 +2694,37 @@ def main():
     if hasattr(processor, "image_processor") and processor.image_processor is not None:
         processor.image_processor.min_pixels = min_pixels
         processor.image_processor.max_pixels = max_pixels
-    # In video_mode, also push min/max pixels into the video processor — this caps
-    # PER-FRAME resolution (the size dict's shortest/longest_edge in pixels). When the
-    # YAML sets max_pixels = base_max // num_frames, the total visual token budget per
-    # clip stays close to the single-image budget.
-    if video_mode and hasattr(processor, "video_processor") and processor.video_processor is not None:
+    # PATCH 2026-05-25: video processor caps are now controlled by SEPARATE yaml
+    # knobs (video_min_pixels / video_max_pixels). Reason: Qwen2.5-VL had no
+    # dedicated video_processor (this branch silently skipped → videos passed
+    # native), but Qwen3-VL has Qwen3VLVideoProcessor (this branch fires → was
+    # downscaling videos to thumbnails using the image-cap values). Cross-backbone
+    # apples-to-apples requires distinct video knobs. If yaml omits them, we DO
+    # NOT touch the video processor (it stays at backbone default = native pass).
+    video_min_pixels_cfg = cfg.get("video_min_pixels", None)
+    video_max_pixels_cfg = cfg.get("video_max_pixels", None)
+    if (
+        video_mode
+        and hasattr(processor, "video_processor")
+        and processor.video_processor is not None
+        and video_max_pixels_cfg is not None
+    ):
         vp = processor.video_processor
-        # vp.size is a SizeDict dataclass (no __setitem__) — use setattr.
+        vmin = video_min_pixels_cfg if video_min_pixels_cfg is not None else getattr(vp.size, "shortest_edge", video_max_pixels_cfg)
+        vmax = video_max_pixels_cfg
         if hasattr(vp, "size") and vp.size is not None:
             if hasattr(vp.size, "shortest_edge"):
-                setattr(vp.size, "shortest_edge", min_pixels)
+                setattr(vp.size, "shortest_edge", vmin)
             if hasattr(vp.size, "longest_edge"):
-                setattr(vp.size, "longest_edge", max_pixels)
-        for attr, val in (("min_pixels", min_pixels), ("max_pixels", max_pixels)):
+                setattr(vp.size, "longest_edge", vmax)
+        for attr, val in (("min_pixels", vmin), ("max_pixels", vmax)):
             if hasattr(vp, attr):
                 setattr(vp, attr, val)
-        print(f"Video processor caps: min_pixels={min_pixels} max_pixels={max_pixels} (per frame); size={vp.size}")
+        print(f"Video processor caps: min_pixels={vmin} max_pixels={vmax} (per frame); size={vp.size}")
+    elif video_mode and hasattr(processor, "video_processor") and processor.video_processor is not None:
+        # Explicit no-op breadcrumb so log audit can see we deliberately skipped.
+        vp = processor.video_processor
+        print(f"Video processor UNCHANGED (no video_max_pixels in cfg); size={vp.size if hasattr(vp,'size') else 'n/a'}")
 
     # Prepare for training
     if quantize:
@@ -3196,6 +3504,16 @@ def main():
                             model, batch, xframe_compressor, video_token_id,
                             int(cfg.get("planning_num_past_frames", 4)),
                         )
+                    elif (video_mode and compress_method != "none" and int(compress_ratio) > 1
+                          and "pixel_values_videos" in batch):
+                        # Training-free spatial compression on VIDEO tokens
+                        # (FasterVLM/PruMerge/etc). Mirrors planning_eval_compress
+                        # so train/deploy use the same hook.
+                        outputs = forward_with_video_compression_free(
+                            model, batch, video_token_id,
+                            compress_method, int(compress_ratio),
+                            int(cfg.get("planning_num_past_frames", 4)),
+                        )
                     else:
                         outputs = forward_with_compression(
                             model, batch, compress_method, compress_ratio, image_token_id
@@ -3380,6 +3698,7 @@ def main():
                         qformer_projector=qformer_projector,
                         pixelshuffle_projector=pixelshuffle_projector,
                         resampler_projector=resampler_projector,
+                        video_mode=video_mode,
                     )
                     if accelerator.is_main_process:
                         base = f"  [VAL] step={global_step} val_loss={val_loss:.4f} val_acc={val_acc:.4f}"
