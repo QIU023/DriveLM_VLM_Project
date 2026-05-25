@@ -1,0 +1,261 @@
+# F8 — Qwen3-VL deepstack compatibility fix for scripts/planning_eval_compress.py
+#
+# DO NOT APPLY BLINDLY. This is the diagnosis + proposed patch for the overnight
+# orchestrator owner to review. The active SFT training must NOT be disturbed;
+# this file only touches scripts/planning_eval_compress.py (an eval helper, NOT
+# a training file).
+#
+# ============================================================================
+# ROOT CAUSE (transformers 5.6 / Qwen3-VL, file:line citations)
+# ============================================================================
+# transformers/models/qwen3_vl/modeling_qwen3_vl.py:
+#   * L1302-1306  Qwen3VLModel.forward calls get_video_features(...) and reads
+#                 BOTH `.pooler_output` AND `.deepstack_features` from the
+#                 returned object:
+#                     video_embeds          = video_outputs.pooler_output
+#                     deepstack_video_embeds = video_outputs.deepstack_features
+#   * L819-822    Qwen3VLVisionModel.forward returns
+#                 BaseModelOutputWithDeepstackFeatures(pooler_output=...,
+#                 deepstack_features=deepstack_feature_lists)  — a LIST of
+#                 len(deepstack_visual_indexes) tensors (==3 for 4B), each at the
+#                 SAME post-merge token resolution as pooler_output.
+#   * L1332-1335  video-only branch sets
+#                     deepstack_visual_embeds = deepstack_video_embeds
+#   * L1348-1356  these are forwarded into language_model(..., visual_pos_masks,
+#                 deepstack_visual_embeds=...) and consumed by
+#                 _deepstack_process (L941-951) which ADDS each deepstack tensor
+#                 into hidden_states at the visual_pos_masks positions. The row
+#                 count of every deepstack tensor MUST equal the (compressed)
+#                 video-token count or the masked add shape-mismatches.
+#
+# scripts/planning_eval_compress.py (the breakage):
+#   * L100-108  class _FakeVisOut exposes ONLY `.pooler_output`. It has NO
+#               `.deepstack_features` attribute.
+#   * L408      the monkey-patched get_video_features returns _FakeVisOut(...).
+#       => On a Qwen3-VL ckpt, modeling_qwen3_vl.py:L1306
+#          `video_outputs.deepstack_features` raises AttributeError immediately.
+#       Even if a `.deepstack_features` attr were bolted on naively (e.g. echo
+#       the raw pre-compression deepstack list), its rows (2880) would NOT match
+#       the compressed pooler rows (e.g. 720), so masked_scatter (L1311) /
+#       _deepstack_process (L941) would shape-mismatch. The deepstack tensors
+#       must be pruned with the SAME kept-index set as the pooler.
+#
+# The docstring at planning_eval_compress.py:L45-57 already FLAGS this as
+# UNVALIDATED for Qwen3-VL. This patch implements the alignment.
+#
+# ============================================================================
+# FIX STRATEGY
+# ============================================================================
+# 1. _compress_per_item must return the KEPT INDEX TENSOR (per video block), not
+#    just the compressed embeds, so the same indices can be applied to every
+#    deepstack level. (FasterVLM/PruMerge/PyramidDrop are all top-k-by-norm
+#    selections — a clean index subset exists; for PruMerge the merged residual
+#    is folded into kept rows, and we reuse the kept top-k index set for the
+#    deepstack levels, which is the alignment-preserving approximation.)
+# 2. The patched get_video_features must call the original get_video_features to
+#    obtain BOTH pooler_output AND deepstack_features, prune the pooler per
+#    block, then prune each deepstack tensor with the matching kept indices, and
+#    return a real BaseModelOutputWithDeepstackFeatures (or a _FakeVisOut that
+#    also carries `.deepstack_features`) so L1306 + _deepstack_process succeed.
+# 3. Guard for Qwen2.5-VL (no deepstack): if the vision output has no
+#    deepstack_features (or it is None/empty), fall back to the current
+#    pooler-only path so the script stays back-compatible.
+#
+# CPU DRY-TEST (mock tensors, run on /usr/bin/python3, NO GPU): for
+# N_in=2880 post-merge video tokens with 3 deepstack levels, the corrected
+# index-aligned pruning yields pooler_out == deep0 == deep1 == deep2 == target
+# for every ratio:
+#     ratio  target  pool_out  deep0  deep1  deep2  aligned
+#       2     1440     1440     1440   1440   1440    True
+#       4      720      720      720    720    720    True
+#       8      360      360      360    360    360    True
+#      16      180      180      180    180    180    True
+#   baseline (ratio=1): pooler 2880, 3 deepstack levels, no pruning.
+#
+# ============================================================================
+# UNIFIED DIFF (review, then apply with: git apply F8_planning_eval_compress.patch)
+# ============================================================================
+--- a/scripts/planning_eval_compress.py
++++ b/scripts/planning_eval_compress.py
+@@ -100,11 +100,18 @@ from visual_compress import compress_visual_tokens  # noqa: E402  (spatial axis)
+ class _FakeVisOut:
+     """Mimics the vision-feature return object the LM forward expects.
+
+-    The forward path does ``torch.cat(self.pooler_output, dim=0)``, so we
+-    return a list of compressed (Nq_i, D) tensors, one per video block.
++    The forward path does ``torch.cat(self.pooler_output, dim=0)`` AND (for
++    Qwen3-VL) reads ``self.deepstack_features`` — a list of per-level (Nrows, D)
++    tensors whose row count MUST equal the (compressed) pooler row count, see
++    modeling_qwen3_vl.py:L1306 + _deepstack_process L941. So we expose BOTH:
++    ``pooler_output`` = list of compressed (Nq_i, D) per video block, and
++    ``deepstack_features`` = list (one per deepstack level) of the same blocks'
++    deepstack rows pruned with the SAME kept indices. For Qwen2.5-VL (no
++    deepstack) we set ``deepstack_features=None`` and the LM forward ignores it.
+     """
+-    def __init__(self, t):
++    def __init__(self, t, deepstack_features=None):
+         self.pooler_output = t
++        self.deepstack_features = deepstack_features
+
+
+ class TokenBudgetMeter:
+@@ -273,9 +280,10 @@ def _trim_video_pad_for_compression(
+ def _compress_per_item(
+     embeds: torch.Tensor,
+     n_per_item: int,
+     spatial_method: str,
+     spatial_ratio: int,
+     temporal_compressor,
+     temporal_ratio: int,
+     T: int,
+-) -> torch.Tensor:
++):
+     """Apply spatial-then-temporal compression on ONE video block's tokens.
+
+     Input  : embeds of shape (n_per_item, D) = T * N_post_per_frame rows.
+-    Output : (n_compressed, D).
++    Output : (compressed (n_compressed, D), kept_index LongTensor or None).
++
++    ``kept_index`` is the per-row selection into the ORIGINAL n_per_item rows
++    when spatial pruning is a pure top-k subset (FasterVLM/PruMerge/PyramidDrop
++    keep a strict subset of rows). It is used to prune the deepstack levels in
++    lockstep. When a temporal compressor is also active (which re-bins rows and
++    therefore breaks a clean index map) we return None and the caller falls
++    back to re-deriving an index set from the compressed pooler magnitude.
+     """
+     if n_per_item % max(T, 1) != 0:
+         pass
+     N_per_frame = n_per_item // max(T, 1)
+     out = embeds  # (n_per_item, D)
++    kept_index = None
+
+     # ---- SPATIAL axis: prune each frame independently ----
+     if spatial_method and spatial_method != "none" and spatial_ratio > 1:
+         per_frame = out.view(T, N_per_frame, embeds.shape[-1])
+         kept = []
++        kept_idx_parts = []
+         for f in range(T):
+             grid = torch.tensor([[1, *_factor_hw(N_per_frame)]], device=embeds.device)
+-            comp, _ = compress_visual_tokens(
+-                per_frame[f], grid, spatial_method, spatial_ratio
+-            )
++            comp, _ = compress_visual_tokens(
++                per_frame[f], grid, spatial_method, spatial_ratio
++            )
++            # Re-derive the kept top-k indices (all three deployable methods are
++            # norm-top-k selections) so deepstack can be pruned identically.
++            k = max(1, N_per_frame // spatial_ratio)
++            _, idx_f = per_frame[f].norm(dim=-1).topk(k)
++            idx_f = idx_f.sort().values + f * N_per_frame  # offset into flat rows
++            kept_idx_parts.append(idx_f)
+             kept.append(comp)
+         out = torch.cat(kept, dim=0)
++        kept_index = torch.cat(kept_idx_parts, dim=0)
+         N_per_frame = out.shape[0] // T
+
+     # ---- TEMPORAL axis: collapse T frames into T/temporal_ratio groups ----
+     if temporal_compressor is not None and temporal_ratio > 1:
++        # Temporal re-binning destroys a clean per-row index map; signal the
++        # caller to fall back to magnitude re-selection on the deepstack rows.
++        kept_index = None
+         D = out.shape[-1]
+         full_groups = T // temporal_ratio
+         out_groups = []
+         for g in range(full_groups):
+             s = g * temporal_ratio
+             chunk = out.view(T, N_per_frame, D)[s:s + temporal_ratio]
+             comp = temporal_compressor(chunk.unsqueeze(0))
+             out_groups.append(comp.squeeze(0))
+         tail = T - full_groups * temporal_ratio
+         if tail > 0:
+             chunk = out.view(T, N_per_frame, D)[-tail:]
+             comp = temporal_compressor(chunk.unsqueeze(0))
+             out_groups.append(comp.squeeze(0))
+         out = torch.cat(out_groups, dim=0)
+
+-    return out
++    return out, kept_index
+@@ -361,21 +369,38 @@ def install_compression_hook(
+     def _patched(_pv_unused, _grid_unused, **_kw):
+         pv = state["orig_pv"]
+         grid = state["orig_grid"]
+         with torch.no_grad():
+             real = orig(pv, grid)
+             embeds = real.pooler_output  # tuple of (n_post_i, D) tensors
++            # Qwen3-VL returns a list of per-level deepstack feature maps at the
++            # SAME post-merge resolution as pooler_output. Qwen2.5-VL returns
++            # None/absent. (modeling_qwen3_vl.py:L819-822 / L1306)
++            ds_levels = getattr(real, "deepstack_features", None)
++            has_deepstack = isinstance(ds_levels, (list, tuple)) and len(ds_levels) > 0
++            # Each deepstack level is a single concatenated (sum_i n_post_i, D)
++            # tensor across blocks; split per block to match pooler split.
++            if has_deepstack:
++                ds_split = [list(torch.split(lvl, state["per_item_orig"])) for lvl in ds_levels]
+
+         if not isinstance(embeds, (tuple, list)):
+             embeds = torch.split(embeds, state["per_item_orig"])
+
+         per_item_orig = state["per_item_orig"]
+         per_item_comp = state["per_item_comp"]
+         T = state["T"]
+         compressed_items: List[torch.Tensor] = []
++        compressed_deepstack: List[List[torch.Tensor]] = (
++            [[] for _ in ds_levels] if has_deepstack else None
++        )
+         n_in = 0
+         n_out = 0
+         for i, e in enumerate(embeds):
+             e = e.detach()
+             n_in += e.shape[0]
+-            comp = _compress_per_item(
++            comp, kept_idx = _compress_per_item(
+                 e,
+                 n_per_item=per_item_orig[i],
+                 spatial_method=spatial_method,
+                 spatial_ratio=spatial_ratio,
+                 temporal_compressor=temporal,
+                 temporal_ratio=temporal_ratio,
+                 T=T,
+             )
+             target = per_item_comp[i]
+             if comp.shape[0] != target:
+                 if comp.shape[0] > target:
+                     comp = comp[:target]
+                 else:
+                     pad = target - comp.shape[0]
+                     pad_t = comp.new_zeros((pad, comp.shape[-1]))
+                     comp = torch.cat([comp, pad_t], dim=0)
+             compressed_items.append(comp)
+             n_out += comp.shape[0]
++            # ---- prune deepstack rows for THIS block with the SAME indices ----
++            if has_deepstack:
++                for lvl_i, lvl_blocks in enumerate(ds_split):
++                    d_block = lvl_blocks[i].detach()
++                    if kept_idx is not None and kept_idx.numel() >= 1:
++                        d_comp = d_block.index_select(0, kept_idx.to(d_block.device))
++                    else:
++                        # temporal path / fallback: top-k by row magnitude
++                        k = min(target, d_block.shape[0])
++                        _, di = d_block.norm(dim=-1).topk(k)
++                        d_comp = d_block.index_select(0, di.sort().values)
++                    # force exact target rows (pad/truncate like pooler above)
++                    if d_comp.shape[0] != target:
++                        if d_comp.shape[0] > target:
++                            d_comp = d_comp[:target]
++                        else:
++                            pad = target - d_comp.shape[0]
++                            d_comp = torch.cat(
++                                [d_comp, d_comp.new_zeros((pad, d_comp.shape[-1]))], dim=0)
++                    compressed_deepstack[lvl_i].append(d_comp)
+
+         meter.record(n_in, n_out)
+-        return _FakeVisOut(compressed_items)
++        if has_deepstack:
++            # Re-concat each level across blocks -> list[(sum_comp, D)] matching
++            # the LM forward's expectation (it cats pooler then masked_scatters,
++            # and _deepstack_process indexes by visual_pos_masks).
++            ds_out = [torch.cat(level_blocks, dim=0) for level_blocks in compressed_deepstack]
++            return _FakeVisOut(compressed_items, deepstack_features=ds_out)
++        return _FakeVisOut(compressed_items)
+
+     inner.get_video_features = _patched

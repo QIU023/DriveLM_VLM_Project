@@ -168,7 +168,17 @@ def build_calib_dataset(
     # block-count mismatch at runtime).
     cfg_max_pixels = cfg.get("max_pixels")
     if cfg_max_pixels is not None and hasattr(processor, "image_processor"):
-        actual_max_px = int(getattr(processor.image_processor, "max_pixels", 0))
+        # transformers 5.x: Qwen2VL/Qwen3VL image processors no longer expose a
+        # scalar `.max_pixels`; the cap lives in `.size` (a SizeDict, key
+        # `longest_edge`). Mirror the video branch below. Fall back to the old
+        # `.max_pixels` attr for pre-5.x compat.
+        ip = processor.image_processor
+        actual_max_px = int(getattr(ip, "max_pixels", 0) or 0)
+        if actual_max_px == 0:
+            try:
+                actual_max_px = int(ip.size.get("longest_edge"))
+            except Exception:
+                actual_max_px = int(getattr(getattr(ip, "size", None), "longest_edge", 0) or 0)
         assert actual_max_px == int(cfg_max_pixels), (
             f"[F2 GATE] processor.image_processor.max_pixels={actual_max_px} "
             f"!= cfg max_pixels={cfg_max_pixels}. The preprocessor_config in the "
