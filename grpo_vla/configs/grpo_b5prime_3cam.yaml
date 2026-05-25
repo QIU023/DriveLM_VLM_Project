@@ -83,7 +83,7 @@ actor_rollout_ref:
     path: /workspace/DriveLM_VLM_Project/checkpoints_qwen25/nusc_planning_b5prime_3cam_multimodal/final
     architectures: ['Qwen2_5_VLForConditionalGeneration']  # 2026-05-24: explicit (veRL __post_init__ pre-runs hf_config load)
     use_remove_padding: true
-    enable_gradient_checkpointing: true
+    enable_gradient_checkpointing: false   # 2026-05-24 21:50: OFF — measured peak 11.6/32GB at step 2, AC wastes fwd
     trust_remote_code: true
 
   actor:
@@ -91,15 +91,15 @@ actor_rollout_ref:
     optim:
       lr: 1.0e-6
     ppo_mini_batch_size: 8
-    ppo_micro_batch_size_per_gpu: 1   # 32GB-safe; raise after first step-time pass
+    ppo_micro_batch_size_per_gpu: 2   # 2026-05-24 21:50: 1 → 2 (room from 11.6GB measured)
     ppo_max_token_len_per_gpu: 16384
     use_kl_loss: true
     kl_loss_coef: 0.01
     kl_loss_type: low_var_kl
     entropy_coeff: 0.0
     fsdp_config:
-      param_offload: true       # 2026-05-24: enable to free GPU mem during vLLM rollout phase (CUDA invalidvalue from actor↔rollout GPU contention)
-      optimizer_offload: true
+      param_offload: false      # 2026-05-24 21:50: OFF — vLLM free_cache_engine + multi_stage_wake_up handle rollout↔actor mem swap
+      optimizer_offload: false  # 2026-05-24 21:50: OFF — Adam-on-CPU was costing ~15s/step
 
   rollout:
     name: vllm               # 2026-05-24: switched from sglang due to repeated fork-drift init bugs (CUDA invalidvalue in scheduler init); will revisit sglang post-overnight

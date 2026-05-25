@@ -6,11 +6,11 @@ last_step=-1
 last_heartbeat=$(date +%s)
 declare -A seen_lines
 while true; do
-  # Auto-clean any new vastai core dumps (each ~5G)
-  CORES=$(ls /var/lib/vastai_kaalia/data/core-VLLM::* 2>/dev/null | wc -l)
+  # Auto-clean any new vastai core dumps (each ~2-5G) — match ALL core-* patterns
+  CORES=$(ls /var/lib/vastai_kaalia/data/core-* 2>/dev/null | wc -l)
   if [ "$CORES" -gt 0 ]; then
-    rm -f /var/lib/vastai_kaalia/data/core-VLLM::* 2>&1
-    echo "AUTO-CLEAN: removed $CORES core dump(s)"
+    rm -f /var/lib/vastai_kaalia/data/core-* 2>&1
+    echo "AUTO-CLEAN: removed $CORES core dump(s) (VLLM/sglang/etc)"
   fi
   # disk
   FREE_G=$(df --output=avail -BG /workspace | tail -1 | tr -d 'G ')
