@@ -1,0 +1,10 @@
+{
+  "engine": "engines/vit_fp4/vit.engine",
+  "label": "fp4",
+  "rel_l2_vs_hf_fp32": 0.3203001916408539,
+  "trt_median_ms": 51.941633224487305,
+  "trt_mean_ms": 51.96091651916504,
+  "trt_min_ms": 51.337480545043945,
+  "hf_bf16_eager_median_ms": 99.98488426208496,
+  "speedup_vs_hf_bf16_eager": 1.9249468693053764
+}
