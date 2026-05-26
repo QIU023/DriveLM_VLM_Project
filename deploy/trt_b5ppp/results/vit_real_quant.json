@@ -1,0 +1,55 @@
+{
+  "ckpt": "/workspace/DriveLM_VLM_Project/checkpoints_qwen25/nusc_planning_b5pp_1cam_qwen3vl_multimodal/final",
+  "device": "NVIDIA GeForce RTX 5090",
+  "sm": [
+    12,
+    0
+  ],
+  "runs": {
+    "bf16": {
+      "precision": "bf16",
+      "path": "bf16 baseline (no quant)",
+      "mean_ms": 104.868,
+      "p50_ms": 105.213,
+      "all_ms": [
+        99.616,
+        99.643,
+        99.693,
+        99.978,
+        100.32,
+        105.213,
+        106.44,
+        108.686,
+        114.147,
+        114.946
+      ],
+      "out_shape": null,
+      "peak_gb": 8.872
+    },
+    "fp8": {
+      "precision": "fp8",
+      "path": "modelopt FP8_DEFAULT_CFG -> compress -> real GEMM",
+      "n_real_quant_linears": 104,
+      "n_fp8_weight_tensors": 104,
+      "real_quant_gemm_enabled": true,
+      "cfg": "FP8_DEFAULT_CFG",
+      "mean_ms": 138.429,
+      "p50_ms": 135.496,
+      "all_ms": [
+        129.038,
+        130.215,
+        130.916,
+        134.187,
+        134.226,
+        135.496,
+        136.653,
+        144.95,
+        149.207,
+        159.399
+      ],
+      "out_shape": null,
+      "peak_gb": 8.829,
+      "speedup_vs_bf16": 0.758
+    }
+  }
+}

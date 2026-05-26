@@ -1,0 +1,44 @@
+{
+  "device": "NVIDIA GeForce RTX 5090",
+  "sm": [
+    12,
+    0
+  ],
+  "input": {
+    "video_grid_thw": [
+      [
+        2,
+        56,
+        100
+      ]
+    ],
+    "pixel_values_videos": [
+      11200,
+      1536
+    ],
+    "post_merge_video_tokens": 2800
+  },
+  "attn_impl": "sdpa (bf16, untouched)",
+  "runs": {
+    "bf16": {
+      "mean_ms": 104.01,
+      "p50_ms": 102.13
+    },
+    "fp8_linear": {
+      "mean_ms": 95.84,
+      "p50_ms": 91.74,
+      "speedup": 1.085,
+      "n_linears": 104,
+      "raw_hidden_rel_L2": 0.1965,
+      "path": "manual static torch._scaled_mm, Linear-only, attn bf16"
+    },
+    "fp4_nvfp4_linear": {
+      "mean_ms": 76.29,
+      "p50_ms": 75.95,
+      "speedup": 1.363,
+      "n_linears": 104,
+      "raw_hidden_rel_L2": 0.398,
+      "path": "manual static trtllm fp4_quantize+nvfp4_gemm, Linear-only, attn bf16"
+    }
+  }
+}

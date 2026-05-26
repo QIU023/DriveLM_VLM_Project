@@ -1,0 +1,39 @@
+{
+  "ckpt": "/workspace/DriveLM_VLM_Project/checkpoints_qwen25/nusc_planning_b5pp_1cam_qwen3vl_multimodal/final",
+  "device": "NVIDIA GeForce RTX 5090",
+  "sm": [
+    12,
+    0
+  ],
+  "runs": {
+    "bf16": {
+      "precision": "bf16",
+      "path": "bf16 baseline (no quant)",
+      "mean_ms": 102.343,
+      "p50_ms": 100.922,
+      "all_ms": [
+        99.698,
+        99.732,
+        99.737,
+        99.745,
+        99.822,
+        100.922,
+        102.9,
+        104.521,
+        105.792,
+        110.559
+      ],
+      "out_shape": null,
+      "peak_gb": 8.872
+    },
+    "nvfp4": {
+      "precision": "nvfp4",
+      "path": "modelopt NVFP4_DEFAULT_CFG -> compress -> real GEMM",
+      "n_real_quant_linears": 104,
+      "n_fp8_weight_tensors": 0,
+      "real_quant_gemm_enabled": true,
+      "cfg": "NVFP4_DEFAULT_CFG",
+      "error": "mat2Scale dtype is Float8_e4m3fn, while Byte is expected"
+    }
+  }
+}
