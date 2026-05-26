@@ -44,7 +44,11 @@ results: `deploy/trt_b5ppp/results/vit_trt_{vit_bf16_vs_fp32,vit_fp16_vs_fp32,fp
 ## Status of the larger deploy chain
 - ViT engines (this doc): DONE bf16/fp16/fp8/fp4.
 - LM TRT engine (Qwen3-VL): quant_fp8/quant_nvfp4 ckpts exist.
-- **NEXT (#175):** UNIFIED end-to-end bench = TRT-ViT engine → FasterVLM (2800→700) → TRT-LLM Qwen3 →
-  full-trajectory decode, per precision (latency + planning L2). The prior `bench_full_pipeline` used
-  HF vision; must be rewired to the TRT ViT engine.
+- **#175 DONE:** UNIFIED end-to-end bench = TRT-ViT engine → FasterVLM (2800→700) → TRT-LLM Qwen3 →
+  full-trajectory decode, per precision (latency + planning L2 on 50 val samples). All 4 precisions
+  pass parity (first token = traj_start 151934) and run with the REAL TRT ViT engine + REAL TRT-LLM.
+  Results + deploy recommendation: **`docs/TRT_E2E_SUMMARY.md`**; per-row JSON
+  `deploy/trt_bench/B5pp_e2e_{bf16,fp16,fp8,fp4}_fastervlm4.json`; runner
+  `deploy/trt_b5ppp/bench_e2e_trt_vit.py`. Headline: full_traj ~243-254 ms (LM-bound; the real TRT ViT
+  is only 57-72 ms of it), L2 0.80-0.82 across all precisions; recommend fp16-ViT + bf16-LM.
 - **#174:** Qwen3 3-cam AutoVLA-res retrain (240 tok/cam, LBS=4/no-AC/no-offload).

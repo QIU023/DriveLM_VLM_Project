@@ -1,0 +1,105 @@
+{
+  "ckpt_lm": "/workspace/DriveLM_VLM_Project/checkpoints_qwen25/nusc_planning_b5pp_1cam_qwen3vl_multimodal/quant_nvfp4",
+  "ckpt_vision_hdmap": "/workspace/DriveLM_VLM_Project/checkpoints_qwen25/nusc_planning_b5pp_1cam_qwen3vl_multimodal/final",
+  "vit_engine": "/workspace/DriveLM_VLM_Project/deploy/trt_b5ppp/engines/vit_fp4/vit.engine",
+  "model": "Qwen3-VL-4B B.5'' 1-cam full-modal (video + HD-map + bbox + ego)",
+  "precision": "fp4",
+  "precision_pairing": {
+    "vit_engine": "vit_fp4",
+    "lm_ckpt": "quant_nvfp4"
+  },
+  "backend": "UNIFIED E2E: video[TRT ViT engine vit_fp4] + HD-map[HF bf16] -> fastervlmx4 -> LM[TRT-LLM 1.3.0rc15 fp4, embedding-injection] -> decode 14-tok trajectory",
+  "real_trt_vision": true,
+  "vision_note": "VIDEO (1-cam, grid [2,56,100], 11200 patches) runs through the REAL serialized TRT ViT engine (pooler [2800,2560] + 3 deepstack -> mm_embedding [2800,10240]). The HD-map IMAGE branch (grid [1,22,22], 484 patches -> 121 tokens) stays on the HF vision tower because the ViT engine has the video grid baked in as constants. image_vision_ms is the (tiny) HF HD-map cost; video_vision_ms is the real TRT engine latency.",
+  "parity": {
+    "first_token": 151934,
+    "traj_start_id": 151934,
+    "match": true
+  },
+  "stages": {
+    "video_vision": {
+      "runtime": "TRT engine (vit_fp4)",
+      "dtype": "fp4",
+      "real_engine": true,
+      "timed": true
+    },
+    "hdmap_vision": {
+      "runtime": "HF torch bf16",
+      "dtype": "bf16",
+      "timed": true
+    },
+    "compress": {
+      "runtime": "torch GPU",
+      "method": "fastervlm",
+      "ratio": 4,
+      "timed": true
+    },
+    "prefill": {
+      "runtime": "TRT-LLM",
+      "dtype": "fp4",
+      "quantized": true,
+      "timed": true
+    },
+    "decode": {
+      "runtime": "TRT-LLM",
+      "dtype": "fp4",
+      "quantized": true,
+      "timed": true
+    }
+  },
+  "compress_method": "fastervlm",
+  "compress_ratio": 4,
+  "visual_tokens_in": 2800,
+  "visual_tokens_out": 700,
+  "image_mm_tokens": 121,
+  "max_new_tokens": 14,
+  "n_warmup": 2,
+  "n_runs": 5,
+  "stage_ms": {
+    "video_vision_trt": {
+      "mean": 59.011225000722334,
+      "p50": 59.177125003770925
+    },
+    "hdmap_vision_hf": {
+      "mean": 16.87391440209467,
+      "p50": 15.647348001948558
+    },
+    "vision_total": {
+      "mean": 75.885139402817,
+      "p50": 75.08597000560258
+    },
+    "compress": {
+      "mean": 0.49744300195015967,
+      "p50": 0.48809500003699213
+    },
+    "prefill": {
+      "mean": 84.42059480003081,
+      "p50": 83.70546999503858
+    },
+    "decode_total": {
+      "mean": 81.9857074005995,
+      "per_token_mean": 6.306592876969192,
+      "note": "total decode time for 13 tokens"
+    }
+  },
+  "full_traj_ms": {
+    "mean": 242.78888460539747,
+    "p50": 240.45244201261085,
+    "p99": 251.66733765101526,
+    "note": "end-to-end = TRT-ViT(video) + HF(HD-map) + compress + LM(prefill+decode)"
+  },
+  "gpu_mem_gb": {
+    "bench_peak": 8.631405353546143,
+    "note": "peak across TRT ViT engine + HF HD-map vision tower + TRT LM engine resident together."
+  },
+  "l2_summary": {
+    "n_samples_evaluated": 50,
+    "n_failed": 0,
+    "first_errors": [],
+    "L2_avg_mean": 0.8077021961162488,
+    "L2_1s_mean": 0.2973670718073845,
+    "L2_2s_mean": 0.7516309262067079,
+    "L2_3s_mean": 1.374108590334654
+  },
+  "l2_note": "Planning L2 (TemAvg, metres) of the FULL e2e pipeline (TRT ViT fp4 video vision + HD-map HF + fastervlmx4 + fp4 LM) decoded trajectories vs nuScenes GT waypoints."
+}
