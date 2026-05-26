@@ -1,3 +1,5 @@
 warehouse/
 *.lance/
 vecdb/
+*.parquet
+out.parquet
