@@ -198,6 +198,24 @@ def _factor_grid_simple(target: int, ms: int = 2):
     return (1, h * ms, w * ms)
 
 
+def _find_pad_runs(input_ids_1d, pad_id):
+    """Return list of (start, end_exclusive) for each contiguous run of pad_id.
+    Qwen3-VL interleaves timestamp/text tokens between temporal video frames, so
+    a single camera's video appears as T separate <|video_pad|> runs."""
+    ids = input_ids_1d.tolist()
+    runs = []
+    i, n = 0, len(ids)
+    while i < n:
+        if ids[i] == pad_id:
+            j = i
+            while j < n and ids[j] == pad_id:
+                j += 1
+            runs.append((i, j)); i = j
+        else:
+            i += 1
+    return runs
+
+
 def _trim_video_pad_runs_1d(input_ids_1d, video_pad_id, per_block_target):
     """Trim each contiguous <|video_pad|> run in a 1-D input_ids tensor to
     its target count. Returns (new_input_ids_1d, new_prompt_len).
@@ -328,45 +346,45 @@ def build_trt_request_for_sample(*, sample, hf_model, processor, image_pad_id,
         # compressor expects. We rebuild a synthetic [T, H_post*ms, W_post*ms]
         # grid per video block using _factor_grid_simple so the compressor
         # internal reshape works on the n_post_per_block rows.
-        per_block_post = []
-        for r in vid_thw_local.tolist():
-            T, H, W = r
-            per_block_post.append(T * (H // ms) * (W // ms))
-        assert sum(per_block_post) == n_video, (
-            f"video_grid_thw post-merge sum {sum(per_block_post)} != "
-            f"n_video {n_video}; cannot map embed rows to blocks"
+        # Qwen3-VL interleaves timestamp/text tokens between temporal frames, so
+        # ONE camera's video spans T separate <|video_pad|> runs in the prompt
+        # (NOT 1 contiguous run per video_grid_thw row). Segment the embed +
+        # compress + trim PER RUN so the embed row count == prompt video_pad
+        # count exactly, and emit one grid row (T=1) per run so the post-merge
+        # sum still adds up. (Old per-grid-row logic assumed 1 run/cam and broke
+        # with "video_pad runs=2 but per_block_target has 1 entries".)
+        prompt_ids_1d = sample["input_ids"][:prompt_len]
+        runs = _find_pad_runs(prompt_ids_1d, video_pad_id)
+        run_lens = [e - s for (s, e) in runs]
+        assert sum(run_lens) == n_video, (
+            f"prompt video_pad total {sum(run_lens)} != n_video {n_video}; "
+            f"cannot map embed rows to runs"
         )
         offset = 0
         comp_chunks = []
-        per_block_comp = []
-        for n_post in per_block_post:
-            block_embed = video_embed[offset:offset + n_post]
-            offset += n_post
-            # compress_visual_tokens expects pre-merger grid_thw; feed
-            # (T, h_post*ms, w_post*ms) so total = T*h_post*w_post*ms*ms.
-            # But we already have POST-merger features — so set grid to
-            # [T=1, 1, n_post] (compressor only uses the t*h*w product).
-            grid_synth = torch.tensor([[1, 1, n_post]], device=block_embed.device,
+        per_run_comp = []
+        for rlen in run_lens:
+            seg = video_embed[offset:offset + rlen]
+            offset += rlen
+            # already POST-merger features → grid [1,1,rlen] (compressor only
+            # uses the t*h*w product to pick the keep count = rlen // ratio).
+            grid_synth = torch.tensor([[1, 1, rlen]], device=seg.device,
                                       dtype=torch.int64)
             comp, _ = compress_visual_tokens(
-                block_embed, grid_synth, compress_method, int(compress_ratio)
+                seg, grid_synth, compress_method, int(compress_ratio)
             )
             comp_chunks.append(comp.contiguous())
-            per_block_comp.append(int(comp.shape[0]))
+            per_run_comp.append(int(comp.shape[0]))
 
         video_embed = torch.cat(comp_chunks, dim=0).contiguous()
         n_video_out = int(video_embed.shape[0])
-        # Rebuild a video_grid_thw whose post-merger total equals the new count.
-        # We collapse each block onto (1, h*ms, w*ms) via _factor_grid_simple so
-        # phase2_mrope_config's per-block math still adds up.
-        new_video_rows = [list(_factor_grid_simple(c, ms)) for c in per_block_comp]
+        # One grid row per run (T=1), post-merge total = sum(per_run_comp).
+        new_video_rows = [list(_factor_grid_simple(c, ms)) for c in per_run_comp]
         new_video_thw = torch.tensor(new_video_rows, dtype=vid_thw.dtype,
                                      device=vid_thw.device)
-        # Trim the <|video_pad|> runs in input_ids so the prompt placeholder
-        # count matches the compressed embed row count per block.
-        prompt_ids_1d = sample["input_ids"][:prompt_len]
+        # Trim each <|video_pad|> run to its compressed count (runs now match).
         new_prompt_ids, new_prompt_len = _trim_video_pad_runs_1d(
-            prompt_ids_1d, video_pad_id, per_block_comp
+            prompt_ids_1d, video_pad_id, per_run_comp
         )
         # Splice the trimmed prompt back into a full input_ids vector
         # (preserves the post-prompt label region for safety).
@@ -435,8 +453,16 @@ def build_trt_request_for_sample(*, sample, hf_model, processor, image_pad_id,
             while k < len(orig_ids) and orig_ids[k] == image_pad_id: k += 1
         else:
             k += 1
-    mm_handles = [SharedTensorContainer.from_tensor(t).dump_to_dict()
-                  for t in mm_handles_tensors]
+    # NOTE: build the shared-tensor handles from CPU tensors, NOT CUDA. The
+    # CUDA path uses cudaIPC handles whose consumer-side restore calls
+    # pidfd_getfd, blocked by this container's seccomp ("Operation not
+    # permitted"). CPU tensors take SharedTensorContainer's cpu_handle_to_dict
+    # serialize path (no pidfd); TRT-LLM moves them back to GPU internally.
+    # CRITICAL: torch file_system sharing unlinks the /dev/shm segment when the
+    # producer storage is GC'd. The same `disagg` handles are reused across
+    # parity + warmup + timed runs, so we MUST keep the CPU tensors alive for
+    # the whole bench — collect them in `_keepalive` and return it to the caller.
+    _mm_cpu = [t.detach().cpu().contiguous() for t in mm_handles_tensors]
 
     # M-RoPE position ids (Phase 2)
     mrope_full = build_mrope_config(
@@ -451,18 +477,34 @@ def build_trt_request_for_sample(*, sample, hf_model, processor, image_pad_id,
         device, dtype=torch.int32).contiguous()
     mrope_deltas = mrope_full["mrope_position_deltas"].view(-1).to(
         device, dtype=torch.int32).contiguous()
-    mrope_pos_handle = SharedTensorContainer.from_tensor(mrope_pos_ids).dump_to_dict()
-    mrope_delta_handle = SharedTensorContainer.from_tensor(mrope_deltas).dump_to_dict()
+    _mpc = mrope_pos_ids.detach().cpu().contiguous()
+    _mdc = mrope_deltas.detach().cpu().contiguous()
 
-    disagg = DisaggregatedParams(
-        request_type="context_and_generation",
-        multimodal_embedding_handles=mm_handles,
-        mrope_position_ids_handle=mrope_pos_handle,
-        mrope_position_deltas_handle=mrope_delta_handle,
-    )
-    # Return: text prompt + disagg params + prompt_len + (visual tokens in / out)
-    # for compression bookkeeping. Pre-compression callers can ignore the extras.
-    return text_prompt, disagg, prompt_len, n_video_in, n_video_out
+    def make_disagg():
+        # FRESH shm per call. TRT-LLM mm-disagg shared-tensor handles are
+        # ONE-SHOT (consumer unlinks the /dev/shm segment after restore), so a
+        # reused handle dies on the 2nd+ generate ("No such file or directory").
+        # We use CPU handles (not CUDA) because this container's seccomp blocks
+        # pidfd_getfd. Clone the held CPU tensors to mint a fresh shm each call;
+        # return (disagg, clones-to-hold) — the caller MUST keep `clones` alive
+        # across the (blocking) generate so the shm isn't GC'd before the
+        # executor reads it.
+        clones = [c.clone() for c in _mm_cpu]
+        cpc = _mpc.clone(); cdc = _mdc.clone()
+        mm_h = [SharedTensorContainer.from_tensor(c).dump_to_dict() for c in clones]
+        ph = SharedTensorContainer.from_tensor(cpc).dump_to_dict()
+        dh = SharedTensorContainer.from_tensor(cdc).dump_to_dict()
+        d = DisaggregatedParams(
+            request_type="context_and_generation",
+            multimodal_embedding_handles=mm_h,
+            mrope_position_ids_handle=ph,
+            mrope_position_deltas_handle=dh,
+        )
+        return d, (clones + [cpc, cdc])
+
+    # Return a make_disagg() FACTORY (None for text-only) instead of a single
+    # reusable disagg — callers mint a fresh handle-set per generate.
+    return text_prompt, make_disagg, prompt_len, n_video_in, n_video_out
 
 
 # ---------------------------------------------------------------------------
@@ -543,7 +585,7 @@ def eval_l2(*, llm, hf_model, processor, image_pad_id, video_pad_id,
             print(f"[l2]   sample {i} build failed: {e}; skip")
             continue
         try:
-            text_prompt, disagg, _, _, _ = build_trt_request_for_sample(
+            text_prompt, make_disagg, _, _, _ = build_trt_request_for_sample(
                 sample=sample, hf_model=hf_model, processor=processor,
                 image_pad_id=image_pad_id, video_pad_id=video_pad_id,
                 device=device, dtype=dtype, mm_payload=mm_payload,
@@ -553,10 +595,12 @@ def eval_l2(*, llm, hf_model, processor, image_pad_id, video_pad_id,
             continue
 
         try:
-            if disagg is not None:
+            if make_disagg is not None:
+                disagg, _hold = make_disagg()  # fresh shm; _hold alive thru generate
                 out = llm.generate([{"prompt": text_prompt}],
                                    sampling_params=sp,
                                    disaggregated_params=disagg)
+                del _hold
             else:
                 out = llm.generate([{"prompt": text_prompt}],
                                    sampling_params=sp)
@@ -677,7 +721,7 @@ def main() -> int:
     # STEP 3: build TRT request (vision precompute + disagg params)
     # =====================================================================
     print(f"[bench] === STEP 3: build TRT request (mm-disagg pattern) ===")
-    text_prompt, disagg, eff_prompt_len, visual_tokens_in, visual_tokens_out = \
+    text_prompt, make_disagg, eff_prompt_len, visual_tokens_in, visual_tokens_out = \
         build_trt_request_for_sample(
             sample=sample, hf_model=hf_model, processor=processor,
             image_pad_id=image_pad_id, video_pad_id=video_pad_id,
@@ -686,7 +730,7 @@ def main() -> int:
             compress_ratio=int(args.compress_ratio),
         )
     print(f"[bench] text_prompt length (chars): {len(text_prompt)}")
-    print(f"[bench] disagg params: {'present' if disagg is not None else 'NONE (text-only)'}")
+    print(f"[bench] disagg params: {'present' if make_disagg is not None else 'NONE (text-only)'}")
     if args.compress_method != "none":
         print(f"[bench] compression: {args.compress_method} x{args.compress_ratio} "
               f"video tokens {visual_tokens_in} -> {visual_tokens_out}")
@@ -726,6 +770,18 @@ def main() -> int:
     trt_load_peak_gb = peak_mem_gb()
     print(f"[bench] TRT loaded in {trt_load_secs:.1f}s, peak GPU mem: {trt_load_peak_gb:.2f} GB")
 
+    # Single generate with a FRESH per-call disagg handle (mm-disagg shared
+    # tensors are one-shot; a reused handle dies on the 2nd+ call). For text-only
+    # (make_disagg is None) this is a plain generate.
+    def _gen(sp):
+        if make_disagg is not None:
+            d, _hold = make_disagg()
+            r = llm.generate([{"prompt": text_prompt}], sampling_params=sp,
+                             disaggregated_params=d)
+            del _hold
+            return r
+        return llm.generate([{"prompt": text_prompt}], sampling_params=sp)
+
     # =====================================================================
     # STEP 6: parity check (max_tokens=1)
     # =====================================================================
@@ -733,10 +789,7 @@ def main() -> int:
     if not args.skip_parity_gate:
         print(f"[bench] === STEP 6: TRT top-1 (max_tokens=1) ===")
         sp_one = SamplingParams(max_tokens=1, temperature=0.0)
-        out = llm.generate([{"prompt": text_prompt}],
-                           sampling_params=sp_one,
-                           disaggregated_params=disagg) if disagg is not None else \
-              llm.generate([{"prompt": text_prompt}], sampling_params=sp_one)
+        out = _gen(sp_one)
         trt_top1 = list(out[0].outputs[0].token_ids)[0] if out[0].outputs[0].token_ids else None
         passed = (trt_top1 in hf_top5_ids) if hf_top5_ids else False
         parity = {"checked": True, "hf_top5": hf_top5_ids, "trt_top1": trt_top1, "passed": bool(passed)}
@@ -752,10 +805,7 @@ def main() -> int:
     print(f"[bench] === STEP 7: warmup ({args.n_warmup} runs) ===")
     sp_full = SamplingParams(max_tokens=int(args.max_new_tokens), temperature=0.0)
     for _ in range(int(args.n_warmup)):
-        _ = (llm.generate([{"prompt": text_prompt}], sampling_params=sp_full,
-                          disaggregated_params=disagg)
-             if disagg is not None
-             else llm.generate([{"prompt": text_prompt}], sampling_params=sp_full))
+        _ = _gen(sp_full)
 
     # =====================================================================
     # STEP 8: bench TTFT (max_tokens=1) and full traj (max_tokens=N)
@@ -765,21 +815,25 @@ def main() -> int:
     reset_peak_mem()
     ttft = []
     for _ in range(int(args.n_runs)):
+        d_hold = make_disagg() if make_disagg is not None else None  # fresh handle OUTSIDE timer
         t = time.perf_counter()
         _ = (llm.generate([{"prompt": text_prompt}], sampling_params=sp_one,
-                          disaggregated_params=disagg)
-             if disagg is not None
+                          disaggregated_params=d_hold[0])
+             if d_hold is not None
              else llm.generate([{"prompt": text_prompt}], sampling_params=sp_one))
         ttft.append(time.perf_counter() - t)
+        del d_hold
 
     full = []
     for _ in range(int(args.n_runs)):
+        d_hold = make_disagg() if make_disagg is not None else None  # fresh handle OUTSIDE timer
         t = time.perf_counter()
         _ = (llm.generate([{"prompt": text_prompt}], sampling_params=sp_full,
-                          disaggregated_params=disagg)
-             if disagg is not None
+                          disaggregated_params=d_hold[0])
+             if d_hold is not None
              else llm.generate([{"prompt": text_prompt}], sampling_params=sp_full))
         full.append(time.perf_counter() - t)
+        del d_hold
     bench_peak_gb = peak_mem_gb()
 
     n_dec = max(1, int(args.max_new_tokens) - 1)

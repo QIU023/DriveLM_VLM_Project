@@ -202,7 +202,22 @@ def main() -> int:
     p.add_argument("--spatial-ratio", type=int, default=1)
     args = p.parse_args()
 
-    device = torch.device(args.device)
+    # DP: under torchrun each rank loads the ckpt + compression hook and runs its
+    # 1/world_size strided shard of val; rank 0 gathers per-sample metric lists
+    # via all_gather_object and writes the JSON. Mirrors planning_eval.py's proven
+    # DP harness (_setup_distributed + all_gather_object, ~25-30x).
+    import torch.distributed as dist
+    if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+        rank = int(os.environ["RANK"]); world_size = int(os.environ["WORLD_SIZE"])
+        local_rank = int(os.environ.get("LOCAL_RANK", rank % max(torch.cuda.device_count(), 1)))
+        if not dist.is_initialized():
+            dist.init_process_group(backend="nccl", init_method="env://")
+        torch.cuda.set_device(local_rank)
+        device = torch.device(f"cuda:{local_rank}")
+        is_dist = True
+    else:
+        rank, world_size, local_rank, is_dist = 0, 1, 0, False
+        device = torch.device(args.device)
     dtype = getattr(torch, args.dtype)
 
     model = AutoModelForImageTextToText.from_pretrained(
@@ -227,8 +242,11 @@ def main() -> int:
         modality_dropout_p=0.0,
     )
     n_total = len(ds)
-    print(f"[compress-mm] samples={n_total} method={args.spatial_method}x{args.spatial_ratio} "
-          f"(full-modal: HD-map+bbox+ego kept, video pruned)")
+    my_indices = list(range(rank, n_total, world_size))   # strided shard per rank
+    if rank == 0:
+        print(f"[compress-mm] samples={n_total} method={args.spatial_method}x{args.spatial_ratio} "
+              f"world={world_size} (~{len(my_indices)}/rank) "
+              f"(full-modal: HD-map+bbox+ego kept, video pruned)", flush=True)
 
     merge_size = int(getattr(model.config.vision_config, "spatial_merge_size", 2))
     video_token_id = processor.tokenizer.convert_tokens_to_ids("<|video_pad|>")
@@ -246,8 +264,8 @@ def main() -> int:
     bs = max(1, args.batch_size)
     try:
         with torch.inference_mode():
-            for bstart in range(0, n_total, bs):
-                batch_idx = list(range(bstart, min(bstart + bs, n_total)))
+            for bstart in range(0, len(my_indices), bs):
+                batch_idx = my_indices[bstart:bstart + bs]
                 inputs, infos, futures, samples = _build_batch_inputs(
                     ds, processor, args, batch_idx, planning_cams)
                 inputs = {k: (v.to(device) if isinstance(v, torch.Tensor) else v)
@@ -314,6 +332,39 @@ def main() -> int:
     finally:
         restore()
 
+    # ---- DP gather: merge each rank's per-sample metric lists + token counts.
+    payload = {"temavg": temavg, "noavg": noavg, "coll": coll,
+               "meter": meter.summary()}
+    if is_dist:
+        bucket = [None] * world_size
+        dist.all_gather_object(bucket, payload)
+    else:
+        bucket = [payload]
+    # concat the per-sample lists across ranks
+    def _merge_lists(key):
+        out = {}
+        for sub in bucket:
+            for k, v in sub[key].items():
+                out.setdefault(k, []).extend(v)
+        return out
+    temavg = _merge_lists("temavg"); noavg = _merge_lists("noavg"); coll = _merge_lists("coll")
+    # sum token-budget totals across ranks (per-sample ratio is rank-invariant)
+    meter_sum = {}
+    for sub in bucket:
+        for k, v in sub["meter"].items():
+            if isinstance(v, (int, float)):
+                meter_sum[k] = meter_sum.get(k, 0) + v
+            else:
+                meter_sum.setdefault(k, v)
+    # ratio is a per-sample invariant — recompute from summed totals, don't sum it
+    if meter_sum.get("visual_tokens_out"):
+        meter_sum["ratio"] = round(meter_sum["visual_tokens_in"] / meter_sum["visual_tokens_out"], 3)
+
+    if rank != 0:
+        if is_dist:
+            dist.barrier(); dist.destroy_process_group()
+        return 0
+
     def _mean(d):
         return {k: (float(np.mean(v)) if v else float("nan")) for k, v in d.items()}
 
@@ -323,10 +374,12 @@ def main() -> int:
         "method": args.spatial_method,
         "ratio": int(args.spatial_ratio),
         "compression": {"spatial_method": args.spatial_method,
-                        "spatial_ratio": int(args.spatial_ratio), **meter.summary()},
+                        "spatial_ratio": int(args.spatial_ratio), **meter_sum},
         "TemAvg": _mean(temavg),
         "NoAvg": _mean(noavg),
         "collision": _mean(coll),
+        "n_scored": len(temavg.get("L2_avg", [])),
+        "world_size": world_size,
         "eval_seconds": round(time.time() - t0, 1),
     }
     os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
@@ -334,7 +387,9 @@ def main() -> int:
         json.dump(result, f, indent=2)
     print(json.dumps(result["compression"], indent=2))
     print(f"TemAvg L2_avg={result['TemAvg']['L2_avg']}  collision_avg="
-          f"{result['collision']['collision_avg']}  -> {args.output}")
+          f"{result['collision']['collision_avg']}  n_scored={result['n_scored']}  -> {args.output}")
+    if is_dist:
+        dist.barrier(); dist.destroy_process_group()
     return 0
 
 
