@@ -802,21 +802,8 @@ def forward_with_video_compression_free(
     input_ids = batch["input_ids"]
     attn_mask = batch["attention_mask"]
     labels = batch["labels"]
+    mm_type = batch.get("mm_token_type_ids")
     B = input_ids.shape[0]
-
-    # 1. Per-video-block post-merger token count, then compute compressed target
-    # (round-down by ratio, min 1). For 3-cam: 3 entries per sample.
-    per_item_orig = _per_item_post_counts(grid, merge_size)
-    per_item_comp = [max(1, n // int(compress_ratio)) for n in per_item_orig]
-
-    # 2. Trim each contiguous <|video_pad|> run in input_ids down to its
-    # per-block compressed count, also fix attention_mask and rebuild
-    # video_grid_thw to (1, h*ms, w*ms) per row. We then re-trim labels
-    # using the same row-wise drop mask so loss alignment stays correct.
-    # NOTE: _trim_video_pad_for_compression left-pads with 0; for TRAINING we
-    # want RIGHT-pad (causal forward expects right-padding + -100 label pad).
-    # We re-implement the trim inline so we can right-pad and trim labels
-    # together with input_ids in lockstep.
 
     num_items = int(grid.shape[0])
     if num_items == 0:
@@ -827,64 +814,38 @@ def forward_with_video_compression_free(
             f"video_grid_thw num_items={num_items} not divisible by batch B={B}"
         )
 
-    new_ids_list, new_mask_list, new_lab_list = [], [], []
+    # Per-video-block post-merger token count, then compute compressed target
+    # (round-down by ratio, min 1). For 3-cam: 3 entries per sample.
+    per_item_orig = _per_item_post_counts(grid, merge_size)
+    per_item_comp = [max(1, n // int(compress_ratio)) for n in per_item_orig]
+
+    # 1-2. Trim each sample's <|video_pad|> run down to its per-block compressed
+    # count, in lockstep across input_ids / attention_mask / labels /
+    # mm_token_type_ids, via the SHARED native_cache_common layout helper (the
+    # cache producer + cached forward reuse the SAME helper so parity holds).
+    import os as _os, sys as _sys
+    _lance_dir = _os.path.join(
+        _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+        "data_infra", "lance",
+    )
+    if _lance_dir not in _sys.path:
+        _sys.path.insert(0, _lance_dir)
+    from native_cache_common import trim_native_layout  # noqa: E402
+
+    new_ids_list, new_mask_list, new_lab_list, new_mm_list = [], [], [], []
     for b in range(B):
-        ids = input_ids[b]
-        msk = attn_mask[b]
-        lab = labels[b]
-        vid_pos = (ids == video_token_id).nonzero(as_tuple=True)[0]
-        if len(vid_pos) == 0:
-            new_ids_list.append(ids)
-            new_mask_list.append(msk)
-            new_lab_list.append(lab)
-            continue
-
-        # Split into contiguous runs (one per video block).
-        runs = []
-        cur = [int(vid_pos[0].item())]
-        for p in vid_pos[1:].tolist():
-            if p == cur[-1] + 1:
-                cur.append(p)
-            else:
-                runs.append(cur)
-                cur = [p]
-        runs.append(cur)
-        # 2026-05-25: Qwen3-VL chat template emits T_grid contiguous runs per
-        # video item (T_grid=2 for 4-frame clip @ temporal_patch=2), NOT one
-        # contiguous run per item. So 3-cam batch yields 6 runs per row even
-        # though video_grid_thw has 3 items. Use FLAT cumulative matching:
-        # the total video_pad count in this row must equal sum(per_item_orig
-        # for this sample), then we drop the trailing pad of each ITEM (not
-        # each run) by indexing into the flat sorted vid_pos.
-        sample_items_orig = per_item_orig[b * items_per_sample : (b + 1) * items_per_sample]
-        sample_items_comp = per_item_comp[b * items_per_sample : (b + 1) * items_per_sample]
-        expected_total = sum(sample_items_orig)
-        if len(vid_pos) != expected_total:
-            raise RuntimeError(
-                f"sample {b}: found {len(vid_pos)} <|video_pad|> tokens but "
-                f"video_grid_thw says {expected_total} (sum across {items_per_sample} items)"
-            )
-
-        # Walk flat vid_pos in order; drop the trailing (orig-comp) positions of each item.
-        drop_positions = []
-        flat_idx = 0
-        flat_pos_list = vid_pos.tolist()
-        for k, (orig_n, comp_n) in enumerate(zip(sample_items_orig, sample_items_comp)):
-            item_positions = flat_pos_list[flat_idx : flat_idx + orig_n]
-            if comp_n < orig_n:
-                drop_positions.extend(item_positions[comp_n:])
-            flat_idx += orig_n
-
-        if drop_positions:
-            keep = torch.ones(len(ids), dtype=torch.bool, device=device)
-            keep[torch.tensor(drop_positions, device=device)] = False
-            new_ids_list.append(ids[keep])
-            new_mask_list.append(msk[keep])
-            new_lab_list.append(lab[keep])
-        else:
-            new_ids_list.append(ids)
-            new_mask_list.append(msk)
-            new_lab_list.append(lab)
+        gslice = grid[b * items_per_sample: (b + 1) * items_per_sample]
+        out = trim_native_layout(
+            input_ids[b], attn_mask[b], labels[b],
+            mm_type[b] if mm_type is not None else None,
+            gslice, video_token_id,
+            compress_ratio=int(compress_ratio), merge_size=merge_size,
+        )
+        new_ids_list.append(out["input_ids"])
+        new_mask_list.append(out["attention_mask"])
+        new_lab_list.append(out["labels"])
+        if mm_type is not None:
+            new_mm_list.append(out["mm_token_type_ids"])
 
     # Right-pad to common length (training convention).
     max_len = max(t.shape[0] for t in new_ids_list)
@@ -903,9 +864,15 @@ def forward_with_video_compression_free(
                 new_lab_list[i],
                 torch.full((pad,), -100, dtype=new_lab_list[i].dtype, device=device),
             ])
+            if mm_type is not None:
+                new_mm_list[i] = torch.cat([
+                    new_mm_list[i],
+                    torch.zeros(pad, dtype=new_mm_list[i].dtype, device=device),
+                ])
     new_input_ids = torch.stack(new_ids_list)
     new_attn_mask = torch.stack(new_mask_list)
     new_labels = torch.stack(new_lab_list)
+    new_mm = torch.stack(new_mm_list) if mm_type is not None else None
 
     # 3. Rebuild video_grid_thw row-by-row: (1, h*ms, w*ms) with h*w = comp_n.
     new_rows = []
@@ -913,66 +880,172 @@ def forward_with_video_compression_free(
         new_rows.append(list(_factor_grid_thw_for_count(per_item_comp[k], merge_size=merge_size)))
     new_grid_thw = torch.tensor(new_rows, dtype=grid.dtype, device=device)
 
-    # 4. Monkey-patch inner.get_video_features so the model.forward call runs
-    # the (frozen) vision tower under no_grad and then applies the training-free
-    # compressor per-video-block. Pattern mirrors the xframe path exactly so
-    # FSDP-sharded vision params get summoned correctly at the model.forward
-    # entry.
+    # 4. Monkey-patch inner.get_video_features so the model.forward call runs the
+    # (frozen) vision tower under no_grad and applies the training-free FasterVLM
+    # compressor per-video-block. Qwen3-VL ALSO returns deepstack_features (a
+    # list of per-layer (sum_n_orig, D) tensors injected at deep decoder layers);
+    # we compress those with the SAME FasterVLM selection indices so they stay
+    # aligned with the surviving video-pad positions. The HD-map image branch
+    # (get_image_features) is left native — its pooler + deepstack pass through
+    # un-compressed. mm_token_type_ids is trimmed in lockstep and passed so
+    # Qwen3-VL M-RoPE computes correctly.
+    from native_cache_common import compress_video_features  # noqa: E402
+
     inner = base.model  # Qwen2_5_VLModel / Qwen3VLModel
     _orig_get_video_features = inner.get_video_features
 
     class _FakeVisOut:
-        def __init__(self, t):
-            self.pooler_output = t
+        def __init__(self, pooler, deepstack):
+            self.pooler_output = pooler          # list of (comp_i, D) per cam
+            self.deepstack_features = deepstack  # list of (sum comp, D) per layer
 
     def _patched_get_video_features(_pv_arg, _grid_arg, **_kw):  # noqa: ARG001
-        # Use the ORIGINAL pixel_values_videos + grid (the model's forward
-        # passes new_grid_thw which we rebuilt; we need the raw grid for the
-        # vision tower).
         with torch.no_grad():
             real = _orig_get_video_features(pv, grid)
-            embeds = real.pooler_output
-        if not isinstance(embeds, (tuple, list)):
-            # Older transformers returned a single concatenated tensor; split
-            # by per-item original counts so we can compress each block.
-            embeds = torch.split(embeds, per_item_orig)
-
-        compressed_items = []
-        for i, e in enumerate(embeds):
-            e = e.detach()
-            n = int(per_item_orig[i])
-            if e.shape[0] != n:
-                raise RuntimeError(
-                    f"video block {i}: vision pooler_output {e.shape[0]} != "
-                    f"per_item_orig {n}"
-                )
-            # Build a single-image grid_thw (1, 1, n) for compress_visual_tokens
-            # (it expects a 2D (num_images, 3) tensor; we treat the block as
-            # one image-equivalent with t=1, h=1, w=n).
-            blk_grid = torch.tensor([[1, 1, n]], dtype=torch.long, device=e.device)
-            comp, _ = compress_visual_tokens(e, blk_grid, compress_method, int(compress_ratio))
-            target = int(per_item_comp[i])
-            # Guard against off-by-one from non-divisible factorizations.
-            if comp.shape[0] != target:
-                if comp.shape[0] > target:
-                    comp = comp[:target]
-                else:
-                    pad_t = comp.new_zeros((target - comp.shape[0], comp.shape[-1]))
-                    comp = torch.cat([comp, pad_t], dim=0)
-            compressed_items.append(comp)
-        return _FakeVisOut(compressed_items)
+            pooler = real.pooler_output
+            deepstack = list(getattr(real, "deepstack_features", []) or [])
+        if not isinstance(pooler, (tuple, list)):
+            pooler = list(torch.split(pooler, per_item_orig))
+        comp_pooler, comp_deepstack = compress_video_features(
+            list(pooler), deepstack, per_item_orig, per_item_comp, int(compress_ratio),
+        )
+        # Return pooler as a list of per-cam blocks (model concatenates them);
+        # split comp_pooler back by per_item_comp.
+        split = list(torch.split(comp_pooler, [int(c) for c in per_item_comp]))
+        return _FakeVisOut(split, comp_deepstack)
 
     inner.get_video_features = _patched_get_video_features
+    fwd_kwargs = dict(
+        input_ids=new_input_ids,
+        attention_mask=new_attn_mask,
+        labels=new_labels,
+        pixel_values_videos=pv,        # passed through; patch ignores it
+        video_grid_thw=new_grid_thw,
+    )
+    if new_mm is not None:
+        fwd_kwargs["mm_token_type_ids"] = new_mm
+    # Pass the HD-map image branch through verbatim (native, un-compressed) so
+    # its vision features + deepstack are present for the LM (and for parity the
+    # cached path caches exactly these image features).
+    if "pixel_values" in batch and "image_grid_thw" in batch:
+        fwd_kwargs["pixel_values"] = batch["pixel_values"]
+        fwd_kwargs["image_grid_thw"] = batch["image_grid_thw"]
+    # Run the (frozen) ViT under no_grad even for the image branch.
+    _orig_get_image_features = inner.get_image_features
+
+    def _patched_get_image_features(_pvi, _ig, **_kw):  # noqa: ARG001
+        with torch.no_grad():
+            return _orig_get_image_features(_pvi, _ig, **_kw)
+
+    inner.get_image_features = _patched_get_image_features
     try:
-        outputs = model(
-            input_ids=new_input_ids,
-            attention_mask=new_attn_mask,
-            labels=new_labels,
-            pixel_values_videos=pv,        # passed through; patch ignores it
-            video_grid_thw=new_grid_thw,
-        )
+        outputs = model(**fwd_kwargs)
     finally:
         inner.get_video_features = _orig_get_video_features
+        inner.get_image_features = _orig_get_image_features
+    return outputs
+
+
+# --------------- Tier-2 cached frozen-ViT vision tokens (NATIVE 3-cam) ---------------
+
+
+def forward_with_cached_vision_tokens(model, batch, video_token_id, image_token_id):
+    """Forward using PRE-CACHED frozen-ViT vision tokens (Tier-2). The ViT never
+    runs — instead we read int8-dequantized compressed video tokens + native
+    image tokens (and their deepstack features) that were produced offline by
+    ``data_infra/lance/cache_3cam_native.py`` with the SAME FasterVLM x4 trim as
+    the live ``forward_with_video_compression_free``.
+
+    The cached collate yields, per batch:
+        input_ids / attention_mask / labels / mm_token_type_ids   (already TRIMMED)
+        video_grid_thw / image_grid_thw                            (rebuilt)
+        cached_video_pooler   (B, 2100, D)   dequantized compressed video tokens
+        cached_video_deepstack(B, L, 2100, D)
+        cached_image_pooler   (B, 121, D)
+        cached_image_deepstack(B, L, 121, D)
+
+    We monkey-patch ``get_video_features`` / ``get_image_features`` to RETURN the
+    cached features (no ViT, no FasterVLM), then call ``model(...)`` through the
+    normal multimodal path so the scatter into ``inputs_embeds`` AND the deepstack
+    injection at deep decoder layers are byte-identical to the live path. A dummy
+    1-patch ``pixel_values_*`` tensor is passed only so the model takes the
+    "has visual" branch; the patch ignores it (the ViT is never invoked).
+    """
+    base = get_base_model(model)
+    inner = base.model
+    device = batch["input_ids"].device
+
+    input_ids = batch["input_ids"]
+    attn = batch["attention_mask"]
+    labels = batch["labels"]
+    mm_type = batch.get("mm_token_type_ids")
+    vgrid = batch["video_grid_thw"]
+    igrid = batch.get("image_grid_thw")
+    B = input_ids.shape[0]
+
+    embed_dtype = inner.get_input_embeddings().weight.dtype
+    v_pool = batch["cached_video_pooler"].to(device, embed_dtype)        # (B, Nv, D)
+    v_deep = batch["cached_video_deepstack"].to(device, embed_dtype)     # (B, L, Nv, D)
+    has_img = "cached_image_pooler" in batch and igrid is not None
+    if has_img:
+        i_pool = batch["cached_image_pooler"].to(device, embed_dtype)    # (B, Ni, D)
+        i_deep = batch["cached_image_deepstack"].to(device, embed_dtype) # (B, L, Ni, D)
+
+    # The model concatenates per-(item) pooler blocks across the batch in row
+    # order, and concatenates deepstack across all visual items into one (Nvis,)
+    # axis. We flatten the batch dim here so the returned features match the
+    # model's expected concat ordering (row 0 then row 1 ...).
+    items_per_sample = int(vgrid.shape[0]) // B
+
+    def _flatten_pooler(x):  # (B, N, D) -> list of per-row (N, D)
+        return [x[b] for b in range(B)]
+
+    def _flatten_deepstack(x):  # (B, L, N, D) -> list over L of (B*N, D)
+        L = x.shape[1]
+        return [torch.cat([x[b, l] for b in range(B)], dim=0) for l in range(L)]
+
+    class _FakeVisOut:
+        def __init__(self, pooler, deepstack):
+            self.pooler_output = pooler
+            self.deepstack_features = deepstack
+
+    def _patched_video(_pv, _g, **_kw):  # noqa: ARG001
+        # Split each row's pooler back into per-cam blocks so the model's
+        # torch.cat(pooler_output) reproduces the same flat order.
+        per_blocks = []
+        Nv = v_pool.shape[1]
+        per = Nv // items_per_sample
+        for b in range(B):
+            for k in range(items_per_sample):
+                per_blocks.append(v_pool[b, k * per:(k + 1) * per])
+        return _FakeVisOut(per_blocks, _flatten_deepstack(v_deep))
+
+    def _patched_image(_pvi, _ig, **_kw):  # noqa: ARG001
+        return _FakeVisOut(_flatten_pooler(i_pool), _flatten_deepstack(i_deep))
+
+    _ov, _oi = inner.get_video_features, inner.get_image_features
+    inner.get_video_features = _patched_video
+    if has_img:
+        inner.get_image_features = _patched_image
+
+    dummy_v = v_pool.new_zeros((1, 1))
+    fwd = dict(
+        input_ids=input_ids,
+        attention_mask=attn,
+        labels=labels,
+        pixel_values_videos=dummy_v,
+        video_grid_thw=vgrid,
+    )
+    if mm_type is not None:
+        fwd["mm_token_type_ids"] = mm_type
+    if has_img:
+        fwd["pixel_values"] = v_pool.new_zeros((1, 1))
+        fwd["image_grid_thw"] = igrid
+    try:
+        outputs = model(**fwd)
+    finally:
+        inner.get_video_features = _ov
+        inner.get_image_features = _oi
     return outputs
 
 
@@ -2380,6 +2453,13 @@ def main():
     parser.add_argument("--train-mode", type=str, default=None,
                         choices=["lora", "full_sft", "qlora"],
                         help="Override train_mode from config. Defaults to 'lora'.")
+    parser.add_argument("--cached-vision-lance", type=str, default=None,
+                        help="Tier-2: path to a Lance cache built by "
+                             "data_infra/lance/cache_3cam_native.py. When set, the "
+                             "train loop reads pre-cached frozen-ViT + FasterVLM "
+                             "vision tokens and routes the forward through "
+                             "forward_with_cached_vision_tokens (the ViT never runs). "
+                             "Gated by this flag — default behavior is byte-unchanged.")
     args = parser.parse_args()
 
     # ============ Distributed / Accelerator setup ============
@@ -3250,12 +3330,31 @@ def main():
         accelerator.print("DRY RUN OK — exiting before optimizer construction.")
         return
 
+    # ============ Tier-2 cached frozen-ViT vision tokens ============
+    # When --cached-vision-lance is set, swap the ViT-in-the-loop dataset for the
+    # Lance cache and route the forward through forward_with_cached_vision_tokens
+    # (the ViT never runs). Gated by the flag — default path unchanged.
+    cached_vision_lance = getattr(args, "cached_vision_lance", None)
+    cached_collate = collate_fn
+    if cached_vision_lance:
+        _lance_dir = os.path.join(_BASE_DIR, "data_infra", "lance")
+        if _lance_dir not in sys.path:
+            sys.path.insert(0, _lance_dir)
+        from cached_native_dataset import CachedNativeDataset, collate_cached  # noqa: E402
+        train_dataset = CachedNativeDataset(cached_vision_lance)
+        cached_collate = collate_cached
+        val_every = 0  # cached rows carry no greedy-decode meta; skip in-loop val
+        accelerator.print(
+            f"[Tier-2] cached-vision path ON: {cached_vision_lance} "
+            f"({len(train_dataset)} cached rows); ViT will NOT run during training."
+        )
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
-        collate_fn=collate_fn,
+        collate_fn=cached_collate,
         pin_memory=True,
     )
 
@@ -3497,7 +3596,12 @@ def main():
 
             try:
                 with accelerator.accumulate(model):
-                    if qformer_projector is not None:
+                    if cached_vision_lance:
+                        # Tier-2: pre-cached frozen-ViT vision tokens; ViT never runs.
+                        outputs = forward_with_cached_vision_tokens(
+                            model, batch, video_token_id, image_token_id,
+                        )
+                    elif qformer_projector is not None:
                         outputs = forward_with_video_qformer_projector(
                             model, batch, qformer_projector, video_token_id,
                         )
