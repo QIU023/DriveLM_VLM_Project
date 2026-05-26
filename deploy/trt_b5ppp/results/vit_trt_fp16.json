@@ -1,0 +1,10 @@
+{
+  "engine": "engines/vit_fp16/vit.engine",
+  "dtype": "fp16",
+  "rel_l2_vs_hf": 0.03000597283244133,
+  "trt_median_ms": 51.624298095703125,
+  "trt_mean_ms": 51.62761211395264,
+  "trt_min_ms": 51.018714904785156,
+  "hf_eager_median_ms": 97.31268882751465,
+  "speedup_vs_hf_eager": 1.885017180226114
+}
