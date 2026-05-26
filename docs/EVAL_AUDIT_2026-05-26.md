@@ -1,6 +1,21 @@
-# Eval Credibility Audit — Thumbnail-Video Bug (2026-05-26)
+# Eval Credibility Audit (2026-05-26)
 
-## TL;DR
+## ⚠️ CORRECTION (2026-05-26, verified against AutoVLA repo) — read first
+`min_pixels=max_pixels=109760` is **AutoVLA's OFFICIAL SFT setting** (`config/training/qwen2.5-vl-3B-mix-sft.yaml`,
+github.com/ucla-mobility/AutoVLA), NOT a bug. min==max → deterministic ~140 merged tok/frame on Qwen2.5-VL,
+a deliberate resolution-for-coverage trade to fit 3cam×4frame=12 images in context. The "thumbnail bug / 报废"
+framing below (which treated NATIVE 64×114 as the gold standard) is **WRONG**. Corrected verdicts:
+- **B.5' Qwen2.5-VL-3B 3-cam (240 tok/cam) = AutoVLA-FAITHFUL** (≥ paper's ~140). L2 0.658 is a legitimate
+  paper-spec result — TRUST it, not "downscaled/broken".
+- **Qwen3-VL 3-cam (36 tok/cam) = genuinely below AutoVLA's 140**, but the root cause is patch-size transfer
+  (Qwen3 patch-16 vs Qwen2.5 patch-14 → same 109760 px gives fewer tokens), NOT a downscale bug. Fix = RAISE
+  max_pixels so Qwen3 lands at ~140 tok/cam (not "use native"). Under-resolution, fixable, worth a retrain.
+- **Qwen3-VL 1-cam B.5'' (2800 tok/cam) = ABOVE AutoVLA spec (~20×)** — the deviation-toward-native model; it is
+  the right substrate for the spatial-compression story but is NOT AutoVLA-faithful resolution.
+- Lesson: audit against the PAPER/recipe spec, not native; when porting a pixel budget across patch sizes,
+  re-derive the value to preserve TOKEN count.
+
+## TL;DR (original — superseded by the correction above re: "bug" framing)
 A pre-deploy probe (triggered by "1-cam worse than 3-cam looks wrong") uncovered that **every 3-cam
 multimodal model, and the temporal-compression line, was trained/evaluated on silently-downscaled
 thumbnail camera video**. The HD-map image cap `max_pixels=109760` leaked onto the Qwen3-VL / Qwen2.5-VL
