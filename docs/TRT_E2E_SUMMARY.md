@@ -106,3 +106,10 @@ first 50 val samples — same 50 across all rows, so directly comparable.)
 - L2 is on the first 50 val samples (fixed set, comparable across rows). It is NOT
   the full-val planning benchmark; treat it as a quantization-fidelity check, not
   the headline planning score.
+
+
+---
+## CORRECTION 2026-05-26 (#176): LM was bf16 in all rows above
+The per-precision table above varied only the ViT engine; the TRT-LLM **LM backbone ran bf16**
+(stale quant ckpts had no hf_quant_config). Real fp8/nvfp4 LM quant + rebuilt e2e table:
+see **docs/TRT_E2E_REAL_LMQUANT.md** — fp8/fp4 LM = 182.8ms (1.40x vs bf16 256ms), footprint -44%/-61%, L2 ~0.80.
