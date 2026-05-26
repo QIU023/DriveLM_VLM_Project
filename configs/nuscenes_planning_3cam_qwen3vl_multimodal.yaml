@@ -98,18 +98,15 @@ warmup_steps: 39                 # 1.74% × ~2243 (R1'' value)
 lr_step_freq: 156                # 6.96% × ~2243 (R1'' value)
 lr_step_gamma: 0.98
 
-# ---- Throughput ----------------------------------------------------------
-# v2 2026-05-25 (native video): visual ~8400 + text ~700 = ~9100 prompt.
-# Qwen3-VL-4B params (+33% over Qwen2.5-VL-3B) + activation per token (hidden
-# 2560 vs 2048, +25%) → ~60% heavier than B.5' at same prompt size.
-# LBS=4 OOM (smoke v1), LBS=2 OOM (smoke v2). Drop to LBS=1 GA=4 (GBS=32 same).
-# ETA: step ~14-18s × 2242 = ~9-11h. Still overnight.
-batch_size: 1
-grad_accum_steps: 4   # MUST: GBS = LBS=1 × GA=4 × world=8 = 32 (paper AutoVLA)
-                      # 32GB 5090 phys max for Qwen3-VL-2B native 3-cam = LBS=1.
-                      # Cannot increase LBS (smoke @ LBS=2 OOM); must use GA for GBS=32.
-activation_checkpointing: true   # MANDATORY at max_length=12288 + 4B + LBS=4 on 32GB
-gradient_checkpointing: true
+# ---- Throughput (2026-05-26 AutoVLA-res retrain recipe) -------------------
+# AutoVLA-res (video 524288 → 240 tok/cam) makes the prompt ~1500 tok (NOT the
+# old native ~9100). At ~1500 tok the old LBS=1/GA=4/AC OOM math is moot:
+# LBS=4 × GA=1 × world=8 = GBS 32 fits WITHOUT AC or offload (user 2026-05-26).
+# (smoke confirms no-OOM at LBS=4 no-AC before full run.)
+batch_size: 4
+grad_accum_steps: 1   # GBS = LBS=4 × GA=1 × world=8 = 32 (paper AutoVLA); NO grad accum
+activation_checkpointing: false  # OFF — ~1500-tok prompt is light, AC not needed
+gradient_checkpointing: false    # OFF
 num_epochs: 3                    # paper-aligned (AutoVLA 3-cam)
 planning_num_past_frames: 4
 
