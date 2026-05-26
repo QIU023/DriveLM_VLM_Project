@@ -1,0 +1,29 @@
+{
+  "n_clips": 3000,
+  "dim": 2560,
+  "vector_index": "IVF_PQ(16x64)",
+  "recall_at_10_micro": 0.6491666666666667,
+  "rare_mining": {
+    "cruising": {
+      "base_rate": 0.059,
+      "precision@20": 0.0
+    },
+    "braking": {
+      "base_rate": 0.096,
+      "precision@20": 0.2
+    },
+    "lane_change": {
+      "base_rate": 0.101,
+      "precision@20": 0.25
+    }
+  },
+  "near_dup_pairs_cos_gt_0.995": 4043,
+  "scenario_base_rates": {
+    "lane_change": 0.101,
+    "turning": 0.163,
+    "braking": 0.096,
+    "stationary": 0.116,
+    "straight": 0.464,
+    "cruising": 0.059
+  }
+}
