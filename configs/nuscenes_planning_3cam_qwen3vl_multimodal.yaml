@@ -32,10 +32,10 @@ base_config: nuscenes_planning_full.yaml   # = R1' / A.0 baseline (1-cam × 4f, 
 experiment: nusc_planning_b5ppp_3cam_qwen3vl_multimodal
 
 # ---- Backbone (the only deliberate change vs B.5') ------------------------
-# Switched to 2B 2026-05-25: Qwen3-VL-4B + native 3-cam OOM'd 5× on 32GB 5090
-# (hidden=2560 → +56% per-token activation vs Qwen2.5-VL-3B). 2B has hidden=2048
-# (same as Qwen2.5-VL-3B) + 28 layers (vs 36) → fits native at LBS=2 GA=2.
-# Trade: -50% params (2B vs 4B), should retain most multimodal capability.
+# 2026-05-26: model_id is the 4B snapshot (4B chosen; the old 2B-switch note was
+# stale). AutoVLA-res fix (video 524288→240 tok/cam) makes the prompt ~1500 tok,
+# so 4B fits easily at LBS=1 GA=4 — no OOM, no offload (old native-9100 OOM moot).
+#
 model_id: "/workspace/.hf_home/hub/models--Qwen--Qwen3-VL-4B-Instruct/snapshots/ebb281ec70b05090aa6165b016eac8ec08e71b17"
 dtype: bfloat16
 train_mode: full_sft
@@ -52,32 +52,41 @@ planning_cams: ["CAM_FRONT", "CAM_FRONT_LEFT", "CAM_FRONT_RIGHT"]
 planning_require_all_cams: true
 
 # ---- Visual token budget --------------------------------------------------
-# CRITICAL 2026-05-25 retrain — apples-to-apples with B.5' effective resolution:
+# AutoVLA TOKEN-BUDGET PARITY across patch sizes (2026-05-26 fix).
 #
-# B.5' (Qwen2.5-VL) had min/max_pixels=109760 applied to image_processor (HD-map),
-# but Qwen2.5-VL has no dedicated video_processor → train_lora.py's video-mode
-# mutation branch silently skipped → videos passed through at NATIVE 1600x900.
+# AutoVLA's OFFICIAL Qwen2.5-VL-3B SFT setting is min==max_pixels=109760, a
+# DETERMINISTIC resolution-for-coverage budget. On Qwen2.5-VL (patch-14,
+# merge-2 → 28px/merged-token) that yields ~240 post-merge visual tokens/cam,
+# which our B.5' 3-cam model measured exactly (240 tok/cam, AutoVLA-faithful).
 #
-# Qwen3-VL has Qwen3VLVideoProcessor → the same mutation branch DOES fire →
-# v1 silently downscaled videos to thumbnails (when given image-cap values).
+# The PIXEL number does NOT transfer across patch sizes — the TOKEN count must
+# be preserved. Qwen3-VL-4B is patch-16 (merge-2 → 32px/merged-token), so the
+# same 109760 px yields only ~36 post-merge tok/cam — far below AutoVLA's budget.
+# (Empirically verified: 109760 → video_grid_thw=[2,6,12] → 36 tok/cam.)
 #
-# Apples-to-apples mapping:
-# - min_pixels/max_pixels (109760) → applied to image_processor (HD-map): matches B.5'
-# - video_max_pixels NOT SET → train_lora.py skips video mutation; video_processor
-#   keeps HF default (size.longest_edge ≈ 25M total-clip-volume cap = native
-#   pass-through for 4-frame 1600×900). Equivalent to B.5' Qwen2.5-VL behavior.
-#   (DO NOT set video_max_pixels=1440000 — that's a TOTAL-CLIP cap which
-#   restricts T*H*W ≤ 1.44M; native T=2 1600×900 needs ≥ 2.88M → downscales.)
+# Two SEPARATE knobs are required because Qwen3-VL has distinct processors with
+# DIFFERENT pixel semantics:
+#   - min_pixels/max_pixels (109760)  → applied to image_processor for the
+#     HD-map BEV. Per-frame cap. KEEP 109760 (matches B.5' HD-map exactly).
+#   - video_min_pixels/video_max_pixels → applied to Qwen3VLVideoProcessor.
+#     NOTE: the video smart_resize caps the TOTAL CLIP volume t_bar*h_bar*w_bar
+#     (NOT per-frame), so this value is ~T larger than an image cap. min==max
+#     forces determinism (AutoVLA style).
 #
-# Cross-check @ native video: video_grid_thw=[[2,56,100]] per cam
-#   = 2800 LM tok/cam × 3 = 8400; + HD-map (121) + text (~600) ≈ 9100 < 12288.
+# Empirically derived (scripts probe over real 1600x900 × 4-frame nuScenes
+# clips, factor=patch*merge=32, temporal_factor=2):
+#   video_*_pixels=524288 → resized 256x480 → video_grid_thw=[2,16,30]
+#   → post-merge = 2*(16/2)*(30/2) = 240 tok/cam  ← EXACT B.5' Qwen2.5-VL parity.
+# (Plateau 520000–576000 all give 240; 524288 = 2^19 sits mid-plateau, robust.)
 max_length: 12288
-min_pixels: 109760           # HD-map cap (per B.5')
+min_pixels: 109760           # HD-map image cap (per B.5'; per-frame)
 max_pixels: 109760
-# NO video_max_pixels = HF default 25M cap = native 1600×900 video.
-# Qwen3-VL-2B at native: 3 cam × 2800 LM tok = 8400 video + 121 HD + ~700 text
-# ≈ 9221 total prompt. Same activation regime as B.5' Qwen2.5-VL-3B
-# (both hidden=2048), B.5' fit at LBS=2 GA=2 — this should too.
+video_min_pixels: 524288     # AutoVLA token-budget parity: 240 post-merge tok/cam
+video_max_pixels: 524288     # min==max for deterministic resolution (AutoVLA style).
+                             # TOTAL-CLIP volume cap (patch-16). Verified empirically:
+                             # 1600x900×4f → thw=[2,16,30] → 240 tok/cam (== B.5' Qwen2.5).
+# Result: 3 cam × 240 = 720 video tok + HD-map (~64-121) + text (~600) ≈ 1500
+# total prompt — tiny vs max_length=12288, 0% truncation, no offload needed.
 # NO compress_method (we want clean baseline; compression sweep happens at
 # DEPLOY TIME via deploy/trt_b5ppp/bench_trt.py for true "train full, deploy
 # compressed" data — apples-to-apples with FasterVLM/PruMerge literature).
