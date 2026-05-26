@@ -1,0 +1,36 @@
+{
+  "catalog_db": "/workspace/DriveLM_VLM_Project/data_infra/iceberg/warehouse/catalog.db",
+  "warehouse": "/workspace/DriveLM_VLM_Project/data_infra/iceberg/warehouse",
+  "keyframes_rows_final": 5319,
+  "snapshot_1_id": 1772781854207382397,
+  "snapshot_1_rows": 3918,
+  "snapshot_2_id": 6405894972742485540,
+  "snapshot_2_rows": 5119,
+  "snapshot_3_id": 1329795620909604279,
+  "schema_before_evolution": [
+    "sample_token",
+    "scene_token",
+    "timestamp",
+    "split",
+    "scenario",
+    "ego_speed",
+    "n_objects",
+    "has_hdmap"
+  ],
+  "schema_after_evolution": [
+    "sample_token",
+    "scene_token",
+    "timestamp",
+    "split",
+    "scenario",
+    "ego_speed",
+    "n_objects",
+    "has_hdmap",
+    "tod"
+  ],
+  "partition_files_total": 6,
+  "partition_files_turning": 1,
+  "lineage_snapshot_id": 6405894972742485540,
+  "lineage_eval_L2_avg": 0.6261894834879974,
+  "lineage_scenario_count_match": true
+}
