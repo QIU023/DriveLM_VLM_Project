@@ -55,11 +55,13 @@ Token audit: B.5 997 / B.5' 1508 / B.5'' 3537 / B.5''' 901 median; all **0%** ex
 2. Documented on 2026-05-25 (`feedback_audit_must_match_training_processor`) yet B.5''' was never retrained; 0.549 kept being cited as a real vision result.
 3. Found only at the quant/deploy stage. → Now enforced by P0 gate `feedback_p0_pretrain_recite_gate` (recite 7-item audit before any launch).
 
-## Retrain priority
-- **P0 — B.5''' Qwen3-VL-4B 3-cam multimodal (native video):** the headline 顶配 + deploy/quant target; also the substrate to redo the spatial-compression sweep honestly. ~2.5h. Config already omits `video_max_pixels` → native on retrain. MUST pass the P0 recite-gate first.
-- **P1 — B.5' Qwen2.5-VL-3B 3-cam multimodal (native):** only if the cross-backbone (2.5 vs 3) comparison is needed for the story; else superseded by B.5'''.
-- **P2 — Temporal-compression line (8f/16f) on native 1-cam:** re-setup only if that ablation is part of the deliverable; ckpts deleted, full re-run needed. Lowest priority.
-- **No retrain needed:** B.5'' 1-cam Qwen3 (native, clean) — keep as the verified 1-cam vision baseline; projector A.x (unaffected by this bug, but ckpts gone).
+## Retrain priority (CORRECTED 2026-05-26 — NOT native; align to AutoVLA token budget)
+**Do NOT retrain 3-cam at native.** AutoVLA uses 109760 (~140 tok/frame); native (2800 tok/cam) would DEVIATE from the paper and break the clean cross-comparison with B.5' (Qwen2.5 @ 240 tok/cam). The faithful 3-cam fix = retrain at **~240 post-merge tok/cam** (= B.5' parity), achieved via `video_min/max_pixels=524288` on Qwen3-VL patch-16 (config already fixed + committed 53fb8e3; verified [2,16,30]→240 tok/cam, prompt ~1500, 0% trunc).
+- **B.5''' Qwen3-VL-4B 3-cam retrain @ 240 tok/cam (AutoVLA-faithful, NOT native):** prompt ~1500 tok → fits easily, LBS=4/GA=1, no AC, no offload, GBS=32 (task #174). Run AFTER all TRT work. The clean comparison is Qwen3 3-cam (240) vs **B.5' Qwen2.5 3-cam (240)** — same resolution, cross-backbone.
+- **Resolution-consistency note:** the 1-cam B.5'' is deliberately at NATIVE 2800 tok/cam (the spatial-compression showcase — compression only meaningful at native). So 1-cam (2800) and 3-cam (240) are at DIFFERENT per-cam resolutions BY DESIGN, serving different stories (1-cam = native+compression deploy; 3-cam = AutoVLA-faithful planning). The 1-cam-vs-3-cam pair is NOT a clean resolution-controlled comparison; do not present it as one.
+- **B.5' Qwen2.5-VL-3B 3-cam (240 tok/cam):** already AutoVLA-faithful, ckpt exists, L2 0.658 — no retrain needed; it is the cross-backbone anchor.
+- **Temporal-compression line (8f/16f):** resolution was AutoVLA-faithful (~140-240 tok/frame), not a bug; ckpts deleted. Re-run only if that ablation is a deliverable.
+- **No retrain needed:** B.5'' 1-cam Qwen3 (native, clean, compression substrate); projector A.x (unaffected; ckpts gone).
 
 ## Fixes landed
 - `scripts/train_lora.py:2704-2727` — video processor only mutated on explicit `video_max_pixels` (already in tree).
