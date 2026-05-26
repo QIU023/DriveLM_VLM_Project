@@ -173,10 +173,19 @@ def main() -> int:
     except Exception as e:
         print(f"[fp8] print_quant_summary failed: {e} (non-fatal)")
 
-    print(f"[fp8] === STEP 7: save quantized model → {out_dir} ===")
+    print(f"[fp8] === STEP 7: EXPORT quantized model (modelopt) → {out_dir} ===")
+    # CRITICAL FIX 2026-05-26: model.save_pretrained() writes the BF16 weights and
+    # silently drops modelopt's quantization (mtq.quantize only inserts in-memory
+    # fake-quant; the real compressed weights + hf_quant_config.json are produced
+    # ONLY by export_hf_checkpoint). The old save_pretrained path yielded an 8.3G
+    # "quant_fp8" ckpt with NO hf_quant_config -> TRT-LLM loaded it as bf16, so the
+    # entire 3-precision bench ran identical bf16. export_hf_checkpoint writes the
+    # FP8-compressed safetensors (~4.5G) + hf_quant_config.json describing the
+    # quantized language_model linears (vision tower auto-excluded, stays bf16).
+    from modelopt.torch.export import export_hf_checkpoint
     t0 = time.perf_counter()
-    model.save_pretrained(str(out_dir))
-    print(f"[fp8] save_pretrained in {time.perf_counter()-t0:.1f}s")
+    export_hf_checkpoint(model, export_dir=str(out_dir))
+    print(f"[fp8] export_hf_checkpoint in {time.perf_counter()-t0:.1f}s")
 
     print(f"[fp8] === STEP 8: copy tokenizer + processor from source ===")
     copy_processor_and_tokenizer(str(src), str(out_dir))

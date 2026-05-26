@@ -1484,6 +1484,11 @@ def main() -> None:
     )
     p.add_argument("--max-new-tokens", type=int, default=20,
                    help="Greedy generate budget; 1 start + 12 bins + 1 end is enough.")
+    p.add_argument("--eval-max-length", type=int, default=0,
+                   help="Override the dataset max_length used at EVAL. 0 = auto "
+                        "(4096 for 1-cam, 8192 for multi-cam — back-compat). Set to "
+                        "the TRAINING max_length (e.g. 6144 for B.5'' 1-cam) so eval "
+                        "does NOT truncate the prompt differently than training did.")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--dtype", default="bfloat16")
     p.add_argument("--batch-size", type=int, default=4,
@@ -1545,6 +1550,10 @@ def main() -> None:
     # Multi-cam expands visual tokens ~Nx; raise the eval max_length to match
     # the 3-cam training config (8192). Single-cam keeps 4096 for back-compat.
     eval_max_length = 4096 if len(planning_cams) == 1 else 8192
+    if int(getattr(args, "eval_max_length", 0)) > 0:
+        eval_max_length = int(args.eval_max_length)
+        _log(rank, f"[planning_eval] eval_max_length OVERRIDE -> {eval_max_length} "
+                   f"(align to training; default would be {4096 if len(planning_cams)==1 else 8192})")
     if args.multimodal:
         from multimodal_planning_dataset import MultiModalPlanningDataset
         # Resolve to absolute paths (MultiModalPlanningDataset requires absolute

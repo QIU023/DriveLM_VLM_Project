@@ -2540,6 +2540,11 @@ def main():
         print(f"[FSDP] version={_fsdp_v}")
         if _fsdp_v == 2:
             from torch.distributed.fsdp import MixedPrecisionPolicy as _MPP2
+            # FSDP2 needs OffloadPolicy, NOT the FSDP1 CPUOffload(...) class.
+            # 2026-05-26 FIX: offload path was FSDP1-only and crashed under FSDP2
+            # ("cpu_offload must be an instance of OffloadPolicy").
+            from torch.distributed.fsdp import CPUOffloadPolicy as _CPUOffP2, OffloadPolicy as _OffP2
+            cpu_offload_cfg = _CPUOffP2() if _cpu_offload_env else _OffP2()
             # 2026-05-25: enable plugin-level AC (per-layer checkpointing wrap)
             # to allow LBS≥2 at native res — activation savings ~5-10×.
             # reduce_dtype=bf16 (was fp32) halves grad reduce comm/storage.
@@ -2663,7 +2668,12 @@ def main():
         accelerator.print(f"Loading in {dtype_str} (no quantization)...")
         load_kwargs["torch_dtype"] = compute_dtype
 
-    load_kwargs["attn_implementation"] = "sdpa"
+    # 2026-05-26: default sdpa. flash_attention_2 would be memory-linear (fits
+    # native 3-cam without offload) BUT this env's flash_attn lacks the built
+    # flash_attn_2_cuda ext AND transformers 5.6 hits an s_aux=None bug → FA2
+    # crashes. Re-enable via ATTN_IMPL=flash_attention_2 only after rebuilding
+    # flash-attn with the CUDA extension. Until then: sdpa + AC + CPU offload.
+    load_kwargs["attn_implementation"] = os.environ.get("ATTN_IMPL", "sdpa")
 
     # Resume in full_sft mode: load model weights from the checkpoint dir
     # (formerly the code only printed a NOTE and left weights at the base

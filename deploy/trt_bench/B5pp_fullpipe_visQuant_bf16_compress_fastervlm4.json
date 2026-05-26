@@ -1,0 +1,89 @@
+{
+  "ckpt_lm": "/workspace/DriveLM_VLM_Project/checkpoints_qwen25/nusc_planning_b5pp_1cam_qwen3vl_multimodal/final",
+  "ckpt_vision": "/workspace/DriveLM_VLM_Project/checkpoints_qwen25/nusc_planning_b5pp_1cam_qwen3vl_multimodal/final",
+  "model": "Qwen3-VL-4B B.5'' v2 VLA (1-cam + HD-map + bbox + ego)",
+  "precision": "bf16",
+  "backend": "FULL PIPELINE: vision(HF bf16, GPU, timed) -> fastervlmx4(timed) -> LM(TRT-LLM 1.3.0rc15, bf16, embedding-injection)",
+  "architecture": "vision_bf16_GPU -> fastervlm_compress -> LM_TRT_embedding_injection",
+  "vision_quant": {
+    "quantized": false,
+    "precision": "bf16",
+    "cfg": null,
+    "n_calib_done": 0
+  },
+  "native_vision_in_trt": false,
+  "native_vision_in_trt_reason": "Two SEPARATE facts. (1) The native in-engine multimodal path is blocked for THIS model because TRT-LLM 1.3.0rc15 Qwen3VisionModelBase.forward (modeling_qwen3vl.py:920) raises ValueError('Currently only support single modality per request') and B.5'' sends video+image in one request. (2) The ViT being bf16 in the in-engine path is NOT a TRT capability limit and NOT 'unquantizable by design' \u2014 the bundled Qwen3-VL class STRIPS the ViT quant config on load (modeling_qwen3vl.py:823), a framework integration choice. The ViT IS quantizable; the deployable route is the automotive vision-as-separate-engine pattern: modelopt-quantize model.visual, run it as its own quantized module/engine, feed pruned embeddings to the LM engine. That is what this bench's vision stage does for fp8/nvfp4. See FULL_PIPELINE_FEASIBILITY.md.",
+  "stages": {
+    "vision": {
+      "runtime": "HF torch GPU",
+      "dtype": "bf16",
+      "quantized": false,
+      "reason_not_quantized": "precision=bf16 -> vision correctly stays bf16. (For fp8/nvfp4 the ViT IS quantized via modelopt; see quant_vision.py.)",
+      "timed": true
+    },
+    "compress": {
+      "runtime": "torch GPU",
+      "method": "fastervlm",
+      "ratio": 4,
+      "quantized": false,
+      "timed": true
+    },
+    "prefill": {
+      "runtime": "TRT-LLM",
+      "dtype": "bf16",
+      "quantized": false,
+      "timed": true
+    },
+    "decode": {
+      "runtime": "TRT-LLM",
+      "dtype": "bf16",
+      "quantized": false,
+      "timed": true
+    }
+  },
+  "compress_method": "fastervlm",
+  "compress_ratio": 4,
+  "visual_tokens_in": 2800,
+  "visual_tokens_out": 700,
+  "image_mm_tokens": 121,
+  "max_new_tokens": 14,
+  "n_warmup": 2,
+  "n_runs": 3,
+  "stage_ms": {
+    "vision": {
+      "mean": 147.42280899857482,
+      "p50": 145.6746479962021
+    },
+    "compress": {
+      "mean": 0.5030139970282713,
+      "p50": 0.5086039891466498
+    },
+    "prefill": {
+      "mean": 86.87742133042775,
+      "p50": 86.62773799733259
+    },
+    "decode_total": {
+      "mean": 84.15914899766601,
+      "per_token_mean": 6.473780692128154,
+      "note": "total decode time for 13 tokens (= LM full generate - prefill TTFT)"
+    }
+  },
+  "full_traj_ms": {
+    "mean": 318.96239332369686,
+    "p50": 313.92642598075327,
+    "p99": 328.91623158502625,
+    "note": "end-to-end = vision + compress + LM(prefill+decode)"
+  },
+  "gpu_mem_gb": {
+    "bench_peak": 8.803259372711182,
+    "note": "peak across vision tower (bf16) + TRT LM engine resident together. NOTE: fake-quant vision holds extra scale/observer tensors, so peak is not a quantized-ViT memory saving; a real fp8 ViT engine would reduce ViT resident mem."
+  },
+  "l2_summary": {
+    "n_samples_evaluated": 20,
+    "L2_avg_mean": 0.6149692706142862,
+    "L2_1s_mean": 0.22626597806811333,
+    "L2_2s_mean": 0.5818628573790192,
+    "L2_3s_mean": 1.0367789763957262
+  },
+  "l2_note": "Planning L2 (TemAvg, metres) of the FULL quantized pipeline (bf16 vision + fastervlmx4 compress + bf16 LM) decoded trajectories vs nuScenes ground-truth waypoints. The HF bf16 baseline for the SAME N samples (run scripts/planning_eval.py on final/) is the apples-to-apples accuracy reference; a near-equal L2 here means quantization+compression did not degrade trajectory quality."
+}

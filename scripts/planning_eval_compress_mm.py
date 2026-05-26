@@ -200,6 +200,17 @@ def main() -> int:
     p.add_argument("--spatial-method", default="none",
                    choices=["none", "fastervlm", "prumerge", "pyramiddrop", "avg_pool"])
     p.add_argument("--spatial-ratio", type=int, default=1)
+    p.add_argument("--precision", default="bf16", choices=["bf16", "fp8", "nvfp4"],
+                   help="bf16 = no quant; fp8/nvfp4 = modelopt in-memory PTQ "
+                        "(fake-quant) on language_model BEFORE eval -> reports the "
+                        "simulated-quant L2 (vision tower stays bf16). This is the "
+                        "standard PTQ accuracy proxy and is directly comparable to "
+                        "the bf16 baseline run in the SAME harness.")
+    p.add_argument("--calib-n", type=int, default=64,
+                   help="Calibration samples (val[0:N]) for PTQ activation scales.")
+    p.add_argument("--dump-traj-n", type=int, default=8,
+                   help="Dump N full decoded trajectories (pred vs GT waypoints) "
+                        "into the output JSON for inspection.")
     args = p.parse_args()
 
     # DP: under torchrun each rank loads the ckpt + compression hook and runs its
@@ -251,11 +262,49 @@ def main() -> int:
     merge_size = int(getattr(model.config.vision_config, "spatial_merge_size", 2))
     video_token_id = processor.tokenizer.convert_tokens_to_ids("<|video_pad|>")
 
+    # ---- PTQ: in-memory modelopt fake-quant on language_model (vision stays bf16)
+    # Gives the simulated-quant accuracy (standard PTQ proxy), measured in the SAME
+    # harness as the bf16 baseline so the L2 delta is apples-to-apples. Each rank
+    # calibrates on the identical val[0:calib_n] -> deterministic scales across ranks.
+    if args.precision != "bf16":
+        import modelopt.torch.quantization as mtq
+        cfg = {"fp8": mtq.FP8_DEFAULT_CFG, "nvfp4": mtq.NVFP4_DEFAULT_CFG}[args.precision]
+        calib_idx = list(range(min(args.calib_n, n_total)))
+        if rank == 0:
+            print(f"[quant] PTQ {args.precision} (LM only) calib_n={len(calib_idx)} "
+                  f"cfg={ {'fp8':'FP8_DEFAULT_CFG','nvfp4':'NVFP4_DEFAULT_CFG'}[args.precision] }",
+                  flush=True)
+
+        def _calib_loop(_lm):
+            with torch.inference_mode():
+                for ci in calib_idx:                       # bs=1 calib (memory-safe)
+                    cin, _, _, _ = _build_batch_inputs(
+                        ds, processor, args, [ci], planning_cams)
+                    cin = {k: (v.to(device) if isinstance(v, torch.Tensor) else v)
+                           for k, v in cin.items()}
+                    if "pixel_values_videos" in cin:
+                        cin["pixel_values_videos"] = cin["pixel_values_videos"].to(dtype)
+                    if "pixel_values" in cin and isinstance(cin["pixel_values"], torch.Tensor):
+                        cin["pixel_values"] = cin["pixel_values"].to(dtype)
+                    cin.pop("labels", None)
+                    model(**cin)
+        _tq = time.time()
+        mtq.quantize(model.model.language_model, cfg, _calib_loop)
+        if rank == 0:
+            print(f"[quant] mtq.quantize done in {time.time()-_tq:.1f}s", flush=True)
+
+    traj_dump = []  # list of {"i","pred","gt","valid"} for inspection
     meter = TokenBudgetMeter()
     state: dict = {}
-    restore = install_video_compress_hook(
-        model, method=args.spatial_method, ratio=args.spatial_ratio,
-        meter=meter, state=state)
+    # The compress hook reads state["orig_pv"]/["per_item_*"] which are only set on
+    # the compression path; for method=none it would KeyError. Install it ONLY when
+    # compressing (none = run the model untouched, full visual tokens).
+    if args.spatial_method != "none":
+        restore = install_video_compress_hook(
+            model, method=args.spatial_method, ratio=args.spatial_ratio,
+            meter=meter, state=state)
+    else:
+        restore = lambda: None
 
     temavg = {k: [] for k in ["L2_1s", "L2_2s", "L2_3s", "L2_avg"]}
     noavg = {k: [] for k in ["L2_1s", "L2_2s", "L2_3s", "L2_avg"]}
@@ -275,18 +324,29 @@ def main() -> int:
                 if "pixel_values" in inputs and isinstance(inputs["pixel_values"], torch.Tensor):
                     inputs["pixel_values"] = inputs["pixel_values"].to(dtype)
 
-                ratio = max(1, int(args.spatial_ratio))
-                per_item_orig = _per_item_post_counts(inputs["video_grid_thw"], merge_size)
-                per_item_comp = [max(1, n // ratio) for n in per_item_orig]
-                new_ids, new_mask, new_grid = _trim_video_pad_for_compression(
-                    inputs["input_ids"], inputs["attention_mask"],
-                    inputs["video_grid_thw"], video_token_id,
-                    per_item_orig, per_item_comp, merge_size=merge_size)
-
-                state["orig_pv"] = inputs["pixel_values_videos"]
-                state["orig_grid"] = inputs["video_grid_thw"]
-                state["per_item_orig"] = per_item_orig
-                state["per_item_comp"] = per_item_comp
+                if args.spatial_method != "none":
+                    # NOTE: _trim_video_pad_for_compression assumes ONE contiguous
+                    # <|video_pad|> run per video_grid_thw item (true for Qwen2.5-VL,
+                    # P3's 3-cam B.5'). Qwen3-VL interleaves timestamp tokens between
+                    # temporal frames -> T runs/cam, so this path is NOT compatible
+                    # with Qwen3-VL compression yet (would need per-run trim like
+                    # bench_trt._find_pad_runs). For the precision-accuracy eval we
+                    # run method=none (full visual tokens), which skips it entirely.
+                    ratio = max(1, int(args.spatial_ratio))
+                    per_item_orig = _per_item_post_counts(inputs["video_grid_thw"], merge_size)
+                    per_item_comp = [max(1, n // ratio) for n in per_item_orig]
+                    new_ids, new_mask, new_grid = _trim_video_pad_for_compression(
+                        inputs["input_ids"], inputs["attention_mask"],
+                        inputs["video_grid_thw"], video_token_id,
+                        per_item_orig, per_item_comp, merge_size=merge_size)
+                    state["orig_pv"] = inputs["pixel_values_videos"]
+                    state["orig_grid"] = inputs["video_grid_thw"]
+                    state["per_item_orig"] = per_item_orig
+                    state["per_item_comp"] = per_item_comp
+                else:
+                    new_ids = inputs["input_ids"]
+                    new_mask = inputs["attention_mask"]
+                    new_grid = inputs["video_grid_thw"]
 
                 prompt_len = new_ids.shape[1]
                 gen_kwargs = dict(
@@ -308,6 +368,15 @@ def main() -> int:
                     pred = decode_waypoints(ids, traj_tok, args.num_future_waypoints)
                     gt = samples[j]["_meta_waypoints"].cpu().numpy()
                     valid = samples[j]["_meta_valid_mask"].cpu().numpy()
+                    gidx = batch_idx[j]
+                    if gidx < args.dump_traj_n:   # full decoded trajectory for inspection
+                        traj_dump.append({
+                            "i": int(gidx),
+                            "pred_waypoints": [[round(float(x), 3) for x in wp] for wp in pred.tolist()],
+                            "gt_waypoints": [[round(float(x), 3) for x in wp] for wp in gt.tolist()],
+                            "valid_mask": [int(v) for v in valid.tolist()],
+                            "pred_token_ids": [int(t) for t in ids],
+                        })
                     for store, fn in ((temavg, l2_temavg), (noavg, l2_noavg)):
                         m = fn(pred, gt, valid)
                         for k in store:
@@ -334,7 +403,7 @@ def main() -> int:
 
     # ---- DP gather: merge each rank's per-sample metric lists + token counts.
     payload = {"temavg": temavg, "noavg": noavg, "coll": coll,
-               "meter": meter.summary()}
+               "meter": meter.summary(), "traj_dump": traj_dump}
     if is_dist:
         bucket = [None] * world_size
         dist.all_gather_object(bucket, payload)
@@ -348,6 +417,10 @@ def main() -> int:
                 out.setdefault(k, []).extend(v)
         return out
     temavg = _merge_lists("temavg"); noavg = _merge_lists("noavg"); coll = _merge_lists("coll")
+    traj_all = []
+    for sub in bucket:
+        traj_all.extend(sub.get("traj_dump", []))
+    traj_all = sorted(traj_all, key=lambda d: d["i"])[:args.dump_traj_n]
     # sum token-budget totals across ranks (per-sample ratio is rank-invariant)
     meter_sum = {}
     for sub in bucket:
@@ -375,12 +448,15 @@ def main() -> int:
         "ratio": int(args.spatial_ratio),
         "compression": {"spatial_method": args.spatial_method,
                         "spatial_ratio": int(args.spatial_ratio), **meter_sum},
+        "precision": args.precision,
+        "calib_n": int(args.calib_n) if args.precision != "bf16" else 0,
         "TemAvg": _mean(temavg),
         "NoAvg": _mean(noavg),
         "collision": _mean(coll),
         "n_scored": len(temavg.get("L2_avg", [])),
         "world_size": world_size,
         "eval_seconds": round(time.time() - t0, 1),
+        "sample_trajectories": traj_all,
     }
     os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
     with open(args.output, "w") as f:

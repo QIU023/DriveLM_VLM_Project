@@ -205,34 +205,32 @@ def _trim_video_pad_for_compression(
             new_mask_list.append(msk)
             continue
 
-        # Split positions into contiguous runs (one run per video block).
-        runs: List[List[int]] = []
-        cur: List[int] = [int(vid_pos[0].item())]
-        for p in vid_pos[1:].tolist():
-            if p == cur[-1] + 1:
-                cur.append(p)
-            else:
-                runs.append(cur)
-                cur = [p]
-        runs.append(cur)
-        if len(runs) != items_per_sample:
+        # 2026-05-26: partition video_pad positions by CUMULATIVE per-item count,
+        # NOT by contiguous runs. Qwen2.5-VL emits 1 contiguous run per video item
+        # (runs==items), but Qwen3-VL interleaves timestamp/text tokens between
+        # temporal frames so ONE video item spans T separate runs. The vision-side
+        # hook prunes per grid-item (per_item_orig -> per_item_comp), so the prompt
+        # just needs to keep exactly per_item_comp[k] of item k's pads (the first
+        # ones); drop the rest, wherever the run boundaries fall. This is robust to
+        # both backbones (cumulative offsets ignore run structure entirely).
+        all_pos = vid_pos.tolist()
+        total_orig = sum(per_item_orig[b * items_per_sample + k]
+                         for k in range(items_per_sample))
+        if len(all_pos) != total_orig:
             raise RuntimeError(
-                f"sample {b}: found {len(runs)} <|video_pad|> runs but "
-                f"video_grid_thw says {items_per_sample} items per sample"
+                f"sample {b}: {len(all_pos)} <|video_pad|> tokens != "
+                f"sum(per_item_orig)={total_orig} for this sample"
             )
-
         drop_positions: List[int] = []
-        for k, run in enumerate(runs):
+        off = 0
+        for k in range(items_per_sample):
             global_k = b * items_per_sample + k
             orig_n = per_item_orig[global_k]
             comp_n = per_item_comp[global_k]
-            if len(run) != orig_n:
-                raise RuntimeError(
-                    f"sample {b} block {k}: run length {len(run)} != "
-                    f"expected post-merger count {orig_n}"
-                )
+            item_pos = all_pos[off:off + orig_n]   # this item's pads (across runs)
+            off += orig_n
             if comp_n < orig_n:
-                drop_positions.extend(run[comp_n:])
+                drop_positions.extend(item_pos[comp_n:])  # keep first comp_n
 
         if drop_positions:
             keep = torch.ones(len(ids), dtype=torch.bool, device=device)

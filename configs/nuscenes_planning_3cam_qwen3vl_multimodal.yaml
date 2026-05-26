@@ -36,7 +36,7 @@ experiment: nusc_planning_b5ppp_3cam_qwen3vl_multimodal
 # (hidden=2560 → +56% per-token activation vs Qwen2.5-VL-3B). 2B has hidden=2048
 # (same as Qwen2.5-VL-3B) + 28 layers (vs 36) → fits native at LBS=2 GA=2.
 # Trade: -50% params (2B vs 4B), should retain most multimodal capability.
-model_id: "Qwen/Qwen3-VL-2B-Instruct"
+model_id: "/workspace/.hf_home/hub/models--Qwen--Qwen3-VL-4B-Instruct/snapshots/ebb281ec70b05090aa6165b016eac8ec08e71b17"
 dtype: bfloat16
 train_mode: full_sft
 
