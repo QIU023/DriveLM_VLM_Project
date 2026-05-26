@@ -1476,6 +1476,12 @@ def main() -> None:
     p.add_argument("--num-past-frames", type=int, default=4)
     p.add_argument("--num-future-waypoints", type=int, default=6)
     p.add_argument("--video-fps", type=float, default=2.0)
+    p.add_argument("--video-max-pixels", type=int, default=0,
+                   help="If >0, OVERRIDE the ckpt's saved video processor "
+                        "longest_edge/shortest_edge (and min/max_pixels) at EVAL time. "
+                        "Used for resolution-sensitivity sweeps on a fixed ckpt "
+                        "(e.g. 109760->~36 tok/cam, 524288->240 tok/cam). Min==max "
+                        "for deterministic resolution, mirroring training.")
     p.add_argument(
         "--planning-cams",
         default="CAM_FRONT",
@@ -1534,6 +1540,32 @@ def main() -> None:
     # Batched greedy generation requires left-padding so newly generated
     # tokens start at the same column for every row.
     processor.tokenizer.padding_side = "left"
+
+    # ---- Optional EVAL-TIME video resolution override (resolution sweep) -----
+    # Mutate the loaded video processor's pixel caps so the SAME ckpt can be
+    # evaluated at different camera token counts. min==max => deterministic
+    # (matches training). Mirrors train_lora.py's video_processor mutation.
+    if int(getattr(args, "video_max_pixels", 0) or 0) > 0:
+        vmp = int(args.video_max_pixels)
+        vp = getattr(processor, "video_processor", None)
+        if vp is not None:
+            for attr in ("min_pixels", "max_pixels"):
+                if hasattr(vp, attr):
+                    setattr(vp, attr, vmp)
+            sz = getattr(vp, "size", None)
+            if isinstance(sz, dict):
+                sz["longest_edge"] = vmp
+                sz["shortest_edge"] = vmp
+            elif sz is not None:
+                for e in ("longest_edge", "shortest_edge"):
+                    if hasattr(sz, e):
+                        setattr(sz, e, vmp)
+            _log(rank, f"[planning_eval] VIDEO-RES OVERRIDE: video_processor "
+                       f"min==max_pixels=longest==shortest_edge={vmp} "
+                       f"(resolution-sensitivity sweep on fixed ckpt)")
+        else:
+            _log(rank, "[planning_eval] WARN: --video-max-pixels set but processor "
+                       "has no video_processor; ignoring")
 
     # ---- Optional external projector (qformer / pixelshuffle / resampler) ---
     # Detect via <ckpt>/projector_meta.json. Absent -> vanilla / linear path
