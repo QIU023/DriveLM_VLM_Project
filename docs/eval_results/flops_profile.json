@@ -1,0 +1,8 @@
+{
+  "prompt_len": 3507,
+  "lm_params_B": 4.022468096,
+  "measured_full_fwd_TFLOP": 35.913695281113,
+  "measured_decode_step_GFLOP": 8.04620094,
+  "measured_14tok_decode_GFLOP": 112.64681316,
+  "note": "FLOPs precision-independent; BOPs=FLOPsxbits; decode bs=1 is bandwidth-bound"
+}
