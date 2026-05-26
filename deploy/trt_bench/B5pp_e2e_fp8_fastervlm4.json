@@ -57,35 +57,35 @@
   "n_runs": 5,
   "stage_ms": {
     "video_vision_trt": {
-      "mean": 61.70802880078554,
-      "p50": 61.26249799854122
+      "mean": 59.95387359871529,
+      "p50": 60.10009799501859
     },
     "hdmap_vision_hf": {
-      "mean": 15.778940793825313,
-      "p50": 16.084454997326247
+      "mean": 14.932634399156086,
+      "p50": 14.93371999822557
     },
     "vision_total": {
-      "mean": 77.48696959461085,
-      "p50": 77.19596599054057
+      "mean": 74.88650799787138,
+      "p50": 75.06411799113266
     },
     "compress": {
-      "mean": 0.4650719987694174,
-      "p50": 0.4627739981515333
+      "mean": 0.4809042002307251,
+      "p50": 0.48234499990940094
     },
     "prefill": {
-      "mean": 85.45946140657179,
-      "p50": 85.39402000315022
+      "mean": 68.16818720544688,
+      "p50": 69.0621440007817
     },
     "decode_total": {
-      "mean": 80.28175618965179,
-      "per_token_mean": 6.175519706896291,
+      "mean": 40.87611939467024,
+      "per_token_mean": 3.1443168765130953,
       "note": "total decode time for 13 tokens"
     }
   },
   "full_traj_ms": {
-    "mean": 243.69325918960385,
-    "p50": 243.50584398780484,
-    "p99": 245.62819502549246,
+    "mean": 184.41171879821923,
+    "p50": 182.7870429988252,
+    "p99": 191.8680820305599,
     "note": "end-to-end = TRT-ViT(video) + HF(HD-map) + compress + LM(prefill+decode)"
   },
   "gpu_mem_gb": {
@@ -96,10 +96,10 @@
     "n_samples_evaluated": 50,
     "n_failed": 0,
     "first_errors": [],
-    "L2_avg_mean": 0.8234458566953738,
-    "L2_1s_mean": 0.29814984247088433,
-    "L2_2s_mean": 0.7680708066374063,
-    "L2_3s_mean": 1.4041169209778308
+    "L2_avg_mean": 0.8786452210694552,
+    "L2_1s_mean": 0.3219333189725876,
+    "L2_2s_mean": 0.8216054800897836,
+    "L2_3s_mean": 1.4923968641459942
   },
   "l2_note": "Planning L2 (TemAvg, metres) of the FULL e2e pipeline (TRT ViT fp8 video vision + HD-map HF + fastervlmx4 + fp8 LM) decoded trajectories vs nuScenes GT waypoints."
 }
