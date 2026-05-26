@@ -11,6 +11,7 @@ scale to PB / 10k-GPU.** All numbers are measured, with honest caveats.
 | **P1** Ray Data DAG | Ray, scalable streaming ingestion, back-pressure, sharding | steady-state **62.5 rows/s > Pool 55.8**; sharded loader disjoint+balanced+complete | `ray/` |
 | **P2** LanceDB vector index | semantic indexing, vector DB, data-centric AI | scenario **recall@5 0.743 vs 0.279 random (2.7×)**; rare-mining lane_change 2.5× | `vecindex/` |
 | **P3** Iceberg catalog | Iceberg, metadata, versioning, schema evolution, lineage | time-travel + schema-evo + partition-prune + lineage; snapshot **== scored data (exact)** | `iceberg/` |
+| **Tier-2** cache → REAL SFT | training-throughput on the actual workload | wired cached frozen-ViT tokens into `train_lora.py` full_sft → **1.49× end-to-end** (native 3-cam, fwd+bwd+opt; forward-only 2.94×); parity 0.26% | `lance/TIER2_REPORT.md` |
 
 ## How each maps to the JD
 - **Modern Lakehouse (Iceberg + Lance)** → P3 Iceberg catalog (metadata/versioning/time-travel/
