@@ -233,9 +233,12 @@ def run_shard(out_dir: str, ckpt: str, n: int, rank: int, world: int,
 
 
 def main() -> int:
+    global CONFIG  # may be overridden by --config below (and in shard subprocesses)
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=os.path.join(_HERE, "nusc_3cam_native.lance"))
     ap.add_argument("--ckpt", default=DEFAULT_CKPT)
+    ap.add_argument("--config", default=CONFIG,
+                    help="planning config the cache is built from (drives cam count / token budget)")
     ap.add_argument("--n", type=int, default=450, help="number of train samples to cache")
     ap.add_argument("--gpus", type=int, default=0, help="0 = all visible")
     ap.add_argument("--verify", action="store_true")
@@ -243,6 +246,10 @@ def main() -> int:
     ap.add_argument("--_world", type=int, default=-1)
     ap.add_argument("--_tmp", default="")
     args = ap.parse_args()
+
+    # config is read by run_shard via the module global; override it (and pass
+    # --config to shard subprocesses below so they inherit the same one).
+    CONFIG = args.config
 
     if args._rank >= 0:
         run_shard(args.out, args.ckpt, args.n, args._rank, args._world, args._tmp, args.verify)
@@ -265,7 +272,7 @@ def main() -> int:
         env["HF_HOME"] = env.get("HF_HOME", "/workspace/.hf_home")
         env.pop("HF_HUB_OFFLINE", None)
         cmd = [sys.executable, os.path.abspath(__file__),
-               "--out", args.out, "--n", str(args.n),
+               "--out", args.out, "--n", str(args.n), "--config", args.config,
                "--_rank", str(rank), "--_world", str(n_gpus), "--_tmp", tmp_dir]
         if args.ckpt:
             cmd += ["--ckpt", args.ckpt]

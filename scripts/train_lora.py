@@ -2435,6 +2435,7 @@ def main():
     parser.add_argument("--train-max-samples", type=int, default=None, help="Cap train dataset to first N samples (planning branch only)")
     parser.add_argument("--no-validate", action="store_true", help="Disable in-loop validation (smoke runs)")
     parser.add_argument("--no-final-save", action="store_true", help="Skip the post-training _save_model_and_state final dump (smoke runs)")
+    parser.add_argument("--no-grad-ckpt", action="store_true", help="Force-disable gradient/activation checkpointing even under FSDP full_sft (throughput A/B only; default keeps the memory-safe auto-on)")
     parser.add_argument("--save-optim-state", action="store_true", default=None,
                         help="Save optimizer/scheduler/RNG shards alongside model weights. "
                              "Default OFF (model weights only) to keep ckpts small "
@@ -2637,7 +2638,12 @@ def main():
                 ),
                 transformer_cls_names_to_wrap=transformer_cls_names,
                 cpu_ram_efficient_loading=True,
-                activation_checkpointing=True,  # plugin AC redundant w/ yaml AC, but harmless; keep for symmetry
+                # FSDP2 plugin AC is a SECOND, independent checkpointing mechanism
+                # (separate from HF gradient_checkpointing_enable). --no-grad-ckpt
+                # must disable BOTH or backward still recomputes via FSDP's
+                # checkpoint_wrapper (whose recompute mishandles the causal mask ->
+                # "expanded size 2S must match S" in sdpa). Default stays True.
+                activation_checkpointing=(not getattr(args, "no_grad_ckpt", False)),
                 state_dict_type="SHARDED_STATE_DICT",
                 cpu_offload=cpu_offload_cfg,
             )
@@ -2842,6 +2848,15 @@ def main():
     _want_gc = (cfg.get("gradient_checkpointing", False)
                 or activation_checkpointing
                 or (use_fsdp and train_mode == "full_sft"))
+    if getattr(args, "no_grad_ckpt", False):
+        _want_gc = False  # throughput A/B: explicit opt-out of the FSDP full_sft auto-on
+        # GC normally auto-sets use_cache=False; with GC off we must do it
+        # ourselves or training builds a KV cache and the attention mask
+        # (query-len S) mismatches the doubled key-len (RuntimeError: expanded
+        # size 2S must match existing size S).
+        if hasattr(model, "config"):
+            model.config.use_cache = False
+        accelerator.print("Gradient checkpointing FORCE-DISABLED (--no-grad-ckpt); use_cache=False")
     if _want_gc:
         model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
         accelerator.print("Gradient checkpointing enabled (HF-side, non-reentrant)")

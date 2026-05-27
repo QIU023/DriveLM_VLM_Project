@@ -1,0 +1,64 @@
+base_config: nuscenes_planning_full.yaml
+
+# ============================================================================
+# 1-cam NATIVE — cached-vs-live throughput A/B, grad-ckpt OFF (no AC)
+# ============================================================================
+# Lighter sibling of nuscenes_planning_3cam_qwen3vl_NATIVE.yaml, built to test
+# the un-diluted ViT-skip speedup: with NO activation/gradient checkpointing the
+# LM forward is NOT recomputed in backward, so the ViT fraction of the step is
+# preserved and the cached arm's per-step win shows in full (expected ~1.5x vs
+# the AC-on 1.04x). Both A/B arms use THIS config -> identical recompute policy
+# (fair compare, per the 3-cam controlled run lesson).
+#
+# 1-cam (CAM_FRONT) native ~2800 video tok + HD-map (~121) -> ~3500 prompt; at
+# 1/3 the video tokens of 3-cam native, LBS=2 fits WITHOUT AC on 32GB (verified
+# by 5-step LIVE-arm smoke before the full A/B).
+
+experiment: nusc_planning_1cam_native_cachebench
+
+# ---- Backbone (same 4B snapshot as the 3-cam NATIVE config) ---------------
+model_id: "/workspace/.hf_home/hub/models--Qwen--Qwen3-VL-4B-Instruct/snapshots/ebb281ec70b05090aa6165b016eac8ec08e71b17"
+dtype: bfloat16
+train_mode: full_sft
+
+# ---- Multi-modal dataset dispatch -----------------------------------------
+dataset_kind: nuscenes_planning_multimodal
+dataset_class: multimodal_planning_dataset.MultiModalPlanningDataset
+hdmap_dir: data/preproc/hdmap_bev
+bbox_jsonl: data/preproc/bbox_egostate_{split}.jsonl
+modality_dropout_p: 0.0
+
+# ---- 1-CAM (CAM_FRONT only) -----------------------------------------------
+planning_cams: ["CAM_FRONT"]
+planning_require_all_cams: true
+
+# ---- Visual token budget: NATIVE (no video cap -> ~2800 tok/cam) ----------
+# Intentionally NO video_min/max_pixels: Qwen3VLVideoProcessor passes native
+# 1600x900 x 4-frame through -> ~2800 video tok/cam (matches the 3-cam NATIVE
+# per-cam budget). min/max_pixels apply only to the HD-map image (per B.5').
+max_length: 6144
+min_pixels: 109760           # HD-map image cap (per-frame), same as B.5'
+max_pixels: 109760
+
+# ---- AutoVLA-aligned hyperparams (same as the 3-cam NATIVE config) --------
+learning_rate: 2.0e-5
+lr_schedule: autovla_stepdecay
+warmup_steps: 39
+lr_step_freq: 156
+lr_step_gamma: 0.98
+
+# ---- Throughput: NO checkpointing (the whole point of this config) --------
+batch_size: 1
+grad_accum_steps: 1              # LBS=1, GA=1: no-AC native 1-cam OOMs at LBS=2 (no recompute holds all acts); LBS=1 fits. Both A/B arms use this -> fair.
+activation_checkpointing: false  # OFF — un-diluted ViT-skip speedup test; BOTH A/B arms use this (fair)
+gradient_checkpointing: false    # OFF — train_lora.py ORs the two flags, so BOTH must be false
+num_epochs: 99                   # loops the small cache subset; A/B caps at --max-steps 500
+planning_num_past_frames: 4
+
+# ---- Ckpt / val cadence (A/B writes nothing; runner passes --no-final-save)
+save_every: 999999
+val_every: 999999
+keep_latest_k: 1
+val_planning_l2: false
+val_full_eval: false
+full_l2_every: null

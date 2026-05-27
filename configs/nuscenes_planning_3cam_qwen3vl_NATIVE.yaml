@@ -103,10 +103,10 @@ lr_step_gamma: 0.98
 # old native ~9100). At ~1500 tok the old LBS=1/GA=4/AC OOM math is moot:
 # LBS=4 × GA=1 × world=8 = GBS 32 fits WITHOUT AC or offload (user 2026-05-26).
 # (smoke confirms no-OOM at LBS=4 no-AC before full run.)
-batch_size: 4
-grad_accum_steps: 1   # GBS = LBS=4 × GA=1 × world=8 = 32 (paper AutoVLA); NO grad accum
-activation_checkpointing: false  # OFF — ~1500-tok prompt is light, AC not needed
-gradient_checkpointing: false    # OFF
+batch_size: 2
+grad_accum_steps: 1   # LBS=2 (native 3-cam live-ViT arm OOMs at LBS=4); both A/B arms same -> fair speed compare
+activation_checkpointing: true   # ON — native 3-cam (8400 ViT tok + LM) needs AC to fit; BOTH A/B arms use it (fair)
+gradient_checkpointing: true     # ON
 num_epochs: 3                    # paper-aligned (AutoVLA 3-cam)
 planning_num_past_frames: 4
 
