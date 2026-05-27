@@ -3344,9 +3344,18 @@ def main():
         train_dataset = CachedNativeDataset(cached_vision_lance)
         cached_collate = collate_cached
         val_every = 0  # cached rows carry no greedy-decode meta; skip in-loop val
+        # Lance's Rust/tokio runtime is NOT fork-safe: the global runtime is
+        # initialized in the parent (CachedNativeDataset.__init__ -> count_rows)
+        # and forked DataLoader workers segfault on first Lance access (even with
+        # per-pid handle reopen). The cached path's per-sample cost is just int8
+        # dequant + memcpy (no decode/ViT), so num_workers=0 (no fork) is both
+        # SAFE and not a bottleneck. (2026-05-27: this segfault was the real cause
+        # of the "NCCL hang" — a dead worker left other ranks spinning on collectives.)
+        num_workers = 0
         accelerator.print(
             f"[Tier-2] cached-vision path ON: {cached_vision_lance} "
-            f"({len(train_dataset)} cached rows); ViT will NOT run during training."
+            f"({len(train_dataset)} cached rows); ViT will NOT run during training. "
+            f"num_workers forced to 0 (Lance fork-unsafe)."
         )
 
     train_loader = DataLoader(
